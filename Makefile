@@ -13,7 +13,7 @@ USER_BIN := $(patsubst bin/%,build/rootfs/bin/%,$(wildcard bin/*))
 
 # Language-specific kernel object/library
 ifeq ($(KLANG),c)
-  KERN_C   := $(patsubst %,build/%.o,$(wildcard kernel/*.c))
+  KERN_C   := $(patsubst %,build/%.o,$(wildcard kernel/*.c kernel/*/*.c))
   KERN_ALL := $(KERN_ASM) $(KERN_C)
 else ifeq ($(KLANG),rust)
   KERN_LIB := build/rust/riscv64imac-unknown-none-elf/debug/libsbunix.a
@@ -30,11 +30,11 @@ all: build/kernel.elf
 
 build/%.c.o: %.c
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -I$(<D)/include -c $< -o $@
+	$(CC) $(CFLAGS) -I$(<D)/include -Ikernel/include -c $< -o $@
 
 build/%.S.o: %.S
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -I$(<D)/include -c $< -o $@
+	$(CC) $(CFLAGS) -I$(<D)/include -Ikernel/include -c $< -o $@
 
 build/libc.a: $(LIBC_OBJ)
 	@mkdir -p $(@D)
