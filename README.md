@@ -40,6 +40,7 @@ sbunix/
 │   ├── kernel.c     # Main kernel implementation
 │   ├── printk.c     # Kernel printing functions
 │   └── kernel.ld    # Linker script
+    └── include/
 ├── libc/            # Minimal C library
 │   ├── crt.S        # C runtime startup
 │   ├── printf.c     # Standard I/O functions

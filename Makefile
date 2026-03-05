@@ -5,7 +5,9 @@ CC      := $(CROSS)gcc
 LD      := $(CROSS)ld
 AR      := $(CROSS)ar
 OBJCOPY := $(CROSS)objcopy
-CFLAGS  := -Wall -Werror -ffreestanding -nostdlib -nostdinc -mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64
+CFLAGS := -Wall -Werror -ffreestanding -nostdlib \
+          -mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64 \
+          -I./kernel/include -I./libc/include
 
 KERN_ASM := $(patsubst %,build/%.o,$(wildcard kernel/*.S))
 LIBC_OBJ := $(patsubst %,build/%.o,$(filter-out libc/crt.S,$(wildcard libc/*.c libc/*.S)))
@@ -76,14 +78,20 @@ build/tools/mkfs: tools/mkfs.c
 	gcc -Wall -o $@ $<
 
 $(DISK_IMG): build/tools/mkfs
-	build/tools/mkfs $@ $(DISK_SIZE)
+	@mkdir -p $(dir $@)
+	@if [ ! -f $@ ]; then \
+		echo "Creating new disk image..."; \
+		build/tools/mkfs $@ $(DISK_SIZE); \
+	else \
+		echo "Disk image $@ already exists, skipping creation to preserve data."; \
+	fi
 
 qemu: build/kernel.elf $(DISK_IMG)
 	qemu-system-riscv64 -machine virt -bios default -kernel $< \
 		-drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
-		-device virtio-blk-pci-non-transitional,drive=hd0 \
-		-device virtio-gpu-pci \
-		-device virtio-net-pci-non-transitional,netdev=net0 \
+		-device virtio-blk-device,drive=hd0 \
+		-device virtio-gpu-device \
+		-device virtio-net-device,netdev=net0 \
 		-netdev user,id=net0 \
 		-nographic
 
