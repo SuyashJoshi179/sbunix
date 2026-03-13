@@ -81,3 +81,8 @@ void print_number(long num, int base, int is_signed) {
         write_char(buf[i]);
     }
 }
+
+void panic(const char* msg) {
+	printk("KERNEL PANICKING: %s\n", msg);
+	for (;;);
+}
