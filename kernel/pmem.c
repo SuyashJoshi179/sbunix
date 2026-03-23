@@ -1,4 +1,5 @@
 #include <pmem.h>
+#include <string.h>
 
 struct free_page {
     struct free_page *next;
@@ -18,8 +19,7 @@ void *page_alloc(void) {
     if (!freelist) return 0;
     struct free_page *p = freelist;
     freelist = p->next;
-    for (int i = 0; i < PAGE_SIZE / 8; i++)
-        ((unsigned long *)p)[i] = 0;
+    memset(p, 0, PAGE_SIZE);
     return p;
 }
 
