@@ -6,10 +6,6 @@ struct free_page {
 
 static struct free_page *freelist = 0;
 
-static inline unsigned long page_round_up(unsigned long addr) {
-    return (addr + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-}
-
 void pmem_init(void *start, void *end) {
     unsigned long p = page_round_up((unsigned long)start);
     while (p + PAGE_SIZE <= (unsigned long)end) {
