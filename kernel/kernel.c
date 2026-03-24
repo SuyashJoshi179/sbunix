@@ -1,4 +1,5 @@
 #include <printk.h>
+#include <drivers/uart.h>
 #include <pmem.h>
 #include <vmem.h>
 #include <riscv.h>
@@ -6,6 +7,7 @@
 #include <trap.h>
 #include <timer.h>
 #include <proc.h>
+#include <console.h>
 #include <selftest.h>
 #include <tarfs.h>
 #include <drivers/uart.h>
