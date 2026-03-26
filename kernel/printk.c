@@ -29,6 +29,21 @@ void printk(const char *fmt, ...) {
 				int num = va_arg(args, int);
 				print_number(num, 16, true);
 			}
+			else if (*temp == 'l') {
+				temp++;
+				if (*temp == 'x') {
+					long num = va_arg(args, long);
+					print_number(num, 16, false);
+				}
+				else if (*temp == 'd') {
+					long num = va_arg(args, long);
+					print_number(num, 10, true);
+				}
+				else if (*temp == 'u') {
+					unsigned long num = va_arg(args, unsigned long);
+					print_number(num, 10, false);
+				}
+			}
 			else if (*temp == 'o') {
 				int num = va_arg(args, int);
 				print_number(num, 8, true);
