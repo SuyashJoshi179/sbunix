@@ -13,6 +13,8 @@ typedef unsigned long *pgtable_t;
 
 extern unsigned long mem_offset;
 
+extern pgtable_t kernel_pgtable;
+
 static inline int get_ptindx(int level, unsigned long virt_addr) {
     return (virt_addr >> (12 + 9*level)) & 0x1FF;
 }
@@ -35,4 +37,5 @@ static inline unsigned long make_satp(pgtable_t pgtable) {
     return SATP_SV39 | (((unsigned long)pgtable) >> 12);
 }
 
+void vmem_map(pgtable_t pgtable, unsigned long virt_addr, unsigned long phy_addr, unsigned long size, unsigned long permissions);
 void vmem_init();
