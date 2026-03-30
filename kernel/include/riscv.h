@@ -59,4 +59,13 @@ static inline uint64_t read_time(void) {
     return val;
 }
 
+static inline uint64_t read_sscratch(void) {
+    uint64_t val;
+    asm volatile("csrr %0, sscratch" : "=r"(val));
+    return val;
+}
+
+static inline void write_sscratch(uint64_t val) {
+    asm volatile("csrw sscratch, %0" : : "r"(val));
+}
 #endif
