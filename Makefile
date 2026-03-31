@@ -84,6 +84,11 @@ build/tarfs.o: $(USER_BIN)
 build/kernel.elf: $(KERN_ALL) build/tarfs.o
 	$(LD) -T kernel/kernel.ld $(KERN_ALL) build/tarfs.o -o $@
 
+thirdparty: build/libc/crt.S.o build/libc.a
+	$(MAKE) -C thirdparty install
+	@rm -f build/tarfs.o
+	$(MAKE) build/kernel.elf
+
 build/tools/mkfs: tools/mkfs.c
 	@mkdir -p $(@D)
 	gcc -Wall -o $@ $<
@@ -125,4 +130,4 @@ submit:
 	echo "Submitted to $(SUBMIT_DIR)/sbunix"
 
 .PRECIOUS: build/%.S.o build/%.c.o
-.PHONY: all qemu clean submit
+.PHONY: all qemu clean thirdparty submit
