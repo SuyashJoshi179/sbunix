@@ -2,8 +2,7 @@
 #include <stdint.h>
 #include <vmem.h>
 
-#define KSTACK_SIZE 8192
-#define MAX_PROCS   4
+#define KSTACK_SIZE 4096UL
 #define USER_STACK_BASE 0x40000000UL
 
 struct context {
@@ -32,14 +31,20 @@ typedef enum {
 struct pcb {
     int            pid;
     proc_state_t   state;
+    uint8_t        is_user;
     void         (*entry)(void);
+    pgtable_t      pagetable;
+    unsigned long  user_entry;
+    unsigned long  user_sp;
+    void          *kstack_page;
     struct context context;
-    uint8_t        kstack[KSTACK_SIZE];
+    struct pcb    *next;
 };
 
 void sched_init(void);
 void yield(void);
 void swtch(struct context *old, struct context *new);
+void proc_exit_current(void);
 
 pgtable_t create_user_pgtable(void);
 void map_code(pgtable_t pgtable, char *data, unsigned long size);

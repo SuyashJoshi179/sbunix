@@ -2,6 +2,8 @@
 #include <riscv.h>
 #include <printk.h>
 #include <timer.h>
+#include <proc.h>
+#include <vmem.h>
 
 
 void trap_init(void) {
@@ -9,10 +11,13 @@ void trap_init(void) {
     extern void trap_vector(void);
     write_stvec((uint64_t)trap_vector);
     write_sie(read_sie() | SIE_STIE);
-    write_sstatus(read_sstatus() | SSTATUS_SIE);
+    write_sstatus(read_sstatus() | SSTATUS_SIE | SSTATUS_SUM);
 }
 
 void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval) {
+    write_satp(make_satp(kernel_pgtable));
+    flush_tlb();
+
     
     uint64_t is_interrupt = scause & (1UL << 63);
     uint64_t cause_code = scause & 0xFF;
@@ -29,6 +34,11 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval) {
         }
     }
     else {
+        if (cause_code == 8) {
+            // U-mode ecall: treat as process exit for now.
+            proc_exit_current();
+            return;
+        }
         printk("Exception: scause=%lx, sepc=%lx, stval=%lx\n", scause, sepc, stval);
         while (1) {}
     }

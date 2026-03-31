@@ -4,11 +4,17 @@
 #include <riscv.h>
 #include <string.h>
 
-static struct pcb     procs[MAX_PROCS];
-static int            current_idx = -1;
-static struct context sched_context;
+static struct pcb     *procs;
+static struct pcb     *current;
+static int             next_pid = 1;
+static struct context  sched_context;
 
 #define DEMO_TICK_LIMIT 10
+
+extern void enter_user(unsigned long satp, unsigned long sepc, unsigned long usp, unsigned long ksp);
+
+// Tiny init user program: ecall (used as exit trap for now).
+static unsigned char init_user_prog[] = {0x73, 0x00, 0x00, 0x00};
 
 // ----------------------------------------------------------------
 // forkret — first-run entry point for new threads.
@@ -20,7 +26,18 @@ static struct context sched_context;
 // ----------------------------------------------------------------
 
 static void forkret(void) {
-    struct pcb *p = &procs[current_idx];
+    struct pcb *p = current;
+
+    if (p->is_user) {
+        uint64_t sstatus = read_sstatus();
+        sstatus &= ~SSTATUS_SPP;   // return to U-mode
+        sstatus |= SSTATUS_SPIE;   // enable interrupts in U-mode after sret
+        write_sstatus(sstatus);
+        enter_user(make_satp(p->pagetable), p->user_entry, p->user_sp,
+             (unsigned long)p->kstack_page + KSTACK_SIZE);
+        panic("enter_user returned unexpectedly");
+    }
+
     write_sstatus(read_sstatus() | SSTATUS_SIE);
     p->entry();
 
@@ -48,28 +65,93 @@ static void thread_b(void) {
     }
 }
 
-// ----------------------------------------------------------------
-// Initialize a PCB slot
-// ----------------------------------------------------------------
+static struct pcb *alloc_proc(void) {
+    struct pcb *p = (struct pcb *)page_alloc();
+    if (p == 0) {
+        return 0;
+    }
+    memset(p, 0, PAGE_SIZE);
 
-static void proc_init(int idx, void (*func)(void)) {
-    struct pcb *p = &procs[idx];
+    p->kstack_page = page_alloc();
+    if (p->kstack_page == 0) {
+        page_free(p);
+        return 0;
+    }
 
-    p->pid   = idx + 1;
+    p->pid = next_pid++;
+    p->state = PROC_UNUSED;
+
+    if (procs == 0) {
+        procs = p;
+    } else {
+        struct pcb *tail = procs;
+        while (tail->next) {
+            tail = tail->next;
+        }
+        tail->next = p;
+    }
+
+    return p;
+}
+
+static void proc_init_kernel(void (*func)(void)) {
+    struct pcb *p = alloc_proc();
+    if (p == 0) {
+        panic("Failed to allocate kernel process");
+    }
+
     p->state = PROC_READY;
+    p->is_user = 0;
     p->entry = func;
 
-    // zero out context
-    uint8_t *ctx = (uint8_t *)&p->context;
-    for (int i = 0; i < (int)sizeof(struct context); i++)
-        ctx[i] = 0;
-
-    // sp = top of this thread's kernel stack (stack grows down)
-    p->context.sp = (uint64_t)(p->kstack + KSTACK_SIZE);
-
-    // ra = forkret, so the first swtch into this thread enables
-    // interrupts and calls the real entry function.
+    memset(&p->context, 0, sizeof(struct context));
+    p->context.sp = (uint64_t)p->kstack_page + KSTACK_SIZE;
     p->context.ra = (uint64_t)forkret;
+}
+
+static void proc_init_user(char *img, unsigned long size) {
+    struct pcb *p = alloc_proc();
+    if (p == 0) {
+        panic("Failed to allocate user process");
+    }
+
+    p->state = PROC_READY;
+    p->is_user = 1;
+    p->entry = 0;
+
+    p->pagetable = create_user_pgtable();
+    map_code(p->pagetable, img, size);
+    p->user_sp = map_stack(p->pagetable);
+    p->user_entry = 0;
+
+    if (p->user_sp == 0) {
+        panic("Failed to map user stack");
+    }
+
+    memset(&p->context, 0, sizeof(struct context));
+    p->context.sp = (uint64_t)p->kstack_page + KSTACK_SIZE;
+    p->context.ra = (uint64_t)forkret;
+}
+
+static struct pcb *next_ready_proc(void) {
+    if (procs == 0) {
+        return 0;
+    }
+
+    struct pcb *start = current ? current->next : procs;
+    if (start == 0) {
+        start = procs;
+    }
+
+    struct pcb *p = start;
+    do {
+        if (p->state == PROC_READY) {
+            return p;
+        }
+        p = p->next ? p->next : procs;
+    } while (p != start);
+
+    return 0;
 }
 
 // ----------------------------------------------------------------
@@ -85,10 +167,10 @@ static void proc_init(int idx, void (*func)(void)) {
 // ----------------------------------------------------------------
 
 void yield(void) {
-    if (current_idx < 0 || procs[current_idx].state != PROC_RUNNING)
+    if (current == 0 || current->state != PROC_RUNNING)
         return;
 
-    struct pcb *p = &procs[current_idx];
+    struct pcb *p = current;
 
     uint64_t sstatus = read_sstatus();
     write_sstatus(sstatus & ~SSTATUS_SIE);   // interrupts off
@@ -106,26 +188,17 @@ void yield(void) {
 
 static void scheduler_run(void) {
     while (1) {
-        int found = -1;
-        int start = (current_idx + 1) % MAX_PROCS;
+        struct pcb *found = next_ready_proc();
 
-        for (int i = 0; i < MAX_PROCS; i++) {
-            int idx = (start + i) % MAX_PROCS;
-            if (procs[idx].state == PROC_READY) {
-                found = idx;
-                break;
-            }
-        }
-
-        if (found == -1) {
+        if (found == 0) {
             printk("scheduler: no runnable processes\n");
             while (1)
                 asm volatile("wfi");
         }
 
-        current_idx = found;
-        procs[found].state = PROC_RUNNING;
-        swtch(&sched_context, &procs[found].context);
+        current = found;
+        found->state = PROC_RUNNING;
+        swtch(&sched_context, &found->context);
     }
 }
 
@@ -134,14 +207,24 @@ static void scheduler_run(void) {
 // ----------------------------------------------------------------
 
 void sched_init(void) {
-    for (int i = 0; i < MAX_PROCS; i++)
-        procs[i].state = PROC_UNUSED;
+    procs = 0;
+    current = 0;
 
-    proc_init(0, thread_a);
-    proc_init(1, thread_b);
+    proc_init_kernel(thread_a);
+    proc_init_kernel(thread_b);
+    proc_init_user((char *)init_user_prog, sizeof(init_user_prog));
 
     printk("scheduler: starting\n");
     scheduler_run();
+}
+
+void proc_exit_current(void) {
+    if (current == 0 || current->state != PROC_RUNNING)
+        return;
+
+    struct pcb *p = current;
+    p->state = PROC_UNUSED;
+    swtch(&p->context, &sched_context);
 }
 
 pgtable_t create_user_pgtable(void) {
@@ -175,7 +258,7 @@ void map_code(pgtable_t pgtable, char *data, unsigned long size) {
         if(bytes > PAGE_SIZE) bytes = PAGE_SIZE;
         memset(paddr, 0, PAGE_SIZE);
         memmove(paddr, data + offset, bytes);
-        vmem_map(pgtable, vaddr+offset, (unsigned long)paddr, PAGE_SIZE, PTE_U | PTE_R | PTE_W | PTE_X);
+        vmem_map(pgtable, vaddr+offset, virt_to_phys((unsigned long)paddr), PAGE_SIZE, PTE_U | PTE_R | PTE_W | PTE_X);
     }
 
 }
@@ -186,6 +269,6 @@ unsigned long map_stack(pgtable_t pgtable) {
 
     if(phyaddr == 0) return 0;
 
-    vmem_map(pgtable, vaddr, (unsigned long)phyaddr, PAGE_SIZE, PTE_U | PTE_R | PTE_W);
+    vmem_map(pgtable, vaddr, virt_to_phys((unsigned long)phyaddr), PAGE_SIZE, PTE_U | PTE_R | PTE_W);
     return USER_STACK_BASE;
 }

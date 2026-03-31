@@ -1,11 +1,12 @@
 #include <pmem.h>
 #include <string.h>
+#include <vmem.h>
 
 struct free_page {
-    struct free_page *next;
+    unsigned long next_phys;
 };
 
-static struct free_page *freelist = 0;
+static unsigned long freelist_phys = 0;
 
 void pmem_init(void *start, void *end) {
     unsigned long p = page_round_up((unsigned long)start);
@@ -16,15 +17,20 @@ void pmem_init(void *start, void *end) {
 }
 
 void *page_alloc(void) {
-    if (!freelist) return 0;
-    struct free_page *p = freelist;
-    freelist = p->next;
-    memset(p, 0, PAGE_SIZE);
-    return p;
+    if (freelist_phys == 0) return 0;
+
+    unsigned long page_phys = freelist_phys;
+    struct free_page *page = (struct free_page *)phys_to_virt(page_phys);
+    freelist_phys = page->next_phys;
+
+    memset((void *)phys_to_virt(page_phys), 0, PAGE_SIZE);
+    return (void *)phys_to_virt(page_phys);
 }
 
 void page_free(void *page) {
-    struct free_page *p = (struct free_page *)page;
-    p->next = freelist;
-    freelist = p;
+    unsigned long page_phys = virt_to_phys((unsigned long)page);
+    struct free_page *node = (struct free_page *)phys_to_virt(page_phys);
+
+    node->next_phys = freelist_phys;
+    freelist_phys = page_phys;
 }

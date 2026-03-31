@@ -17,7 +17,7 @@ pte_t* get_pte(pgtable_t pgtable, unsigned long virt_addr, bool alloc) {
     for(int level = 2; level > 0; level--) {
         pte_t *pte = &pgtable[get_ptindx(level, virt_addr)];
         if(*pte & PTE_V) {
-            pgtable = (pgtable_t) pte_to_phyaddr(*pte);
+            pgtable = (pgtable_t)phys_to_virt(pte_to_phyaddr(*pte));
         } else {
             if(!alloc) {
                 return 0;
@@ -25,7 +25,7 @@ pte_t* get_pte(pgtable_t pgtable, unsigned long virt_addr, bool alloc) {
             pgtable = (pde_t*) page_alloc();
             if(pgtable == 0) return 0;
             memset(pgtable, 0, PAGE_SIZE);
-            *pte = phyaddr_to_pte((unsigned long)pgtable) | PTE_V;
+            *pte = phyaddr_to_pte(virt_to_phys((unsigned long)pgtable)) | PTE_V;
         }
     }
     return &pgtable[get_ptindx(0, virt_addr)];
@@ -66,7 +66,6 @@ pgtable_t vmem_create() {
 
     // map the physical meory to higher memory address
     vmem_map(pgtable, KVMEM_OFFSET+tend_aligned, tend_aligned, PHYMEM_END-tend_aligned, PTE_R | PTE_W);
-    vmem_map(pgtable, tend_aligned, tend_aligned, PHYMEM_END - tend_aligned, PTE_R | PTE_W);
 
     // todo - map process stacks
 
@@ -82,6 +81,9 @@ void vmem_init() {
 
 void vmem_init_post() {
     mem_offset = KVMEM_OFFSET;
+
+    // rebase root page table pointer into higher-half direct map.
+    kernel_pgtable = (pgtable_t)phys_to_virt((unsigned long)kernel_pgtable);
 
     // clear temporary identity mappings after jumping to higher half.
     kernel_pgtable[get_ptindx(2, KERN_BASE)] = 0;

@@ -29,14 +29,29 @@ static inline unsigned long phyaddr_to_pte(unsigned long phy_addr) {
     return ((phy_addr) >> 12) << 10;
 }
 
+static inline unsigned long phys_to_virt(unsigned long phys_addr) {
+    return phys_addr + mem_offset;
+}
+
+static inline unsigned long virt_to_phys(unsigned long virt_addr) {
+    if (virt_addr >= KVMEM_OFFSET) {
+        return virt_addr - mem_offset;
+    }
+    return virt_addr;
+}
+
 static inline void flush_tlb() {
     asm volatile("sfence.vma zero, zero");
+}
+
+static inline void write_satp(unsigned long satp) {
+    asm volatile("csrw satp, %0" : : "r"(satp));
 }
 
 #define SATP_SV39 (8L << 60)
 
 static inline unsigned long make_satp(pgtable_t pgtable) {
-    return SATP_SV39 | (((unsigned long)pgtable) >> 12);
+    return SATP_SV39 | (virt_to_phys((unsigned long)pgtable) >> 12);
 }
 
 void vmem_map(pgtable_t pgtable, unsigned long virt_addr, unsigned long phy_addr, unsigned long size, unsigned long permissions);

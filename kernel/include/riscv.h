@@ -5,6 +5,8 @@
 
 #define SSTATUS_SIE (1 << 1)
 #define SSTATUS_SPIE (1 << 5)
+#define SSTATUS_SPP (1 << 8)
+#define SSTATUS_SUM (1 << 18)
 #define SIE_STIE (1 << 5)
 
 static inline uint64_t read_sstatus(void) {
@@ -47,6 +49,10 @@ static inline uint64_t read_sepc(void) {
     uint64_t sepc;
     asm volatile("csrr %0, sepc" : "=r" (sepc));
     return sepc;
+}
+
+static inline void write_sepc(uint64_t sepc) {
+    asm volatile("csrw sepc, %0" : : "r" (sepc));
 }
 
 static inline void read_stval(uint64_t *stval) {

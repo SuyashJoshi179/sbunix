@@ -3,10 +3,18 @@
 .align 2
 
 trap_vector:
-    # push trap frame onto the current kernel stack
-    addi sp, sp, -256
+    # If trap came from U-mode (SPP=0), switch to per-process kernel stack
+    # stored in sscratch. For S-mode traps, keep current sp.
+    csrr t0, sstatus
+    andi t0, t0, 0x100
+    bnez t0, 1f
+    csrrw sp, sscratch, sp
+
+1:
+    addi sp, sp, -272
 
     sd x1,   0(sp)
+    sd x2,   8(sp)
     sd x3,  16(sp)
     sd x4,  24(sp)
     sd x5,  32(sp)
@@ -43,6 +51,7 @@ trap_vector:
     call trap_handler
 
     ld x1,   0(sp)
+    ld x2,   8(sp)
     ld x3,  16(sp)
     ld x4,  24(sp)
     ld x5,  32(sp)
@@ -73,6 +82,13 @@ trap_vector:
     ld x30, 232(sp)
     ld x31, 240(sp)
 
-    addi sp, sp, 256
+    addi sp, sp, 272
+
+    csrr t0, sstatus
+    andi t0, t0, 0x100
+    bnez t0, 2f
+    csrrw sp, sscratch, sp
+
+2:
 
     sret
