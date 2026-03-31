@@ -8,6 +8,8 @@ static struct pcb     procs[MAX_PROCS];
 static int            current_idx = -1;
 static struct context sched_context;
 
+#define DEMO_TICK_LIMIT 10
+
 // ----------------------------------------------------------------
 // forkret — first-run entry point for new threads.
 //
@@ -33,17 +35,15 @@ static void forkret(void) {
 // ----------------------------------------------------------------
 
 static void thread_a(void) {
-    int i = 0;
-    while (1) {
-        printk("[A] tick %d\n", i++);
+    for (int i = 0; i < DEMO_TICK_LIMIT; i++) {
+        printk("[A] tick %d\n", i);
         yield();
     }
 }
 
 static void thread_b(void) {
-    int i = 0;
-    while (1) {
-        printk("[B] tick %d\n", i++);
+    for (int i = 0; i < DEMO_TICK_LIMIT; i++) {
+        printk("[B] tick %d\n", i);
         yield();
     }
 }
@@ -85,6 +85,9 @@ static void proc_init(int idx, void (*func)(void)) {
 // ----------------------------------------------------------------
 
 void yield(void) {
+    if (current_idx < 0 || procs[current_idx].state != PROC_RUNNING)
+        return;
+
     struct pcb *p = &procs[current_idx];
 
     uint64_t sstatus = read_sstatus();
@@ -114,8 +117,11 @@ static void scheduler_run(void) {
             }
         }
 
-        if (found == -1)
-            continue;
+        if (found == -1) {
+            printk("scheduler: no runnable processes\n");
+            while (1)
+                asm volatile("wfi");
+        }
 
         current_idx = found;
         procs[found].state = PROC_RUNNING;

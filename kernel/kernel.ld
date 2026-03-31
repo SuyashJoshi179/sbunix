@@ -7,8 +7,9 @@ PHDRS {
 SECTIONS {
 	. = 0x80200000;
 	.text   : { *(.text.init) *(.text) *(.text.*) } :text
-	_text_end = .;
 	.rodata : { *(.rodata) *(.rodata.*) } :text
+	. = ALIGN(4096);
+	_text_end = .;
 	.data   : { *(.data) *(.data.*) } :data
 	.tarfs  : { *(.tarfs) } :data
 	_bss_start = .;

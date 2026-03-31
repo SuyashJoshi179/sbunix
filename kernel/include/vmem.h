@@ -41,3 +41,4 @@ static inline unsigned long make_satp(pgtable_t pgtable) {
 
 void vmem_map(pgtable_t pgtable, unsigned long virt_addr, unsigned long phy_addr, unsigned long size, unsigned long permissions);
 void vmem_init();
+void vmem_init_post();

@@ -78,11 +78,12 @@ void vmem_init() {
     kernel_pgtable = vmem_create();
 
     printk("Kernel page table created, enabling virtual memory..\n");
-    vmem_switch_to_high(make_satp(kernel_pgtable), KVMEM_OFFSET);
+}
 
+void vmem_init_post() {
     mem_offset = KVMEM_OFFSET;
 
-    // clear temperary identity mappings
+    // clear temporary identity mappings after jumping to higher half.
     kernel_pgtable[get_ptindx(2, KERN_BASE)] = 0;
     kernel_pgtable[get_ptindx(2, UART)] = 0;
     flush_tlb();
