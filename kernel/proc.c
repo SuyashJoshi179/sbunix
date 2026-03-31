@@ -41,10 +41,11 @@ static void forkret(void) {
     write_sstatus(read_sstatus() | SSTATUS_SIE);
     p->entry();
 
-    // If the thread function ever returns, mark it unused and
+    // If the thread function ever returns, mark it exited and
     // switch back to the scheduler permanently.
-    p->state = PROC_UNUSED;
+    p->state = PROC_ZOMBIE;
     swtch(&p->context, &sched_context);
+    panic("zombie process resumed");
 }
 
 // ----------------------------------------------------------------
@@ -63,6 +64,33 @@ static void thread_b(void) {
         printk("[B] tick %d\n", i);
         yield();
     }
+}
+
+static void reap_proc(struct pcb *victim) {
+    struct pcb *prev = 0;
+    struct pcb *p = procs;
+
+    while (p && p != victim) {
+        prev = p;
+        p = p->next;
+    }
+
+    if (p == 0) {
+        return;
+    }
+
+    if (prev) {
+        prev->next = victim->next;
+    } else {
+        procs = victim->next;
+    }
+
+    if (victim->kstack_page) {
+        page_free(victim->kstack_page);
+        victim->kstack_page = 0;
+    }
+
+    page_free(victim);
 }
 
 static struct pcb *alloc_proc(void) {
@@ -199,6 +227,12 @@ static void scheduler_run(void) {
         current = found;
         found->state = PROC_RUNNING;
         swtch(&sched_context, &found->context);
+
+        if (current && current->state == PROC_ZOMBIE) {
+            struct pcb *zombie = current;
+            current = 0;
+            reap_proc(zombie);
+        }
     }
 }
 
@@ -223,8 +257,9 @@ void proc_exit_current(void) {
         return;
 
     struct pcb *p = current;
-    p->state = PROC_UNUSED;
+    p->state = PROC_ZOMBIE;
     swtch(&p->context, &sched_context);
+    panic("exited process resumed");
 }
 
 pgtable_t create_user_pgtable(void) {

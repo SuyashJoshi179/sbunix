@@ -26,6 +26,7 @@ typedef enum {
     PROC_UNUSED  = 0,
     PROC_READY   = 1,
     PROC_RUNNING = 2,
+    PROC_ZOMBIE  = 3,
 } proc_state_t;
 
 struct pcb {
