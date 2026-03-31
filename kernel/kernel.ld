@@ -10,10 +10,10 @@ SECTIONS {
 	.rodata : { *(.rodata) *(.rodata.*) } :text
 	. = ALIGN(4096);
 	_text_end = .;
-	.data   : { *(.data) *(.data.*) } :data
+	.data   : { *(.data) *(.data.*) *(.sdata) *(.sdata.*) } :data
 	.tarfs  : { *(.tarfs) } :data
 	_bss_start = .;
-	.bss    : { *(.bss) *(.bss.*) *(COMMON) } :data
+	.bss (NOLOAD) : { *(.bss) *(.bss.*) *(.sbss) *(.sbss.*) *(COMMON) } :data
 	. = ALIGN(16);
 	. += 16384;
 	_stack_top = .;
