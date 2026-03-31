@@ -1,3 +1,5 @@
+#pragma once
+
 typedef unsigned long pte_t;
 typedef unsigned long pde_t;
 typedef unsigned long *pgtable_t;
