@@ -99,7 +99,7 @@ $(DISK_IMG): build/tools/mkfs
 qemu: build/kernel.elf $(DISK_IMG)
 	qemu-system-riscv64 -machine virt -bios default -kernel $< \
 		-drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
-		-device virtio-blk-pci-non-transitional,drive=hd0 \
+		-device virtio-blk-device,drive=hd0 \
 		-device virtio-gpu-pci \
 		-device virtio-net-pci-non-transitional,netdev=net0 \
 		-netdev user,id=net0 \

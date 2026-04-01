@@ -6,6 +6,10 @@
 #include <trap.h>
 #include <timer.h>
 #include <proc.h>
+#include <virtio_blk.h>
+#include <fs.h>
+
+#define VIRTIO0 0x10001000
 
 extern char _kernel_end[];
 extern void vmem_switch_to_high(unsigned long satp, unsigned long offset);
@@ -21,6 +25,15 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
 
     trap_init();
     timer_init();
+
+    // 1. initialize virtio block device (virtio_blk.c)
+    virtio_blk_init(KVMEM_OFFSET + VIRTIO0); 
+    
+    binit(); 
+    
+    // 3. initialize file system (fs.c)
+    fs_init();
+
     printk("Starting scheduler\n");
     sched_init();   // never returns
 }

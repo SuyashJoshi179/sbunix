@@ -4,6 +4,9 @@
 #include<string.h>
 #include<vmem.h>
 
+// virtio disk interface is memory mapped at this address
+#define VIRTIO0 0x10001000
+
 extern char _text_end[];
 extern void vmem_switch_to_high(unsigned long satp, unsigned long offset);
 
@@ -56,7 +59,9 @@ pgtable_t vmem_create() {
     vmem_map(pgtable, KVMEM_OFFSET+UART, UART, PAGE_SIZE, PTE_R | PTE_W);
     vmem_map(pgtable, UART, UART, PAGE_SIZE, PTE_R | PTE_W);
 
-    // todo - map virtio disk interface
+    // map virtio disk interface
+    vmem_map(pgtable, KVMEM_OFFSET + VIRTIO0, VIRTIO0, PAGE_SIZE, PTE_R | PTE_W);
+    vmem_map(pgtable, VIRTIO0, VIRTIO0, PAGE_SIZE, PTE_R | PTE_W);
 
     unsigned long tend_aligned = page_round_up((unsigned long)_text_end);
 
@@ -86,8 +91,8 @@ void vmem_init_post() {
     kernel_pgtable = (pgtable_t)phys_to_virt((unsigned long)kernel_pgtable);
 
     // clear temporary identity mappings after jumping to higher half.
-    kernel_pgtable[get_ptindx(2, KERN_BASE)] = 0;
-    kernel_pgtable[get_ptindx(2, UART)] = 0;
+    //kernel_pgtable[get_ptindx(2, KERN_BASE)] = 0;
+    //kernel_pgtable[get_ptindx(2, UART)] = 0;
     flush_tlb();
 
     printk("We are in virtual memory!\n");
