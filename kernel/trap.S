@@ -48,6 +48,7 @@ trap_vector:
     csrr a0, scause
     csrr a1, sepc
     csrr a2, stval
+    mv a3, sp
     call trap_handler
 
     ld x1,   0(sp)

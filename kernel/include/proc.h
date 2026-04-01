@@ -4,6 +4,7 @@
 
 #define KSTACK_SIZE 4096UL
 #define USER_STACK_BASE 0x40000000UL
+#define PROC_MAX_FILES 16
 
 struct context {
     uint64_t ra;    // offset 0
@@ -37,6 +38,12 @@ struct pcb {
     pgtable_t      pagetable;
     unsigned long  user_entry;
     unsigned long  user_sp;
+    struct {
+        uint8_t        used;
+        const char    *data;
+        unsigned long  size;
+        unsigned long  off;
+    } files[PROC_MAX_FILES];
     void          *kstack_page;
     struct context context;
     struct pcb    *next;
@@ -46,6 +53,15 @@ void sched_init(void);
 void yield(void);
 void swtch(struct context *old, struct context *new);
 void proc_exit_current(void);
+int proc_exec_current(const char *path);
+long proc_wait_current(void);
+int proc_open_current(const char *path);
+long proc_read_current(int fd, void *buf, unsigned long len);
+int proc_close_current(int fd);
+pgtable_t proc_current_pagetable(void);
+unsigned long proc_current_user_entry(void);
+unsigned long proc_current_user_sp(void);
+unsigned long proc_current_kstack_top(void);
 
 pgtable_t create_user_pgtable(void);
 void map_code(pgtable_t pgtable, char *data, unsigned long size);

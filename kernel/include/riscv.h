@@ -51,6 +51,12 @@ static inline uint64_t read_sepc(void) {
     return sepc;
 }
 
+static inline uint64_t read_satp(void) {
+    uint64_t satp;
+    asm volatile("csrr %0, satp" : "=r" (satp));
+    return satp;
+}
+
 static inline void write_sepc(uint64_t sepc) {
     asm volatile("csrw sepc, %0" : : "r" (sepc));
 }
