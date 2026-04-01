@@ -1,7 +1,8 @@
 #include <stdio.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
-static const char *shell_bin_names[] = {"echo", "sh", "init", "cat", "ls"};
+static const char *shell_bin_names[] = {"echo", "sh", "init", "cat", "ls", "pwd", "clear"};
 static const int shell_bin_count = (int)(sizeof(shell_bin_names) / sizeof(shell_bin_names[0]));
 
 static int is_space(char c) {
@@ -88,6 +89,39 @@ static int parse_args(char *line, char **argv, int max_args) {
   return argc;
 }
 
+static int run_external(const char *path) {
+  int child = spawn(path);
+  if (child < 0) {
+    return -1;
+  }
+
+  int status = 0;
+  int got = waitpid(child, &status, 0);
+  if (got != child) {
+    return -1;
+  }
+
+  return 0;
+}
+
+static void shell_pwd(void) {
+  printf("/\n");
+}
+
+static void shell_clear(void) {
+  static const char seq[] = "\033[2J\033[H";
+  write(1, seq, sizeof(seq) - 1);
+}
+
+static int shell_cd(const char *target) {
+  if (target == 0 || str_eq(target, "/")) {
+    return 0;
+  }
+
+  printf("cd: only '/' is supported\n");
+  return -1;
+}
+
 int main(int argc, char *argv[]) {
   char line[128];
   char *args[16];
@@ -144,7 +178,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (str_eq(args[0], "help")) {
-      printf("commands: help, echo <text>, cat <path>, ls, exit\n");
+      printf("commands: help, echo <text>, cat <path>, ls, pwd, clear, cd [path], exit\n");
       continue;
     }
 
@@ -172,6 +206,25 @@ int main(int argc, char *argv[]) {
       continue;
     }
 
+    if (str_eq(args[0], "pwd")) {
+      shell_pwd();
+      continue;
+    }
+
+    if (str_eq(args[0], "clear")) {
+      shell_clear();
+      continue;
+    }
+
+    if (str_eq(args[0], "cd")) {
+      if (argn > 1) {
+        shell_cd(args[1]);
+      } else {
+        shell_cd("/");
+      }
+      continue;
+    }
+
     int p = 0;
     if (args[0][0] == '/') {
       while (args[0][p] && p < (int)sizeof(exec_path) - 1) {
@@ -190,7 +243,7 @@ int main(int argc, char *argv[]) {
       exec_path[p] = '\0';
     }
 
-    if (exec_path[0] != '\0' && exec(exec_path) == 0) {
+    if (exec_path[0] != '\0' && run_external(exec_path) == 0) {
       continue;
     }
 

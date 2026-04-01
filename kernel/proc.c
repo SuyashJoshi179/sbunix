@@ -285,6 +285,8 @@ static void proc_init_user(char *img, unsigned long size) {
     }
 
     p->state = PROC_READY;
+    p->parent_pid = 0;
+    p->exit_status = 0;
     p->is_user = 1;
     p->entry = 0;
 
@@ -352,6 +354,9 @@ void yield(void) {
 
 static void scheduler_run(void) {
     while (1) {
+        write_satp(make_satp(kernel_pgtable));
+        flush_tlb();
+
         struct pcb *found = next_ready_proc();
 
         if (found == 0) {
@@ -362,9 +367,20 @@ static void scheduler_run(void) {
 
         current = found;
         found->state = PROC_RUNNING;
+
+        if (found->is_user) {
+            write_satp(make_satp(found->pagetable));
+        } else {
+            write_satp(make_satp(kernel_pgtable));
+        }
+        flush_tlb();
+
         swtch(&sched_context, &found->context);
 
-        if (current && current->state == PROC_ZOMBIE) {
+        write_satp(make_satp(kernel_pgtable));
+        flush_tlb();
+
+        if (current && current->state == PROC_ZOMBIE && current->parent_pid == 0) {
             struct pcb *zombie = current;
             current = 0;
             reap_proc(zombie);
@@ -391,14 +407,59 @@ void sched_init(void) {
     scheduler_run();
 }
 
-void proc_exit_current(void) {
+void proc_exit_current(int status) {
     if (current == 0 || current->state != PROC_RUNNING)
         return;
 
     struct pcb *p = current;
+    p->exit_status = status;
+
+    for (struct pcb *it = procs; it != 0; it = it->next) {
+        if (it->parent_pid == p->pid) {
+            it->parent_pid = 0;
+        }
+    }
+
     p->state = PROC_ZOMBIE;
     swtch(&p->context, &sched_context);
     panic("exited process resumed");
+}
+
+static struct pcb *find_proc_by_pid(int pid) {
+    for (struct pcb *p = procs; p != 0; p = p->next) {
+        if (p->pid == pid) {
+            return p;
+        }
+    }
+    return 0;
+}
+
+static struct pcb *find_zombie_child(int parent_pid, int wanted_pid) {
+    for (struct pcb *p = procs; p != 0; p = p->next) {
+        if (p->parent_pid != parent_pid) {
+            continue;
+        }
+        if (wanted_pid > 0 && p->pid != wanted_pid) {
+            continue;
+        }
+        if (p->state == PROC_ZOMBIE) {
+            return p;
+        }
+    }
+    return 0;
+}
+
+static int has_child_match(int parent_pid, int wanted_pid) {
+    for (struct pcb *p = procs; p != 0; p = p->next) {
+        if (p->parent_pid != parent_pid) {
+            continue;
+        }
+        if (wanted_pid > 0 && p->pid != wanted_pid) {
+            continue;
+        }
+        return 1;
+    }
+    return 0;
 }
 
 int proc_exec_current(const char *path) {
@@ -442,8 +503,108 @@ int proc_exec_current(const char *path) {
 }
 
 long proc_wait_current(void) {
-    // Child relationships are not implemented yet (no fork/spawn model),
-    // so wait has no reapable children to return.
+    return proc_waitpid_current(-1, 0, 0);
+}
+
+long proc_waitpid_current(int pid, int *status, int options) {
+    if (current == 0 || current->state != PROC_RUNNING || !current->is_user) {
+        return -1;
+    }
+
+    if (options != 0) {
+        return -1;
+    }
+
+    if (pid == 0 || pid < -1) {
+        return -1;
+    }
+
+    if (pid > 0) {
+        struct pcb *target = find_proc_by_pid(pid);
+        if (target == 0 || target->parent_pid != current->pid) {
+            return -1;
+        }
+    }
+
+    while (1) {
+        struct pcb *z = find_zombie_child(current->pid, pid);
+        if (z != 0) {
+            int child_pid = z->pid;
+            if (status != 0) {
+                *status = z->exit_status;
+            }
+            reap_proc(z);
+            return child_pid;
+        }
+
+        if (!has_child_match(current->pid, pid)) {
+            return -1;
+        }
+
+        uint64_t user_sp = read_sscratch();
+        yield();
+        write_sscratch(user_sp);
+    }
+}
+
+int proc_spawn_current(const char *path) {
+    if (current == 0 || current->state != PROC_RUNNING || !current->is_user) {
+        return -1;
+    }
+
+    char kpath[128];
+    if (copy_user_cstr(path, kpath, sizeof(kpath)) != 0) {
+        return -1;
+    }
+
+    struct tarfs_node node;
+    if (!tarfs_lookup(kpath, &node)) {
+        return -1;
+    }
+
+    struct pcb *child = alloc_proc();
+    if (child == 0) {
+        return -1;
+    }
+
+    child->state = PROC_READY;
+    child->parent_pid = current->pid;
+    child->exit_status = 0;
+    child->is_user = 1;
+    child->entry = 0;
+
+    if (prepare_user_image(node.data, node.size, &child->pagetable, &child->user_entry, &child->user_sp) != 0) {
+        reap_proc(child);
+        return -1;
+    }
+
+    memset(&child->context, 0, sizeof(struct context));
+    child->context.sp = (uint64_t)child->kstack_page + KSTACK_SIZE;
+    child->context.ra = (uint64_t)forkret;
+    return child->pid;
+}
+
+int proc_getpid_current(void) {
+    if (current == 0 || current->state != PROC_RUNNING || !current->is_user) {
+        return -1;
+    }
+
+    return current->pid;
+}
+
+long proc_kill_current(int pid, int sig) {
+    (void)sig;
+
+    if (current == 0 || current->state != PROC_RUNNING || !current->is_user) {
+        return -1;
+    }
+
+    // Minimal semantics for now: allow self-kill as process exit.
+    if (pid == current->pid) {
+        proc_exit_current(128 + sig);
+        return 0;
+    }
+
     return -1;
 }
 

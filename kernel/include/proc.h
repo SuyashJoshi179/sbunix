@@ -32,6 +32,8 @@ typedef enum {
 
 struct pcb {
     int            pid;
+    int            parent_pid;
+    int            exit_status;
     proc_state_t   state;
     uint8_t        is_user;
     void         (*entry)(void);
@@ -52,9 +54,13 @@ struct pcb {
 void sched_init(void);
 void yield(void);
 void swtch(struct context *old, struct context *new);
-void proc_exit_current(void);
+void proc_exit_current(int status);
 int proc_exec_current(const char *path);
 long proc_wait_current(void);
+long proc_waitpid_current(int pid, int *status, int options);
+int proc_spawn_current(const char *path);
+int proc_getpid_current(void);
+long proc_kill_current(int pid, int sig);
 int proc_open_current(const char *path);
 long proc_read_current(int fd, void *buf, unsigned long len);
 int proc_close_current(int fd);

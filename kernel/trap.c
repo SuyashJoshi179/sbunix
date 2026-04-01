@@ -57,12 +57,20 @@ static long sys_read(uint64_t *trapframe) {
 static long handle_syscall(uint64_t *trapframe) {
     switch (trapframe[TF_A7]) {
         case SYS_exit:
-            proc_exit_current();
+            proc_exit_current((int)trapframe[TF_A0]);
             return 0;
         case SYS_write:
             return sys_write(trapframe);
         case SYS_wait:
-            return proc_wait_current();
+            return proc_waitpid_current((int)trapframe[TF_A0], (int *)trapframe[TF_A1], (int)trapframe[TF_A2]);
+        case SYS_getpid:
+            return (long)proc_getpid_current();
+        case SYS_kill:
+            return proc_kill_current((int)trapframe[TF_A0], (int)trapframe[TF_A1]);
+        case SYS_time:
+            return (long)read_time();
+        case SYS_spawn:
+            return proc_spawn_current((const char *)trapframe[TF_A0]);
         case SYS_open:
             return proc_open_current((const char *)trapframe[TF_A0]);
         case SYS_read:
@@ -70,7 +78,7 @@ static long handle_syscall(uint64_t *trapframe) {
         case SYS_close:
             return proc_close_current((int)trapframe[TF_A0]);
         default:
-            proc_exit_current();
+            proc_exit_current(-1);
             return 0;
     }
 }

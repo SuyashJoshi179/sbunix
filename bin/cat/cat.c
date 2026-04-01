@@ -19,11 +19,8 @@ static int cat_fd(int fd) {
 
 int main(int argc, char *argv[]) {
   if (argc <= 1) {
-    if (cat_fd(0) < 0) {
-      printf("cat: read/write error\n");
-      return 1;
-    }
-    return 0;
+    printf("usage: cat <path>...\n");
+    return 1;
   }
 
   int rc = 0;

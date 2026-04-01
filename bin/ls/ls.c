@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
-static const char *bin_names[] = {"echo", "sh", "init", "cat", "ls"};
+static const char *bin_names[] = {"echo", "sh", "init", "cat", "ls", "pwd", "clear"};
 static const char *etc_names[] = {"rc"};
 static const int bin_name_count = (int)(sizeof(bin_names) / sizeof(bin_names[0]));
 static const int etc_name_count = (int)(sizeof(etc_names) / sizeof(etc_names[0]));
