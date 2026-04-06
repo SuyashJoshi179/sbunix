@@ -1,7 +1,7 @@
 .section .text.init
 .global _start
 _start:
-	li sp, 0x88000000
+	la sp, _stack_top
 	la t0, _bss_start
 	la t1, _stack_top
 	bge t0, t1, bss_done

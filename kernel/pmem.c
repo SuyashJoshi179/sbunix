@@ -1,0 +1,30 @@
+#include <pmem.h>
+#include <string.h>
+
+struct free_page {
+    struct free_page *next;
+};
+
+static struct free_page *freelist = 0;
+
+void pmem_init(void *start, void *end) {
+    unsigned long p = page_round_up((unsigned long)start);
+    while (p + PAGE_SIZE <= (unsigned long)end) {
+        page_free((void *)p);
+        p += PAGE_SIZE;
+    }
+}
+
+void *page_alloc(void) {
+    if (!freelist) return 0;
+    struct free_page *p = freelist;
+    freelist = p->next;
+    memset(p, 0, PAGE_SIZE);
+    return p;
+}
+
+void page_free(void *page) {
+    struct free_page *p = (struct free_page *)page;
+    p->next = freelist;
+    freelist = p;
+}

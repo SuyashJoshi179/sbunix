@@ -7,6 +7,7 @@ PHDRS {
 SECTIONS {
 	. = 0x80200000;
 	.text   : { *(.text.init) *(.text) *(.text.*) } :text
+	_text_end = .;
 	.rodata : { *(.rodata) *(.rodata.*) } :text
 	.data   : { *(.data) *(.data.*) } :data
 	.tarfs  : { *(.tarfs) } :data

@@ -1,10 +1,10 @@
 #include <drivers/uart.h>
 
-#define UART 0x10000000
+extern unsigned long mem_offset;
 
-#define THR (*(volatile unsigned char *)(UART + 0x00))
-#define RBR (*(volatile unsigned char *)(UART + 0x00))
-#define LSR (*(volatile unsigned char *)(UART + 0x05))
+#define THR (*(volatile unsigned char *)(UART + mem_offset + 0x00))
+#define RBR (*(volatile unsigned char *)(UART + mem_offset + 0x00))
+#define LSR (*(volatile unsigned char *)(UART + mem_offset + 0x05))
 
 #define THRE (LSR & 0x20)
 #define DR (LSR & 0x01)
