@@ -104,7 +104,6 @@ qemu: build/kernel.elf $(DISK_IMG)
 		-device virtio-net-pci-non-transitional,netdev=net0 \
 		-netdev user,id=net0 \
 		-nographic
-
 clean:
 	rm -rf build zig-out .zig-cache
 
