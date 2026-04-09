@@ -1,44 +1,59 @@
 #include <pmem.h>
-#include <vmem.h>
 #include <string.h>
 
-// The freelist stores physical addresses internally.
-// page_alloc() returns a kernel virtual address (phys + mem_offset).
-// page_free() accepts a kernel virtual address.
+// The freelist stores whatever addresses were passed to page_free().
 //
-// During early boot mem_offset = 0, so virtual == physical and
-// identity mappings are still active — no behaviour change until
-// vmem_init() sets mem_offset = KVMEM_OFFSET.
+// During early boot (before vmem_init), freelist contains physical addresses
+// that are accessible via identity mappings.
+//
+// pmem_rebase(offset) must be called inside vmem_init() BEFORE identity
+// mappings are cleared.  It walks the freelist and adds offset to every
+// node pointer, converting physical → kernel virtual addresses.  After
+// that, page_alloc() returns kernel virtual addresses and page_free()
+// expects kernel virtual addresses.
 
 struct free_page {
-    struct free_page *next;   // physical pointer stored in freelist node
+    struct free_page *next;
 };
 
-static struct free_page *freelist = 0;  // physical address of first free page
+static struct free_page *freelist = 0;
 
 void pmem_init(void *start, void *end) {
     unsigned long p = page_round_up((unsigned long)start);
     while (p + PAGE_SIZE <= (unsigned long)end) {
-        page_free((void *)p);   // start/end are physical at boot (mem_offset=0)
+        page_free((void *)p);
         p += PAGE_SIZE;
     }
 }
 
-// Returns kernel virtual address of a zeroed 4KB page, or NULL on OOM.
+// Rebase all freelist node pointers by adding offset.
+// Call once, after the high-half switch, before clearing identity maps.
+void pmem_rebase(unsigned long offset) {
+    // Adjust the head pointer
+    if (freelist)
+        freelist = (struct free_page *)((unsigned long)freelist + offset);
+
+    // Walk via adjusted pointers and fix each ->next
+    struct free_page *p = freelist;
+    while (p) {
+        if (p->next)
+            p->next = (struct free_page *)((unsigned long)p->next + offset);
+        p = p->next;
+    }
+}
+
+// Returns a zeroed 4KB page (kernel virtual address after rebase, physical before).
 void *page_alloc(void) {
     if (!freelist) return 0;
     struct free_page *p = freelist;
     freelist = p->next;
-    // p is a physical address; add mem_offset to get kernel virtual address
-    void *va = (void *)((unsigned long)p + mem_offset);
-    memset(va, 0, PAGE_SIZE);
-    return va;
+    memset(p, 0, PAGE_SIZE);
+    return p;
 }
 
-// Accepts a kernel virtual address returned by page_alloc().
+// page is whatever address was returned by page_alloc().
 void page_free(void *page) {
-    // Convert virtual → physical for freelist storage
-    struct free_page *p = (struct free_page *)((unsigned long)page - mem_offset);
+    struct free_page *p = (struct free_page *)page;
     p->next = freelist;
     freelist = p;
 }

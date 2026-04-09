@@ -9,5 +9,6 @@ static inline unsigned long page_round_up(unsigned long addr) {
 }
 
 void  pmem_init(void *start, void *end);
+void  pmem_rebase(unsigned long offset);
 void *page_alloc(void);
 void  page_free(void *page);

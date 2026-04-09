@@ -1,10 +1,11 @@
 #include <drivers/uart.h>
-#include <pmem.h>
+#include <pmem.h>   // pmem_rebase
 #include <printk.h>
 #include <string.h>
 #include <vmem.h>
 
 extern char _text_end[];
+extern char _kernel_end[];
 extern void vmem_switch_to_high(unsigned long satp, unsigned long offset);
 
 unsigned long mem_offset = 0;
@@ -53,24 +54,39 @@ static pgtable_t vmem_create(void) {
     pgtable_t pgtable = (pgtable_t)page_alloc();
     // page_alloc already zeroes the page
 
+    // tend_aligned: page boundary after .text end.
+    // The last text page also holds the start of .data (RISC-V linker packs
+    // sections tightly), so it must be both executable AND writable.
     unsigned long tend_aligned = page_round_up((unsigned long)_text_end);
+    // kend_aligned: page boundary after the full kernel image (.text+.data+.bss+stack)
+    unsigned long kend_aligned = page_round_up((unsigned long)_kernel_end);
 
     // UART: identity + high half (for the transition period)
     vmem_map(pgtable, KVMEM_OFFSET + UART, UART, PAGE_SIZE, PTE_R | PTE_W);
     vmem_map(pgtable, UART,               UART, PAGE_SIZE, PTE_R | PTE_W);
 
-    // Kernel text: identity + high half
+    // Kernel text + mixed page: identity + high half, R|W|X
+    // Using R|W|X because the last code page also contains .data variables
+    // that must be writable.  Code-only pages could be R|X, but the gain
+    // is not worth the complexity in an educational kernel.
     vmem_map(pgtable, KVMEM_OFFSET + KERN_BASE, KERN_BASE,
-             tend_aligned - KERN_BASE, PTE_R | PTE_X);
+             tend_aligned - KERN_BASE, PTE_R | PTE_W | PTE_X);
     vmem_map(pgtable, KERN_BASE, KERN_BASE,
-             tend_aligned - KERN_BASE, PTE_R | PTE_X);
+             tend_aligned - KERN_BASE, PTE_R | PTE_W | PTE_X);
 
-    // Heap (data + free pages): high half only is enough, but also identity
-    // so that the freelist nodes are reachable until we clear identity maps.
-    vmem_map(pgtable, KVMEM_OFFSET + tend_aligned, tend_aligned,
-             PHYMEM_END - tend_aligned, PTE_R | PTE_W);
-    vmem_map(pgtable, tend_aligned, tend_aligned,
-             PHYMEM_END - tend_aligned, PTE_R | PTE_W);
+    // Kernel data/bss/stack (after the mixed page): identity + high half, R|W
+    if (kend_aligned > tend_aligned) {
+        vmem_map(pgtable, KVMEM_OFFSET + tend_aligned, tend_aligned,
+                 kend_aligned - tend_aligned, PTE_R | PTE_W);
+        vmem_map(pgtable, tend_aligned, tend_aligned,
+                 kend_aligned - tend_aligned, PTE_R | PTE_W);
+    }
+
+    // Free heap pages: identity + high half, R|W
+    vmem_map(pgtable, KVMEM_OFFSET + kend_aligned, kend_aligned,
+             PHYMEM_END - kend_aligned, PTE_R | PTE_W);
+    vmem_map(pgtable, kend_aligned, kend_aligned,
+             PHYMEM_END - kend_aligned, PTE_R | PTE_W);
 
     return pgtable;
 }
@@ -88,9 +104,17 @@ void vmem_init(void) {
     // Rebase kernel_pgtable pointer to its kernel virtual address.
     kernel_pgtable = (pgtable_t)phys_to_virt((unsigned long)kernel_pgtable);
 
-    // Remove temporary identity mappings (not needed now we're in high half).
-    kernel_pgtable[get_ptindx(2, KERN_BASE)] = 0;
-    kernel_pgtable[get_ptindx(2, UART)]      = 0;
+    // Rebase the physical memory freelist to kernel virtual addresses.
+    // Must happen BEFORE clearing identity mappings so both phys and
+    // virt addresses are simultaneously accessible during the walk.
+    pmem_rebase(KVMEM_OFFSET);
+
+    // Remove the UART identity mapping (low address 0x10000000).
+    // We keep the kernel text/heap identity mapping (0x80000000 range) so that
+    // the CPU can continue executing boot() at its physical return address after
+    // this function returns.  User page tables only copy upper-half L2 entries
+    // (256-511), so user mode can never reach the physical-address mappings.
+    kernel_pgtable[get_ptindx(2, UART)] = 0;
     flush_tlb();
 
     printk("We are in virtual memory!\n");
