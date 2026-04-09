@@ -3,10 +3,20 @@
 .align 2
 
 trap_vector:
-    # push trap frame onto the current kernel stack
-    addi sp, sp, -256
+    # If trap came from U-mode (SPP=0 in sstatus), switch to the per-process
+    # kernel stack stored in sscratch. For S-mode traps keep the current sp.
+    csrr t0, sstatus
+    andi t0, t0, 0x100      # SPP bit (bit 8)
+    bnez t0, 1f             # skip swap if from S-mode
+    csrrw sp, sscratch, sp  # swap: sp <-> sscratch (kernel stack)
 
+1:
+    # Push trap frame (288 bytes: 31 GPRs + sepc + sstatus + trapframe ptr slot)
+    addi sp, sp, -288
+
+    # Save all general-purpose registers (x2/sp saved via sscratch below)
     sd x1,   0(sp)
+    # x2 (sp) — saved separately below
     sd x3,  16(sp)
     sd x4,  24(sp)
     sd x5,  32(sp)
@@ -37,11 +47,39 @@ trap_vector:
     sd x30, 232(sp)
     sd x31, 240(sp)
 
+    # Save sepc and sstatus so they survive across context switches
+    csrr t0, sepc
+    sd t0,  248(sp)
+    csrr t0, sstatus
+    sd t0,  256(sp)
+
+    # Save the original sp (x2):
+    # If we came from U-mode, sscratch now holds the user sp (we swapped above).
+    # If we came from S-mode, sscratch is 0 (unused) and sp+288 is the real sp.
+    csrr t0, sstatus
+    andi t0, t0, 0x100      # SPP bit
+    bnez t0, 2f             # S-mode: compute original sp
+    csrr t0, sscratch       # U-mode: sscratch holds user sp
+    j    3f
+2:
+    addi t0, sp, 288        # S-mode: original sp = current sp + frame size
+3:
+    sd t0, 8(sp)            # save original sp at offset 8 (x2 slot)
+
+    # Call trap handler: trap_handler(scause, sepc, stval, trapframe)
     csrr a0, scause
     csrr a1, sepc
     csrr a2, stval
+    mv   a3, sp             # pass trapframe pointer
     call trap_handler
 
+    # Restore sepc and sstatus before returning
+    ld t0, 248(sp)
+    csrw sepc, t0
+    ld t0, 256(sp)
+    csrw sstatus, t0
+
+    # Restore all GPRs (skip x2/sp — restored last)
     ld x1,   0(sp)
     ld x3,  16(sp)
     ld x4,  24(sp)
@@ -73,6 +111,13 @@ trap_vector:
     ld x30, 232(sp)
     ld x31, 240(sp)
 
-    addi sp, sp, 256
+    addi sp, sp, 288
 
+    # If returning to U-mode (SPP=0), restore user sp from sscratch
+    csrr t0, sstatus
+    andi t0, t0, 0x100      # SPP bit (read from restored sstatus)
+    bnez t0, 4f             # S-mode: nothing to do
+    csrrw sp, sscratch, sp  # swap back: sp -> sscratch, sscratch -> user sp
+
+4:
     sret

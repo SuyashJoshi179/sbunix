@@ -1,3 +1,5 @@
+#pragma once
+
 typedef unsigned long pte_t;
 typedef unsigned long pde_t;
 typedef unsigned long *pgtable_t;
@@ -32,7 +34,23 @@ static inline void flush_tlb() {
 #define SATP_SV39 (8L << 60)
 
 static inline unsigned long make_satp(pgtable_t pgtable) {
-    return SATP_SV39 | (((unsigned long)pgtable) >> 12);
+    // pgtable is a kernel virtual address; convert to physical for SATP
+    unsigned long pa = (unsigned long)pgtable - mem_offset;
+    return SATP_SV39 | (pa >> 12);
 }
+
+// Convert kernel virtual address to physical address.
+// Uses mem_offset so it works both before and after vmem_init().
+static inline unsigned long virt_to_phys(unsigned long va) {
+    return va - mem_offset;
+}
+
+// Convert physical address to kernel virtual address.
+// Uses mem_offset so it works both before and after vmem_init().
+static inline unsigned long phys_to_virt(unsigned long pa) {
+    return pa + mem_offset;
+}
+
+extern pgtable_t kernel_pgtable;
 
 void vmem_init();

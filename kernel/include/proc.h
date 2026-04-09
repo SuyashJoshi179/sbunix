@@ -1,9 +1,10 @@
 #pragma once
 #include <stdint.h>
+#include <vmem.h>
 
-#define KSTACK_SIZE 8192
-#define MAX_PROCS   4
+#define KSTACK_SIZE PAGE_SIZE   // one 4KB page per process kernel stack
 
+// Callee-saved register set used by swtch() for kernel-to-kernel switches.
 struct context {
     uint64_t ra;    // offset 0
     uint64_t sp;    // offset 8
@@ -22,19 +23,36 @@ struct context {
 };
 
 typedef enum {
-    PROC_UNUSED  = 0,
-    PROC_READY   = 1,
-    PROC_RUNNING = 2,
+    PROC_UNUSED   = 0,
+    PROC_READY    = 1,
+    PROC_RUNNING  = 2,
+    PROC_SLEEPING = 3,
+    PROC_ZOMBIE   = 4,
 } proc_state_t;
 
 struct pcb {
     int            pid;
+    int            parent_pid;
+    int            exit_status;
     proc_state_t   state;
-    void         (*entry)(void);
-    struct context context;
-    uint8_t        kstack[KSTACK_SIZE];
+    uint8_t        is_user;         // 1 for user processes, 0 for kernel threads
+
+    void         (*entry)(void);    // entry function (kernel threads only)
+
+    // User process fields (populated by exec/spawn; 0 for kernel threads)
+    pgtable_t      pagetable;       // user page table root (kernel virtual addr)
+    unsigned long  user_entry;      // ELF entry point
+    unsigned long  user_sp;         // user stack pointer
+
+    struct context context;         // saved registers for swtch()
+    void          *kstack_page;     // kernel stack page (kernel virtual addr)
+
+    struct pcb    *next;            // intrusive linked list
 };
 
-void sched_init(void);
-void yield(void);
-void swtch(struct context *old, struct context *new);
+void  sched_init(void);
+void  yield(void);
+void  swtch(struct context *old, struct context *new);
+
+// Returns the currently running PCB (NULL if scheduler is running).
+struct pcb *current_proc(void);
