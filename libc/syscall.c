@@ -17,3 +17,7 @@ long write(int fd, const void *buf, long len) {
 int getpid(void) {
     return (int)ecall3(8, 0, 0, 0);
 }
+
+int fork(void) {
+    return (int)ecall3(9, 0, 0, 0);   // SYS_fork = 9
+}
