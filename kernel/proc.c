@@ -22,7 +22,7 @@ struct pcb *current_proc(void) { return current; }
 // alloc_proc — allocate a PCB + kernel stack from physical memory
 // ----------------------------------------------------------------
 
-static struct pcb *alloc_proc(void) {
+struct pcb *alloc_proc(void) {
     struct pcb *p = (struct pcb *)page_alloc();
     if (p == 0) return 0;
 
@@ -63,7 +63,7 @@ static struct pcb *alloc_proc(void) {
 // free_proc — release PCB + kernel stack of a ZOMBIE process
 // ----------------------------------------------------------------
 
-static void free_proc(struct pcb *victim) {
+void free_proc(struct pcb *victim) {
     // Unlink from list
     struct pcb *prev = 0;
     for (struct pcb *p = procs; p; p = p->next) {

@@ -55,6 +55,8 @@ void  yield(void);
 void  swtch(struct context *old, struct context *new);
 
 struct pcb *current_proc(void);
+struct pcb *alloc_proc(void);
+void        free_proc(struct pcb *p);
 
 void proc_exit_current(int status);
 int  proc_wait_current(int *status);
