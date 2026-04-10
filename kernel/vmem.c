@@ -91,6 +91,77 @@ static pgtable_t vmem_create(void) {
     return pgtable;
 }
 
+// ---------------------------------------------------------------------------
+// User address-space helpers
+// ---------------------------------------------------------------------------
+
+// Allocate a new page table for a user process.
+// Copies the kernel upper-half L2 entries (indices 256-511) from
+// kernel_pgtable so that the kernel is accessible from user processes.
+// The lower half (user virtual addresses) starts empty.
+pgtable_t create_user_pgtable(void) {
+    pgtable_t pt = (pgtable_t)page_alloc();
+    if (!pt) return 0;
+    // Copy ALL 512 L2 entries from kernel_pgtable.
+    //
+    // After vmem_init() the kernel continues running at PHYSICAL addresses
+    // (boot() returns to its physical RA after vmem_switch_to_high adjusts
+    // only vmem_init's own frame).  This means stvec, function pointers,
+    // and all kernel symbols are physical (0x80200xxx, VPN[2]=2).
+    //
+    // If we only copied the upper half (256–511) then, the moment a trap
+    // fires with user SATP active, the CPU would fault on the stvec fetch.
+    //
+    // Solution: copy the full kernel page table so kernel identity mappings
+    // (e.g. VPN[2]=2 for KERN_BASE) remain accessible when S-mode code runs
+    // under the user SATP.  Kernel pages do NOT have PTE_U set, so U-mode
+    // code cannot reach them; S-mode can (PTE_U restriction only applies to
+    // U-mode, or to S-mode if sstatus.SUM=0).
+    for (int i = 0; i < 512; i++)
+        pt[i] = kernel_pgtable[i];
+    // User-space mappings (code, stack) are added later via vmem_map()
+    // which will overwrite the VPN[2]=0 slot (currently 0 from kernel_pgtable).
+    return pt;
+}
+
+// Recursively free all physical pages mapped in the user half of a page table
+// (L2 indices 0–255, i.e., virtual addresses below KVMEM_OFFSET).
+// Also frees the intermediate page table pages.
+static void free_user_pages_level(pgtable_t pt, int level) {
+    int limit = (level == 2) ? 256 : 512;
+    for (int i = 0; i < limit; i++) {
+        pte_t pte = pt[i];
+        if (!(pte & PTE_V)) continue;
+        unsigned long pa = pte_to_phyaddr(pte);
+        if (pte & (PTE_R | PTE_W | PTE_X)) {
+            // Leaf PTE — free the mapped data page
+            page_free((void *)phys_to_virt(pa));
+        } else if (level > 0) {
+            // Pointer PTE — recurse into child page table, then free it
+            pgtable_t child = (pgtable_t)phys_to_virt(pa);
+            free_user_pages_level(child, level - 1);
+            page_free((void *)child);
+        }
+    }
+}
+
+void free_user_pgtable(pgtable_t pt) {
+    if (!pt) return;
+    free_user_pages_level(pt, 2);
+    page_free(pt);
+}
+
+// Map one freshly-allocated page as the user stack just below USER_STACK_TOP.
+// Returns 0 on success, -1 on OOM.
+int map_stack(pgtable_t pt) {
+    void *page = page_alloc();
+    if (!page) return -1;
+    vmem_map(pt, USER_STACK_TOP - PAGE_SIZE,
+             virt_to_phys((unsigned long)page),
+             PAGE_SIZE, PTE_R | PTE_W | PTE_U);
+    return 0;
+}
+
 void vmem_init(void) {
     // kernel_pgtable is physical here (mem_offset still 0)
     kernel_pgtable = vmem_create();

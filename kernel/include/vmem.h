@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 
 typedef unsigned long pte_t;
 typedef unsigned long pde_t;
@@ -51,6 +52,22 @@ static inline unsigned long phys_to_virt(unsigned long pa) {
     return pa + mem_offset;
 }
 
+// User virtual address space layout
+#define USER_TEXT_BASE  0x1000UL          // first user code page
+#define USER_STACK_TOP  0x40000000UL      // user stack grows down from here
+
 extern pgtable_t kernel_pgtable;
 
-void vmem_init();
+// Kernel page table setup
+void      vmem_init(void);
+
+// Page table manipulation
+pte_t    *get_pte(pgtable_t pgtable, unsigned long virt_addr, bool alloc);
+void      vmem_map(pgtable_t pgtable, unsigned long virt_addr,
+                   unsigned long phy_addr, unsigned long size,
+                   unsigned long permissions);
+
+// User address-space management
+pgtable_t create_user_pgtable(void);
+void      free_user_pgtable(pgtable_t pt);
+int       map_stack(pgtable_t pt);  // maps one page at USER_STACK_TOP - PAGE_SIZE

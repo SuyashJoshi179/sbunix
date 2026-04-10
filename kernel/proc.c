@@ -1,11 +1,15 @@
-#include <proc.h>
 #include <pmem.h>
 #include <printk.h>
+#include <proc.h>
 #include <riscv.h>
 #include <string.h>
 #include <vmem.h>
 
-void forkret(void);   // forward declaration (defined below)
+void forkret(void);  // forward declaration (defined below)
+
+// Assembly in user_enter.S — drops to U-mode and never returns
+void enter_user(unsigned long satp, unsigned long user_entry,
+                unsigned long user_sp, unsigned long kernel_sp);
 
 static struct pcb    *procs   = 0;   // head of all-processes list
 static struct pcb    *current = 0;   // currently running process
@@ -84,23 +88,16 @@ void forkret(void) {
     struct pcb *p = current;
 
     if (p->is_user) {
-        // Set up sstatus for a clean return to U-mode via sret:
-        //   SPP = 0  → return to user mode
-        //   SPIE = 1 → enable interrupts in user mode after sret
-        uint64_t st = read_sstatus();
-        st &= ~SSTATUS_SPP;
-        st |=  SSTATUS_SPIE;
-        write_sstatus(st);
-
-        // write_sscratch with kernel stack top so trap.S can find it
-        write_sscratch((uint64_t)p->kstack_page + KSTACK_SIZE);
-
-        // write_sepc with user entry point, then sret via enter_user
-        // (enter_user is added in Phase B; placeholder panic for now)
-        panic("forkret: user mode entry not yet implemented");
+        uint64_t ksp = (uint64_t)p->kstack_page + KSTACK_SIZE;
+        printk("[forkret] pid=%d: entering user mode, entry=0x%lx sp=0x%lx ksp=0x%lx satp=0x%lx\n",
+               p->pid, p->user_entry, p->user_sp, ksp, make_satp(p->pagetable));
+        // enter_user switches to the user page table, sets sscratch, sepc,
+        // sstatus (SPP=0, SPIE=1), user sp, then sret.  Never returns.
+        enter_user(make_satp(p->pagetable), p->user_entry, p->user_sp, ksp);
+        // unreachable
     }
 
-    // Kernel thread: just enable interrupts and call the entry function.
+    // Kernel thread: enable interrupts and call the entry function.
     write_sstatus(read_sstatus() | SSTATUS_SIE);
     p->entry();
 
@@ -270,7 +267,17 @@ static void scheduler_run(void) {
         else
             write_sscratch(0);
 
+        // Switch to the process's page table before entering its context.
+        // For user processes this loads the user SATP (which still has the
+        // kernel upper-half mapped), for kernel threads we stay on kernel SATP.
+        if (found->is_user && found->pagetable) {
+            write_satp(make_satp(found->pagetable));
+            flush_tlb();
+        }
+
         swtch(&sched_context, &found->context);
+        // After swtch returns (process yielded/blocked/exited), the top of
+        // the loop restores the kernel SATP.
 
         // Returned from process — reap parentless zombies immediately.
         if (current && current->state == PROC_ZOMBIE && current->parent_pid == 0) {
@@ -285,7 +292,11 @@ static void scheduler_run(void) {
 // sched_init — called once from boot(), never returns
 // ----------------------------------------------------------------
 
+// Symbols bracketing the embedded user-mode test binary (user_test.S).
+extern char user_test_start[], user_test_end[];
+
 void sched_init(void) {
+    // --- kernel test threads ---
     struct pcb *a = alloc_proc();
     if (!a) panic("sched_init: alloc_proc failed");
     a->state = PROC_READY;
@@ -295,6 +306,29 @@ void sched_init(void) {
     if (!b) panic("sched_init: alloc_proc failed");
     b->state = PROC_READY;
     b->entry = thread_b;
+
+    // --- Phase B: user-mode test process using embedded binary ---
+    struct pcb *u = alloc_proc();
+    if (!u) panic("sched_init: alloc_proc for user failed");
+
+    u->pagetable = create_user_pgtable();
+    if (!u->pagetable) panic("sched_init: create_user_pgtable failed");
+
+    // Copy the test binary to a fresh page and map it at USER_TEXT_BASE
+    void *code_page = page_alloc();
+    if (!code_page) panic("sched_init: page_alloc for user code failed");
+    unsigned long code_size = (unsigned long)(user_test_end - user_test_start);
+    memmove(code_page, user_test_start, code_size);
+    vmem_map(u->pagetable, USER_TEXT_BASE,
+             virt_to_phys((unsigned long)code_page),
+             PAGE_SIZE, PTE_R | PTE_X | PTE_U);
+
+    if (map_stack(u->pagetable) < 0) panic("sched_init: map_stack failed");
+
+    u->is_user    = 1;
+    u->user_entry = USER_TEXT_BASE;
+    u->user_sp    = USER_STACK_TOP;
+    u->state      = PROC_READY;
 
     printk("scheduler: starting\n");
     scheduler_run();

@@ -6,6 +6,7 @@
 #define SSTATUS_SIE  (1 << 1)
 #define SSTATUS_SPIE (1 << 5)
 #define SSTATUS_SPP  (1 << 8)
+#define SSTATUS_SUM  (1 << 18)  // Supervisor User Memory: lets S-mode access U-mode pages
 #define SIE_STIE     (1 << 5)
 
 static inline uint64_t read_sstatus(void) {

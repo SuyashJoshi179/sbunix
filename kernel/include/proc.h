@@ -54,5 +54,9 @@ void  sched_init(void);
 void  yield(void);
 void  swtch(struct context *old, struct context *new);
 
-// Returns the currently running PCB (NULL if scheduler is running).
 struct pcb *current_proc(void);
+
+void proc_exit_current(int status);
+int  proc_wait_current(int *status);
+void proc_sleep(struct pcb *p);
+void proc_wakeup(int pid);
