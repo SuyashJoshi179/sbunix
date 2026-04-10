@@ -1,3 +1,4 @@
+#include <exec.h>
 #include <pmem.h>
 #include <printk.h>
 #include <proc.h>
@@ -292,9 +293,6 @@ static void scheduler_run(void) {
 // sched_init — called once from boot(), never returns
 // ----------------------------------------------------------------
 
-// Symbols bracketing the embedded user-mode test binary (user_test.S).
-extern char user_test_start[], user_test_end[];
-
 void sched_init(void) {
     // --- kernel test threads ---
     struct pcb *a = alloc_proc();
@@ -307,28 +305,9 @@ void sched_init(void) {
     b->state = PROC_READY;
     b->entry = thread_b;
 
-    // --- Phase B: user-mode test process using embedded binary ---
-    struct pcb *u = alloc_proc();
-    if (!u) panic("sched_init: alloc_proc for user failed");
-
-    u->pagetable = create_user_pgtable();
-    if (!u->pagetable) panic("sched_init: create_user_pgtable failed");
-
-    // Copy the test binary to a fresh page and map it at USER_TEXT_BASE
-    void *code_page = page_alloc();
-    if (!code_page) panic("sched_init: page_alloc for user code failed");
-    unsigned long code_size = (unsigned long)(user_test_end - user_test_start);
-    memmove(code_page, user_test_start, code_size);
-    vmem_map(u->pagetable, USER_TEXT_BASE,
-             virt_to_phys((unsigned long)code_page),
-             PAGE_SIZE, PTE_R | PTE_X | PTE_U);
-
-    if (map_stack(u->pagetable) < 0) panic("sched_init: map_stack failed");
-
-    u->is_user    = 1;
-    u->user_entry = USER_TEXT_BASE;
-    u->user_sp    = USER_STACK_TOP;
-    u->state      = PROC_READY;
+    // --- Phase C: load /bin/init from tarfs ---
+    struct pcb *init = proc_spawn("bin/init");
+    if (!init) panic("sched_init: failed to spawn /bin/init");
 
     printk("scheduler: starting\n");
     scheduler_run();
