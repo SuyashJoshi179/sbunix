@@ -60,5 +60,6 @@ void        free_proc(struct pcb *p);
 
 void proc_exit_current(int status);
 int  proc_wait_current(int *status);
+int  proc_fork_current(void);
 void proc_sleep(struct pcb *p);
 void proc_wakeup(int pid);

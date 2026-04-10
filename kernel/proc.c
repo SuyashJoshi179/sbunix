@@ -4,6 +4,7 @@
 #include <proc.h>
 #include <riscv.h>
 #include <string.h>
+#include <syscall.h>
 #include <vmem.h>
 
 void forkret(void);  // forward declaration (defined below)
@@ -11,6 +12,9 @@ void forkret(void);  // forward declaration (defined below)
 // Assembly in user_enter.S — drops to U-mode and never returns
 void enter_user(unsigned long satp, unsigned long user_entry,
                 unsigned long user_sp, unsigned long kernel_sp);
+
+// Assembly in user_enter.S — used by fork() to resume child in user mode
+void fork_child_return(void);
 
 static struct pcb    *procs   = 0;   // head of all-processes list
 static struct pcb    *current = 0;   // currently running process
@@ -126,6 +130,53 @@ static void thread_b(void) {
         printk("[B] tick %d\n", i++);
         yield();
     }
+}
+
+// ----------------------------------------------------------------
+// proc_fork_current — duplicate the current user process
+// ----------------------------------------------------------------
+
+int proc_fork_current(void) {
+    struct pcb *parent = current;
+    if (!parent || !parent->is_user) return -1;
+
+    struct pcb *child = alloc_proc();
+    if (!child) return -1;
+
+    // Deep-copy user address space
+    pgtable_t child_pt = uvmcopy(parent->pagetable);
+    if (!child_pt) {
+        free_proc(child);
+        return -1;
+    }
+
+    // The trap frame is always at kstack_top - 288 (trap.S: addi sp, sp, -288
+    // from kstack_top for every U-mode trap).
+    uint64_t  parent_kstop = (uint64_t)parent->kstack_page + KSTACK_SIZE;
+    uint64_t  child_kstop  = (uint64_t)child->kstack_page  + KSTACK_SIZE;
+    uint64_t *parent_tf    = (uint64_t *)(parent_kstop - 288);
+    uint64_t *child_tf     = (uint64_t *)(child_kstop  - 288);
+
+    // Copy the complete trap frame (288 bytes = 36 × uint64_t)
+    memmove(child_tf, parent_tf, 288);
+
+    // fork() returns 0 in the child
+    child_tf[TF_A0] = 0;
+
+    // Set up child context: swtch() will load ra and sp, call ret →
+    // fork_child_return restores the trap frame and srets to user mode.
+    child->context.ra = (uint64_t)fork_child_return;
+    child->context.sp = (uint64_t)child_tf;
+
+    child->is_user    = 1;
+    child->pagetable  = child_pt;
+    child->user_entry = parent->user_entry;
+    child->user_sp    = parent->user_sp;
+    child->parent_pid = parent->pid;
+    child->state      = PROC_READY;
+
+    printk("[fork] parent pid=%d -> child pid=%d\n", parent->pid, child->pid);
+    return child->pid;
 }
 
 // ----------------------------------------------------------------
@@ -305,9 +356,9 @@ void sched_init(void) {
     b->state = PROC_READY;
     b->entry = thread_b;
 
-    // --- Phase C: load /bin/init from tarfs ---
-    struct pcb *init = proc_spawn("bin/init");
-    if (!init) panic("sched_init: failed to spawn /bin/init");
+    // --- Phase D: fork test ---
+    struct pcb *ft = proc_spawn("bin/fork_test");
+    if (!ft) panic("sched_init: failed to spawn /bin/fork_test");
 
     printk("scheduler: starting\n");
     scheduler_run();

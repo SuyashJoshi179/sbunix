@@ -105,6 +105,13 @@ static int64_t sys_exec(const char *path, uint64_t *trapframe) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_fork — duplicate the current process
+// ---------------------------------------------------------------------------
+static int64_t sys_fork(void) {
+    return (int64_t)proc_fork_current();
+}
+
+// ---------------------------------------------------------------------------
 // syscall_dispatch — called from trap_handler when scause == 8 (U-mode ecall)
 //
 // trapframe is the pointer to the saved register file on the kernel stack
@@ -126,6 +133,9 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_exec:
             return sys_exec((const char *)trapframe[TF_A0], trapframe);
+
+        case SYS_fork:
+            return sys_fork();
 
         default:
             printk("syscall: unknown number %lu from pid %d\n",

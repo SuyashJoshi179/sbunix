@@ -132,6 +132,9 @@ static void free_user_pages_level(pgtable_t pt, int level) {
     for (int i = 0; i < limit; i++) {
         pte_t pte = pt[i];
         if (!(pte & PTE_V)) continue;
+        // At L2, skip entries shared with the kernel page table; those page
+        // table nodes are not owned by this process and must not be freed.
+        if (level == 2 && pte == kernel_pgtable[i]) continue;
         unsigned long pa = pte_to_phyaddr(pte);
         if (pte & (PTE_R | PTE_W | PTE_X)) {
             // Leaf PTE — free the mapped data page
@@ -160,6 +163,57 @@ int map_stack(pgtable_t pt) {
              virt_to_phys((unsigned long)page),
              PAGE_SIZE, PTE_R | PTE_W | PTE_U);
     return 0;
+}
+
+// Deep-copy the user half (L2 indices 0-255) of parent_pt into a new page
+// table.  Each leaf physical page is copied to a fresh page.  Returns the
+// new page table on success, 0 on OOM (partial allocations are freed).
+pgtable_t uvmcopy(pgtable_t parent_pt) {
+    pgtable_t child_pt = create_user_pgtable();
+    if (!child_pt) return 0;
+
+    for (int l2i = 0; l2i < 256; l2i++) {
+        pte_t l2pte = parent_pt[l2i];
+        if (!(l2pte & PTE_V)) continue;
+        // Skip entries shared with the kernel page table (e.g. the physical
+        // identity mapping for KERN_BASE at L2[2]).  User-specific mappings
+        // have fresh L1 pages not present in kernel_pgtable.
+        if (l2pte == kernel_pgtable[l2i]) continue;
+        // Non-leaf L2 → descend to L1 table
+        pgtable_t l1 = (pgtable_t)phys_to_virt(pte_to_phyaddr(l2pte));
+
+        for (int l1i = 0; l1i < 512; l1i++) {
+            pte_t l1pte = l1[l1i];
+            if (!(l1pte & PTE_V)) continue;
+            // Non-leaf L1 → descend to L0 table
+            pgtable_t l0 = (pgtable_t)phys_to_virt(pte_to_phyaddr(l1pte));
+
+            for (int l0i = 0; l0i < 512; l0i++) {
+                pte_t pte = l0[l0i];
+                if (!(pte & PTE_V)) continue;
+                if (!(pte & (PTE_R | PTE_W | PTE_X))) continue; // skip pointer PTEs
+
+                // Leaf PTE — copy the physical page via kernel virtual addresses
+                void *src = (void *)phys_to_virt(pte_to_phyaddr(pte));
+                void *dst = page_alloc();
+                if (!dst) {
+                    free_user_pgtable(child_pt);
+                    return 0;
+                }
+                memmove(dst, src, PAGE_SIZE);
+
+                // Reconstruct the virtual address from the three index values
+                unsigned long vaddr = ((unsigned long)l2i << 30) |
+                                      ((unsigned long)l1i << 21) |
+                                      ((unsigned long)l0i << 12);
+                unsigned long perm = pte & (PTE_R | PTE_W | PTE_X | PTE_U);
+                vmem_map(child_pt, vaddr,
+                         virt_to_phys((unsigned long)dst),
+                         PAGE_SIZE, perm);
+            }
+        }
+    }
+    return child_pt;
 }
 
 void vmem_init(void) {
