@@ -29,6 +29,14 @@ void* memmove(void* dest, const void* src, unsigned int n) {
 	return dest;
 }
 
+void* memcpy(void *dest, const void* src, unsigned int n) {
+	char *d = (char *)dest;
+	const char *s = (const char *)src;
+	for (unsigned int i = 0; i < n; i++)
+		d[i] = s[i];
+	return dest;
+}
+
 char* strncpy(char *dest, const char* src, unsigned int n) {
 	char* temp = dest;
 	
@@ -44,17 +52,15 @@ char* strncpy(char *dest, const char* src, unsigned int n) {
 	return dest;
 }
 
-bool strncmp(const char *str1, const char *str2, unsigned int n) {
+/* Returns 0 if equal (standard C semantics). */
+int strncmp(const char *str1, const char *str2, unsigned int n) {
 	for (unsigned int i = 0; i < n; i++) {
-		if (str1[i] != str2[i]) {
-			return false;
-		}
-		if (str1[i] == '\0') {
-			return true;
-		}
+		if (str1[i] != str2[i])
+			return (unsigned char)str1[i] - (unsigned char)str2[i];
+		if (str1[i] == '\0')
+			return 0;
 	}
-
-	return true;
+	return 0;
 }
 
 int strlen(const char *str) {

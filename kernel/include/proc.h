@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <vmem.h>
+#include <file.h>
 
 #define KSTACK_SIZE 4096UL
 #define USER_STACK_BASE 0x40000000UL
@@ -40,8 +41,10 @@ struct pcb {
     void          *kstack_page;
     struct context context;
     struct pcb    *next;
+    struct file   *ofile[NOFILE];  /* open file descriptors */
 };
 
+struct pcb *get_current(void);
 void sched_init(void);
 void yield(void);
 void swtch(struct context *old, struct context *new);

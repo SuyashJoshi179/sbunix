@@ -3,6 +3,8 @@
 #include <printk.h>
 #include <riscv.h>
 #include <string.h>
+#include <tarfs.h>
+#include <elf.h>
 
 static struct pcb     *procs;
 static struct pcb     *current;
@@ -13,8 +15,7 @@ static struct context  sched_context;
 
 extern void enter_user(unsigned long satp, unsigned long sepc, unsigned long usp, unsigned long ksp);
 
-// Tiny init user program: ecall (used as exit trap for now).
-static unsigned char init_user_prog[] = {0x73, 0x00, 0x00, 0x00};
+/* init_user_prog is loaded from tarfs at sched_init time */
 
 // ----------------------------------------------------------------
 // forkret — first-run entry point for new threads.
@@ -148,9 +149,9 @@ static void proc_init_user(char *img, unsigned long size) {
     p->entry = 0;
 
     p->pagetable = create_user_pgtable();
-    map_code(p->pagetable, img, size);
+    p->user_entry = elf_load(p->pagetable, img, size);
+    if (p->user_entry == 0) panic("elf_load failed");
     p->user_sp = map_stack(p->pagetable);
-    p->user_entry = 0;
 
     if (p->user_sp == 0) {
         panic("Failed to map user stack");
@@ -240,17 +241,30 @@ static void scheduler_run(void) {
 // sched_init — called once from boot(), never returns
 // ----------------------------------------------------------------
 
+extern void syscall_test_thread(void);
+
 void sched_init(void) {
     procs = 0;
     current = 0;
 
     proc_init_kernel(thread_a);
     proc_init_kernel(thread_b);
-    proc_init_user((char *)init_user_prog, sizeof(init_user_prog));
+    proc_init_kernel(syscall_test_thread);
+
+    unsigned long ls_size = 0;
+    char *ls_img = tarfs_find("bin/ls", &ls_size);
+    if (ls_img && ls_size > 0) {
+        printk("sched_init: loading bin/ls (%lu bytes) from tarfs\n", ls_size);
+        proc_init_user(ls_img, ls_size);
+    } else {
+        printk("sched_init: bin/ls not found in tarfs\n");
+    }
 
     printk("scheduler: starting\n");
     scheduler_run();
 }
+
+struct pcb *get_current(void) { return current; }
 
 void proc_exit_current(void) {
     if (current == 0 || current->state != PROC_RUNNING)

@@ -14,52 +14,70 @@ static uintptr_t blk_base;
  * Initializes the VirtIO Block device using the Legacy MMIO interface.
  */
 void virtio_blk_init(uintptr_t base) {
-    printk("virtio_blk_init: base address is %lx\n", base);
     blk_base = base;
+
+    uint32_t magic   = *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_MAGIC_VALUE);
+    uint32_t version = *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_VERSION);
+    uint32_t devid   = *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_DEVICE_ID);
+    printk("[virtio] base=%lx magic=0x%x version=%d devid=%d\n",
+           (unsigned long)base, magic, version, devid);
 
     /* 1. Reset the device */
     *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_STATUS) = 0;
     __sync_synchronize();
+    printk("[virtio] after reset: status=0x%x\n",
+           *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_STATUS));
 
     /* 2. Set ACKNOWLEDGE and DRIVER status bits */
     *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_STATUS) |= VIRTIO_STATUS_ACKNOWLEDGE;
     *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_STATUS) |= VIRTIO_STATUS_DRIVER;
+    printk("[virtio] after ACK+DRV: status=0x%x\n",
+           *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_STATUS));
 
     /* 3. Feature Negotiation: Enable VIRTIO_F_ANY_LAYOUT (bit 27) for Legacy stability */
     uint32_t features = *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_DEVICE_FEATURES);
+    printk("[virtio] device_features=0x%x\n", features);
     features |= (1 << 27);
     *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_GUEST_FEATURES) = features;
 
     /* 4. Configure Virtqueue 0 */
     *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_QUEUE_SEL) = 0;
-    
+
     /* Set Guest Page Size (Legacy GuestPageSize register) */
     *(volatile uint32_t *)(blk_base + 0x028) = 4096;
 
     /* Set Queue Size to 16 descriptors */
+    uint32_t qmax = *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_QUEUE_NUM_MAX);
+    printk("[virtio] queue_num_max=%d\n", qmax);
     *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_QUEUE_NUM) = 16;
 
     /* 5. Memory Layout Setup */
-    desc = (struct virtq_desc *)queue_mem;
+    desc  = (struct virtq_desc  *)queue_mem;
     avail = (struct virtq_avail *)(queue_mem + 16 * sizeof(struct virtq_desc));
     /* Legacy mode requires Used Ring to be page-aligned (offset 4096) */
-    used = (struct virtq_used *)(queue_mem + 4096); 
+    used  = (struct virtq_used  *)(queue_mem + 4096);
+
+    uintptr_t pfn = virt_to_phys((uintptr_t)queue_mem) >> 12;
+    printk("[virtio] desc_pa=%lx avail_pa=%lx used_pa=%lx pfn=%lx\n",
+           (unsigned long)virt_to_phys((uintptr_t)desc),
+           (unsigned long)virt_to_phys((uintptr_t)avail),
+           (unsigned long)virt_to_phys((uintptr_t)used),
+           (unsigned long)pfn);
 
     /* Provide the Page Frame Number (PFN) to the device */
-    *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_QUEUE_PFN) = (uint32_t)(virt_to_phys((uintptr_t)queue_mem) >> 12);
-    
+    *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_QUEUE_PFN) = (uint32_t)pfn;
+    printk("[virtio] PFN readback=0x%x\n",
+           *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_QUEUE_PFN));
+
     /* Initialize ring indices */
     avail->idx = 0;
-    used->idx = 0;
+    used->idx  = 0;
 
     /* 6. Set DRIVER_OK to signal initialization completion */
     *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_STATUS) |= VIRTIO_STATUS_DRIVER_OK;
     __sync_synchronize();
-
-    printk("VirtIO-Blk initialized at %lx, PFN: %lx\n", 
-       (unsigned long)blk_base, 
-       (unsigned long)(virt_to_phys((uintptr_t)queue_mem) >> 12));
-    
+    printk("[virtio] after DRIVER_OK: status=0x%x\n",
+           *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_STATUS));
 }
 
 /**
@@ -94,15 +112,25 @@ void virtio_blk_read(uint64_t sector, void *buf) {
     /* Add the head of the descriptor chain to the Avail Ring */
     avail->ring[avail->idx % 16] = 0;
     __sync_synchronize();
-    
+
     /* Increment Avail index and notify the device */
     avail->idx++;
     __sync_synchronize();
+    printk("[virtio_read] avail->idx=%d used->idx=%d, notifying\n",
+           avail->idx, used->idx);
     *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_QUEUE_NOTIFY) = 0;
 
     /* Polling: Wait for the device to process the request */
+    uint32_t spin = 0;
     while (used->idx != avail->idx) {
         __sync_synchronize();
+        spin++;
+        if (spin == 10000000) {
+            printk("[virtio_read] TIMEOUT: avail->idx=%d used->idx=%d dev_status=0x%x\n",
+                   avail->idx, used->idx,
+                   *(volatile uint32_t *)(blk_base + VIRTIO_MMIO_STATUS));
+            return;
+        }
     }
 
     if (status == 0) {

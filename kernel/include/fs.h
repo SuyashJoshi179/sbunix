@@ -3,54 +3,102 @@
 
 #include <stdint.h>
 
-#define BSIZE 512              // Block size (matches VirtIO sector size)
-#define FSMAGIC 0x10203040     // File system magic number
-#define NDIRECT 12             // Number of direct data blocks per inode
-#define NBUF 32                // Number of buffer cache slots
+#define BSIZE       512          /* block size = VirtIO sector size */
+#define FSMAGIC     0x10203040
+#define NDIRECT     12
+#define NBUF        32           /* buffer-cache slots */
+#define NINODE      32           /* in-memory inode table size */
+#define MAXFILE     (NDIRECT)    /* max blocks per file (direct only for now) */
+#define DIRSIZ      14           /* max filename length */
 
-// On-disk sector 0: Boot block (unused)
-// On-disk sector 1: Superblock
+/* ------------------------------------------------------------------ */
+/* On-disk structures (must match mkfs.c exactly)                      */
+/* ------------------------------------------------------------------ */
+
+/* Block 0: boot (unused)   Block 1: superblock */
 struct superblock {
-    uint32_t magic;        // Must be FSMAGIC
-    uint32_t size;         // Total number of blocks in the disk image
-    uint32_t nblocks;      // Number of data blocks
-    uint32_t ninodes;      // Number of inodes
-    uint32_t inodestart;   // Block number where inode table begins
-    uint32_t bmapstart;    // Block number where free block bitmap begins
+    uint32_t magic;
+    uint32_t size;        /* total blocks */
+    uint32_t nblocks;     /* data blocks */
+    uint32_t ninodes;
+    uint32_t inodestart;  /* first inode block */
+    uint32_t bmapstart;   /* first bitmap block */
 };
 
-// On-disk Inode structure (exactly 64 bytes for alignment)
+/* On-disk inode (72 bytes) */
 struct dinode {
-    uint16_t type;         // File type (0: free, 1: directory, 2: file)
-    uint16_t nlink;        // Number of links to this inode in file system
-    uint32_t size;         // File size in bytes
-    uint32_t addrs[NDIRECT]; // Direct data block addresses
-    uint32_t reserved[4];  // Padding to reach 64 bytes
+    uint16_t type;              /* 0=free 1=dir 2=file */
+    uint16_t nlink;
+    uint32_t size;              /* bytes */
+    uint32_t addrs[NDIRECT];   /* direct block addresses */
+    uint32_t reserved[4];
 };
 
-// Directory entry
+/* Directory entry */
 struct dirent {
-    uint16_t inum;         // Inode number
-    char name[14];         // File name string
+    uint16_t inum;
+    char     name[DIRSIZ];
 };
 
-// --- Buffer Cache (bio.c) Interface ---
+/* ------------------------------------------------------------------ */
+/* Buffer cache (bio.c)                                                */
+/* ------------------------------------------------------------------ */
+
 struct buf {
-    int valid;             // Data has been read from disk
-    int disk;              // Dirty bit (data needs to be written to disk)
-    uint32_t blockno;      // Block number on disk
-    uint8_t data[BSIZE];   // Actual content of the block
+    int      valid;
+    int      disk;
+    uint32_t blockno;
+    uint8_t  data[BSIZE];
 };
 
-void binit(void);
-struct buf* bread(uint32_t blockno);
-void bwrite(struct buf *b);
-void brelse(struct buf *b);
+void          binit(void);
+struct buf   *bread(uint32_t blockno);
+void          bwrite(struct buf *b);
+void          brelse(struct buf *b);
 
-// --- File System (fs.c) Interface ---
-void fs_init(void);
-void read_dinode(uint32_t inum, struct dinode *dip);
-uint32_t balloc(void);
-void fs_test_self(void);
+/* ------------------------------------------------------------------ */
+/* In-memory inode                                                     */
+/* ------------------------------------------------------------------ */
 
-#endif
+struct inode {
+    uint32_t dev;       /* always 0 for our single disk */
+    uint32_t inum;
+    int      ref;       /* reference count */
+    int      valid;     /* dinode fields loaded from disk? */
+
+    /* copy of on-disk dinode fields */
+    uint16_t type;
+    uint16_t nlink;
+    uint32_t size;
+    uint32_t addrs[NDIRECT];
+};
+
+/* ------------------------------------------------------------------ */
+/* File system layer (fs.c)                                            */
+/* ------------------------------------------------------------------ */
+
+void          fs_init(void);
+
+/* inode management */
+struct inode *ialloc(uint16_t type);
+struct inode *iget(uint32_t inum);
+void          iput(struct inode *ip);
+void          iupdate(struct inode *ip);
+
+/* file I/O */
+int           readi(struct inode *ip, char *dst, uint32_t off, uint32_t n);
+int           writei(struct inode *ip, char *src, uint32_t off, uint32_t n);
+
+/* directory */
+struct inode *dirlookup(struct inode *dp, const char *name, uint32_t *poff);
+int           dirlink(struct inode *dp, const char *name, uint32_t inum);
+
+/* path resolution */
+struct inode *namei(const char *path);
+
+/* low-level helpers (still used by tests) */
+void          read_dinode(uint32_t inum, struct dinode *dip);
+uint32_t      balloc(void);
+void          fs_test_self(void);
+
+#endif /* FS_H */

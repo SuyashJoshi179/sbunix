@@ -4,8 +4,8 @@
 #include<string.h>
 #include<vmem.h>
 
-// virtio disk interface is memory mapped at this address
-#define VIRTIO0 0x10001000
+// virtio disk interface — QEMU assigns virtio-blk-device to highest slot
+#define VIRTIO0 0x10008000
 
 extern char _text_end[];
 extern void vmem_switch_to_high(unsigned long satp, unsigned long offset);
@@ -59,7 +59,7 @@ pgtable_t vmem_create() {
     vmem_map(pgtable, KVMEM_OFFSET+UART, UART, PAGE_SIZE, PTE_R | PTE_W);
     vmem_map(pgtable, UART, UART, PAGE_SIZE, PTE_R | PTE_W);
 
-    // map virtio disk interface
+    // map virtio disk interface (slot at 0x10008000)
     vmem_map(pgtable, KVMEM_OFFSET + VIRTIO0, VIRTIO0, PAGE_SIZE, PTE_R | PTE_W);
     vmem_map(pgtable, VIRTIO0, VIRTIO0, PAGE_SIZE, PTE_R | PTE_W);
 
@@ -76,6 +76,14 @@ pgtable_t vmem_create() {
 
     return pgtable;
 
+}
+
+/* Translate a virtual address in the given page table to its physical address.
+   Returns 0 if the mapping does not exist. */
+unsigned long vmem_translate(pgtable_t pgtable, unsigned long virt_addr) {
+    pte_t *pte = get_pte(pgtable, virt_addr, false);
+    if (pte == 0 || !(*pte & PTE_V)) return 0;
+    return pte_to_phyaddr(*pte) | (virt_addr & 0xFFF);
 }
 
 void vmem_init() {

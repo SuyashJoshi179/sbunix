@@ -1,4 +1,1 @@
-#include <stdlib.h>
-
-void exit(int status) {
-}
+/* exit() is now provided as an inline in unistd.h; this file kept empty. */

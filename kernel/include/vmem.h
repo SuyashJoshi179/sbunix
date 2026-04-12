@@ -54,6 +54,7 @@ static inline unsigned long make_satp(pgtable_t pgtable) {
     return SATP_SV39 | (virt_to_phys((unsigned long)pgtable) >> 12);
 }
 
-void vmem_map(pgtable_t pgtable, unsigned long virt_addr, unsigned long phy_addr, unsigned long size, unsigned long permissions);
-void vmem_init();
-void vmem_init_post();
+void          vmem_map(pgtable_t pgtable, unsigned long virt_addr, unsigned long phy_addr, unsigned long size, unsigned long permissions);
+unsigned long vmem_translate(pgtable_t pgtable, unsigned long virt_addr);
+void          vmem_init(void);
+void          vmem_init_post(void);
