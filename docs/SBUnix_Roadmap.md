@@ -668,6 +668,31 @@ shell, that's a success.
   (MicroPython, eventually BusyBox) land under `build/rootfs/bin/`
   via their own `thirdparty/` subdir.
 
+### Cross-cutting gotchas (read once, remember forever)
+
+- **Higher-half kernel + DMA.** Any address handed to a device must
+  be physical. A single `vtop()` helper owned by `pmem`/`vm` —
+  not duplicated in every driver — or drift is inevitable.
+- **`SUM` bit in `sstatus`.** Set while the kernel touches user
+  memory, cleared otherwise. Leaving it on permanently turns bad
+  kernel pointer bugs into silent user-memory corruption.
+- **`sfence.vma` after pagetable edits.** Always. Including after
+  clearing `PTE_W` for COW, including after unmapping. Missing this
+  creates "works first time, fails on second run" Heisenbugs.
+- **Single-hart = IRQs off is our lock.** Never take a "spinlock"
+  without push_off. If you ever port to SMP, *every* push_off site
+  is a real lock audit.
+- **One allocation, one owner, documented at the allocation site.**
+  Page refcounts are the only exception, and only for COW.
+- **Negative errno at the syscall boundary, positive errno in libc.**
+  Wrappers do `if (r < 0) { errno = -r; return -1; }`. Kernel never
+  sets user `errno` directly.
+- **Never panic on user input.** Panic is for kernel invariant
+  violations only. Every user-triggerable path returns `-errno`.
+- **No silent feature drift.** If a phase lands without a listed
+  item, update §2 and the phase section — don't leave the doc
+  pretending it shipped.
+
 ---
 
 ## 12. Test Plan (accumulates across phases)
