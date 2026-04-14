@@ -84,4 +84,5 @@ static inline uint64_t read_satp(void) {
 static inline void write_satp(uint64_t val) {
     asm volatile("csrw satp, %0" : : "r"(val));
 }
+
 #endif

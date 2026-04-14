@@ -43,4 +43,3 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
         while (1) {}
     }
 }
-
