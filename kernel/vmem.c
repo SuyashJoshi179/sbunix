@@ -1,89 +1,244 @@
-#include<drivers/uart.h>
-#include<pmem.h>
-#include<printk.h>
-#include<string.h>
-#include<vmem.h>
+#include <drivers/uart.h>
+#include <pmem.h>   // pmem_rebase
+#include <printk.h>
+#include <string.h>
+#include <vmem.h>
 
 extern char _text_end[];
+extern char _kernel_end[];
 extern void vmem_switch_to_high(unsigned long satp, unsigned long offset);
 
 unsigned long mem_offset = 0;
 
 pgtable_t kernel_pgtable;
 
-// get the addr of pte in page table, which currosponds to given virt_addr
-// if alloc is true, we allocate
-pte_t* get_pte(pgtable_t pgtable, unsigned long virt_addr, bool alloc) {
-    for(int level = 2; level > 0; level--) {
+// Walk the 3-level SV39 page table to find (or allocate) the leaf PTE for
+// virt_addr.  All page table pointers are kernel virtual addresses after
+// vmem_init(); during early boot mem_offset=0 so virtual == physical.
+pte_t *get_pte(pgtable_t pgtable, unsigned long virt_addr, bool alloc) {
+    for (int level = 2; level > 0; level--) {
         pte_t *pte = &pgtable[get_ptindx(level, virt_addr)];
-        if(*pte & PTE_V) {
-            pgtable = (pgtable_t) pte_to_phyaddr(*pte);
+        if (*pte & PTE_V) {
+            // PTE stores a physical address; convert to kernel virtual
+            pgtable = (pgtable_t)phys_to_virt(pte_to_phyaddr(*pte));
         } else {
-            if(!alloc) {
+            if (!alloc)
                 return 0;
-            }
-            pgtable = (pde_t*) page_alloc();
-            if(pgtable == 0) return 0;
-            memset(pgtable, 0, PAGE_SIZE);
-            *pte = phyaddr_to_pte((unsigned long)pgtable) | PTE_V;
+            // page_alloc() now returns a kernel virtual address
+            pgtable = (pgtable_t)page_alloc();
+            if (pgtable == 0) return 0;
+            // Store physical address in PTE
+            *pte = phyaddr_to_pte(virt_to_phys((unsigned long)pgtable)) | PTE_V;
         }
     }
     return &pgtable[get_ptindx(0, virt_addr)];
 }
 
-// creare mapping in page table
-void vmem_map(pgtable_t pgtable, unsigned long virt_addr, unsigned long phy_addr, unsigned long size, unsigned long permissions) {
-    // todo - perform validations
-    
+// Map size bytes of physical memory starting at phy_addr into the page table
+// at virtual address virt_addr with the given permission bits.
+void vmem_map(pgtable_t pgtable, unsigned long virt_addr, unsigned long phy_addr,
+              unsigned long size, unsigned long permissions) {
     unsigned long addr_end = phy_addr + size;
-    pte_t *pte;
-    for(unsigned long addr = phy_addr; addr < addr_end; addr += PAGE_SIZE) {
-        pte = get_pte(pgtable, virt_addr, true);
-        if(pte == 0) return;
+    for (unsigned long addr = phy_addr; addr < addr_end; addr += PAGE_SIZE) {
+        pte_t *pte = get_pte(pgtable, virt_addr, true);
+        if (pte == 0) return;
         *pte = phyaddr_to_pte(addr) | permissions | PTE_V;
         virt_addr += PAGE_SIZE;
     }
 }
 
-pgtable_t vmem_create() {
-    pgtable_t pgtable;
-    pgtable = (pgtable_t) page_alloc();
+// Allocate and populate the kernel page table.
+// Called before vmem_switch_to_high(), so mem_offset=0 and page_alloc()
+// returns physical addresses that are accessible via identity mapping.
+static pgtable_t vmem_create(void) {
+    pgtable_t pgtable = (pgtable_t)page_alloc();
+    // page_alloc already zeroes the page
 
-    // format all to zeros initially
-    memset(pgtable, 0, PAGE_SIZE);
-
-    // map the memory mapped io at higher memory address
-    vmem_map(pgtable, KVMEM_OFFSET+UART, UART, PAGE_SIZE, PTE_R | PTE_W);
-    vmem_map(pgtable, UART, UART, PAGE_SIZE, PTE_R | PTE_W);
-
-    // todo - map virtio disk interface
-
+    // tend_aligned: page boundary after .text end.
+    // The last text page also holds the start of .data (RISC-V linker packs
+    // sections tightly), so it must be both executable AND writable.
     unsigned long tend_aligned = page_round_up((unsigned long)_text_end);
+    // kend_aligned: page boundary after the full kernel image (.text+.data+.bss+stack)
+    unsigned long kend_aligned = page_round_up((unsigned long)_kernel_end);
 
-    // map the kernel text section at both identity and higher memory address, so as to make transition
-    vmem_map(pgtable, KVMEM_OFFSET+KERN_BASE, KERN_BASE, tend_aligned - KERN_BASE, PTE_R | PTE_X);
-    vmem_map(pgtable, KERN_BASE, KERN_BASE, tend_aligned - KERN_BASE, PTE_R | PTE_X);
+    // UART: identity + high half (for the transition period)
+    vmem_map(pgtable, KVMEM_OFFSET + UART, UART, PAGE_SIZE, PTE_R | PTE_W);
+    vmem_map(pgtable, UART,               UART, PAGE_SIZE, PTE_R | PTE_W);
 
-    // map the physical meory to higher memory address
-    vmem_map(pgtable, KVMEM_OFFSET+tend_aligned, tend_aligned, PHYMEM_END-tend_aligned, PTE_R | PTE_W);
-    vmem_map(pgtable, tend_aligned, tend_aligned, PHYMEM_END - tend_aligned, PTE_R | PTE_W);
+    // Kernel text + mixed page: identity + high half, R|W|X
+    // Using R|W|X because the last code page also contains .data variables
+    // that must be writable.  Code-only pages could be R|X, but the gain
+    // is not worth the complexity in an educational kernel.
+    vmem_map(pgtable, KVMEM_OFFSET + KERN_BASE, KERN_BASE,
+             tend_aligned - KERN_BASE, PTE_R | PTE_W | PTE_X);
+    vmem_map(pgtable, KERN_BASE, KERN_BASE,
+             tend_aligned - KERN_BASE, PTE_R | PTE_W | PTE_X);
 
-    // todo - map process stacks
+    // Kernel data/bss/stack (after the mixed page): identity + high half, R|W
+    if (kend_aligned > tend_aligned) {
+        vmem_map(pgtable, KVMEM_OFFSET + tend_aligned, tend_aligned,
+                 kend_aligned - tend_aligned, PTE_R | PTE_W);
+        vmem_map(pgtable, tend_aligned, tend_aligned,
+                 kend_aligned - tend_aligned, PTE_R | PTE_W);
+    }
+
+    // Free heap pages: identity + high half, R|W
+    vmem_map(pgtable, KVMEM_OFFSET + kend_aligned, kend_aligned,
+             PHYMEM_END - kend_aligned, PTE_R | PTE_W);
+    vmem_map(pgtable, kend_aligned, kend_aligned,
+             PHYMEM_END - kend_aligned, PTE_R | PTE_W);
 
     return pgtable;
-
 }
 
-void vmem_init() {
+// ---------------------------------------------------------------------------
+// User address-space helpers
+// ---------------------------------------------------------------------------
+
+// Allocate a new page table for a user process.
+// Copies the kernel upper-half L2 entries (indices 256-511) from
+// kernel_pgtable so that the kernel is accessible from user processes.
+// The lower half (user virtual addresses) starts empty.
+pgtable_t create_user_pgtable(void) {
+    pgtable_t pt = (pgtable_t)page_alloc();
+    if (!pt) return 0;
+    // Copy ALL 512 L2 entries from kernel_pgtable.
+    //
+    // After vmem_init() the kernel continues running at PHYSICAL addresses
+    // (boot() returns to its physical RA after vmem_switch_to_high adjusts
+    // only vmem_init's own frame).  This means stvec, function pointers,
+    // and all kernel symbols are physical (0x80200xxx, VPN[2]=2).
+    //
+    // If we only copied the upper half (256–511) then, the moment a trap
+    // fires with user SATP active, the CPU would fault on the stvec fetch.
+    //
+    // Solution: copy the full kernel page table so kernel identity mappings
+    // (e.g. VPN[2]=2 for KERN_BASE) remain accessible when S-mode code runs
+    // under the user SATP.  Kernel pages do NOT have PTE_U set, so U-mode
+    // code cannot reach them; S-mode can (PTE_U restriction only applies to
+    // U-mode, or to S-mode if sstatus.SUM=0).
+    for (int i = 0; i < 512; i++)
+        pt[i] = kernel_pgtable[i];
+    // User-space mappings (code, stack) are added later via vmem_map()
+    // which will overwrite the VPN[2]=0 slot (currently 0 from kernel_pgtable).
+    return pt;
+}
+
+// Recursively free all physical pages mapped in the user half of a page table
+// (L2 indices 0–255, i.e., virtual addresses below KVMEM_OFFSET).
+// Also frees the intermediate page table pages.
+static void free_user_pages_level(pgtable_t pt, int level) {
+    int limit = (level == 2) ? 256 : 512;
+    for (int i = 0; i < limit; i++) {
+        pte_t pte = pt[i];
+        if (!(pte & PTE_V)) continue;
+        // At L2, skip entries shared with the kernel page table; those page
+        // table nodes are not owned by this process and must not be freed.
+        if (level == 2 && pte == kernel_pgtable[i]) continue;
+        unsigned long pa = pte_to_phyaddr(pte);
+        if (pte & (PTE_R | PTE_W | PTE_X)) {
+            // Leaf PTE — free the mapped data page
+            page_free((void *)phys_to_virt(pa));
+        } else if (level > 0) {
+            // Pointer PTE — recurse into child page table, then free it
+            pgtable_t child = (pgtable_t)phys_to_virt(pa);
+            free_user_pages_level(child, level - 1);
+            page_free((void *)child);
+        }
+    }
+}
+
+void free_user_pgtable(pgtable_t pt) {
+    if (!pt) return;
+    free_user_pages_level(pt, 2);
+    page_free(pt);
+}
+
+// Map one freshly-allocated page as the user stack just below USER_STACK_TOP.
+// Returns 0 on success, -1 on OOM.
+int map_stack(pgtable_t pt) {
+    void *page = page_alloc();
+    if (!page) return -1;
+    vmem_map(pt, USER_STACK_TOP - PAGE_SIZE,
+             virt_to_phys((unsigned long)page),
+             PAGE_SIZE, PTE_R | PTE_W | PTE_U);
+    return 0;
+}
+
+// Deep-copy the user half (L2 indices 0-255) of parent_pt into a new page
+// table.  Each leaf physical page is copied to a fresh page.  Returns the
+// new page table on success, 0 on OOM (partial allocations are freed).
+pgtable_t uvmcopy(pgtable_t parent_pt) {
+    pgtable_t child_pt = create_user_pgtable();
+    if (!child_pt) return 0;
+
+    for (int l2i = 0; l2i < 256; l2i++) {
+        pte_t l2pte = parent_pt[l2i];
+        if (!(l2pte & PTE_V)) continue;
+        // Skip entries shared with the kernel page table (e.g. the physical
+        // identity mapping for KERN_BASE at L2[2]).  User-specific mappings
+        // have fresh L1 pages not present in kernel_pgtable.
+        if (l2pte == kernel_pgtable[l2i]) continue;
+        // Non-leaf L2 → descend to L1 table
+        pgtable_t l1 = (pgtable_t)phys_to_virt(pte_to_phyaddr(l2pte));
+
+        for (int l1i = 0; l1i < 512; l1i++) {
+            pte_t l1pte = l1[l1i];
+            if (!(l1pte & PTE_V)) continue;
+            // Non-leaf L1 → descend to L0 table
+            pgtable_t l0 = (pgtable_t)phys_to_virt(pte_to_phyaddr(l1pte));
+
+            for (int l0i = 0; l0i < 512; l0i++) {
+                pte_t pte = l0[l0i];
+                if (!(pte & PTE_V)) continue;
+                if (!(pte & (PTE_R | PTE_W | PTE_X))) continue; // skip pointer PTEs
+
+                // Leaf PTE — copy the physical page via kernel virtual addresses
+                void *src = (void *)phys_to_virt(pte_to_phyaddr(pte));
+                void *dst = page_alloc();
+                if (!dst) {
+                    free_user_pgtable(child_pt);
+                    return 0;
+                }
+                memmove(dst, src, PAGE_SIZE);
+
+                // Reconstruct the virtual address from the three index values
+                unsigned long vaddr = ((unsigned long)l2i << 30) |
+                                      ((unsigned long)l1i << 21) |
+                                      ((unsigned long)l0i << 12);
+                unsigned long perm = pte & (PTE_R | PTE_W | PTE_X | PTE_U);
+                vmem_map(child_pt, vaddr,
+                         virt_to_phys((unsigned long)dst),
+                         PAGE_SIZE, perm);
+            }
+        }
+    }
+    return child_pt;
+}
+
+void vmem_init(void) {
+    // kernel_pgtable is physical here (mem_offset still 0)
     kernel_pgtable = vmem_create();
 
     printk("Kernel page table created, enabling virtual memory..\n");
     vmem_switch_to_high(make_satp(kernel_pgtable), KVMEM_OFFSET);
 
+    // From here sp and ra are in high-half virtual space.
     mem_offset = KVMEM_OFFSET;
 
-    // clear temperary identity mappings
-    kernel_pgtable[get_ptindx(2, KERN_BASE)] = 0;
+    // Rebase kernel_pgtable pointer to its kernel virtual address.
+    kernel_pgtable = (pgtable_t)phys_to_virt((unsigned long)kernel_pgtable);
+
+    // Rebase the physical memory freelist to kernel virtual addresses.
+    // Must happen BEFORE clearing identity mappings so both phys and
+    // virt addresses are simultaneously accessible during the walk.
+    pmem_rebase(KVMEM_OFFSET);
+
+    // Remove the UART identity mapping (low address 0x10000000).
+    // We keep the kernel text/heap identity mapping (0x80000000 range) so that
+    // the CPU can continue executing boot() at its physical return address after
+    // this function returns.  User page tables only copy upper-half L2 entries
+    // (256-511), so user mode can never reach the physical-address mappings.
     kernel_pgtable[get_ptindx(2, UART)] = 0;
     flush_tlb();
 

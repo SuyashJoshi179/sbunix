@@ -3,9 +3,11 @@
 
 #include <stdint.h>
 
-#define SSTATUS_SIE (1 << 1)
+#define SSTATUS_SIE  (1 << 1)
 #define SSTATUS_SPIE (1 << 5)
-#define SIE_STIE (1 << 5)
+#define SSTATUS_SPP  (1 << 8)
+#define SSTATUS_SUM  (1 << 18)  // Supervisor User Memory: lets S-mode access U-mode pages
+#define SIE_STIE     (1 << 5)
 
 static inline uint64_t read_sstatus(void) {
     uint64_t sstatus;
@@ -43,12 +45,6 @@ static inline uint64_t read_scause(void) {
     return scause;
 }
 
-static inline uint64_t read_sepc(void) {
-    uint64_t sepc;
-    asm volatile("csrr %0, sepc" : "=r" (sepc));
-    return sepc;
-}
-
 static inline void read_stval(uint64_t *stval) {
     asm volatile("csrr %0, stval" : "=r" (*stval));
 }
@@ -68,4 +64,25 @@ static inline uint64_t read_sscratch(void) {
 static inline void write_sscratch(uint64_t val) {
     asm volatile("csrw sscratch, %0" : : "r"(val));
 }
+
+static inline uint64_t read_sepc(void) {
+    uint64_t val;
+    asm volatile("csrr %0, sepc" : "=r"(val));
+    return val;
+}
+
+static inline void write_sepc(uint64_t val) {
+    asm volatile("csrw sepc, %0" : : "r"(val));
+}
+
+static inline uint64_t read_satp(void) {
+    uint64_t val;
+    asm volatile("csrr %0, satp" : "=r"(val));
+    return val;
+}
+
+static inline void write_satp(uint64_t val) {
+    asm volatile("csrw satp, %0" : : "r"(val));
+}
+
 #endif
