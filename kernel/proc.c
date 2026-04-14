@@ -113,26 +113,6 @@ void forkret(void) {
 }
 
 // ----------------------------------------------------------------
-// Test kernel threads (Phase A verification)
-// ----------------------------------------------------------------
-
-static void thread_a(void) {
-    int i = 0;
-    while (1) {
-        printk("[A] tick %d\n", i++);
-        yield();
-    }
-}
-
-static void thread_b(void) {
-    int i = 0;
-    while (1) {
-        printk("[B] tick %d\n", i++);
-        yield();
-    }
-}
-
-// ----------------------------------------------------------------
 // proc_fork_current — duplicate the current user process
 // ----------------------------------------------------------------
 
@@ -345,20 +325,25 @@ static void scheduler_run(void) {
 // ----------------------------------------------------------------
 
 void sched_init(void) {
-    // --- kernel test threads ---
-    struct pcb *a = alloc_proc();
-    if (!a) panic("sched_init: alloc_proc failed");
-    a->state = PROC_READY;
-    a->entry = thread_a;
-
-    struct pcb *b = alloc_proc();
-    if (!b) panic("sched_init: alloc_proc failed");
-    b->state = PROC_READY;
-    b->entry = thread_b;
-
-    // --- Phase D: fork test ---
+    // --- Phase D: fork() contract ---
     struct pcb *ft = proc_spawn("bin/fork_test");
-    if (!ft) panic("sched_init: failed to spawn /bin/fork_test");
+    if (!ft) panic("sched_init: failed to spawn bin/fork_test");
+
+    // --- Phase D: pid / getpid() contract ---
+    struct pcb *pt = proc_spawn("bin/pid_test");
+    if (!pt) panic("sched_init: failed to spawn bin/pid_test");
+
+    // --- Phase D: address-space independence after fork() ---
+    struct pcb *at = proc_spawn("bin/addrspace_test");
+    if (!at) panic("sched_init: failed to spawn bin/addrspace_test");
+
+    // --- Phase D: multiple forks produce unique PIDs ---
+    struct pcb *mt = proc_spawn("bin/multi_fork_test");
+    if (!mt) panic("sched_init: failed to spawn bin/multi_fork_test");
+
+    // --- Phase C / D: write() syscall ---
+    struct pcb *wt = proc_spawn("bin/write_test");
+    if (!wt) panic("sched_init: failed to spawn bin/write_test");
 
     printk("scheduler: starting\n");
     scheduler_run();

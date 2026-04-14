@@ -6,6 +6,7 @@
 #include <trap.h>
 #include <timer.h>
 #include <proc.h>
+#include <selftest.h>
 
 extern char _kernel_end[];
 
@@ -17,6 +18,9 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
 
     trap_init();
     timer_init();
+
+    selftest_run();
+
     printk("Starting scheduler\n");
     sched_init();   // never returns
 }

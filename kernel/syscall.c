@@ -137,6 +137,13 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_fork:
             return sys_fork();
 
+        case SYS_wait: {
+            int *ustatus = (int *)(uintptr_t)trapframe[TF_A0];
+            if (ustatus && (unsigned long)ustatus >= KVMEM_OFFSET)
+                return -1;
+            return (int64_t)proc_wait_current(ustatus);
+        }
+
         default:
             printk("syscall: unknown number %lu from pid %d\n",
                    sysnum,

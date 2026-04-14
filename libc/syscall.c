@@ -21,3 +21,7 @@ int getpid(void) {
 int fork(void) {
     return (int)ecall3(9, 0, 0, 0);   // SYS_fork = 9
 }
+
+int wait(int *status) {
+    return (int)ecall3(7, (long)status, 0, 0);  // SYS_wait = 7
+}
