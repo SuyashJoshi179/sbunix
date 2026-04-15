@@ -57,3 +57,12 @@ void page_free(void *page) {
     p->next = freelist;
     freelist = p;
 }
+
+// Count free pages by walking the freelist.
+// Used by kernel selftests to detect leaks.
+unsigned long pmem_free_count(void) {
+    unsigned long n = 0;
+    for (struct free_page *p = freelist; p; p = p->next)
+        n++;
+    return n;
+}

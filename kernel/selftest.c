@@ -159,6 +159,32 @@ static void test_uvmcopy(void) {
 }
 
 // ----------------------------------------------------------------------------
+// Leak test: spawn + tear down 1000 processes and check pmem invariant
+// ----------------------------------------------------------------------------
+
+static void test_leak_spawn_free(void) {
+    printk("[SELFTEST] -- leak: spawn/free 1000x --\n");
+
+    unsigned long before = pmem_free_count();
+
+    for (int i = 0; i < 1000; i++) {
+        struct pcb *p = proc_spawn("bin/init");
+        st_check(p != 0, "spawn bin/init");
+        if (!p) continue;
+        // Tear down the address space and proc manually (mirrors what
+        // free_proc now does, exercising the full allocation/free path
+        // without needing the scheduler running).
+        free_proc(p);
+    }
+
+    unsigned long after = pmem_free_count();
+    st_check(before == after, "pmem free count invariant after 1000x spawn/free");
+    if (before != after)
+        printk("[SELFTEST]   before=%lu after=%lu delta=%ld\n",
+               before, after, (long)after - (long)before);
+}
+
+// ----------------------------------------------------------------------------
 // Entry point
 // ----------------------------------------------------------------------------
 
@@ -171,6 +197,7 @@ void selftest_run(void) {
     test_alloc_free_proc();
     test_load_elf();
     test_uvmcopy();
+    test_leak_spawn_free();
 
     printk("========================================\n");
     printk("[SELFTEST] Results: %d passed, %d failed\n", st_pass, st_fails);

@@ -12,6 +12,9 @@
 #define SYS_getpid  8
 #define SYS_fork    9
 #define SYS_spawn   10
+#define SYS_getppid 11
+#define SYS_yield   12
+#define SYS_sleep   13  // arg0: milliseconds
 
 // Trap-frame word indices for registers saved by trap.S.
 // Frame layout (8 bytes per slot, from sp):

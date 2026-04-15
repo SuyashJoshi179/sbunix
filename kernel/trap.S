@@ -73,13 +73,20 @@ trap_vector:
     mv   a3, sp             # pass trapframe pointer
     call trap_handler
 
-    # Restore sepc and sstatus before returning
+    # Restore sepc and sstatus CSRs from the saved frame.
     ld t0, 248(sp)
     csrw sepc, t0
-    ld t0, 256(sp)
+    ld t0, 256(sp)         # saved sstatus — also used for SPP check below
     csrw sstatus, t0
 
-    # Restore all GPRs (skip x2/sp — restored last)
+    # Branch on SPP *before* restoring GPRs (including t0/x5).
+    # t0 still holds the saved sstatus value from the load above.
+    # SPP=0 → came from U-mode, must swap sp<->sscratch on exit.
+    andi t0, t0, 0x100     # isolate SPP bit
+    beqz t0, .Lret_u
+
+.Lret_s:
+    # S-mode return: sp is already the kernel stack; no sscratch swap.
     ld x1,   0(sp)
     ld x3,  16(sp)
     ld x4,  24(sp)
@@ -110,14 +117,49 @@ trap_vector:
     ld x29, 224(sp)
     ld x30, 232(sp)
     ld x31, 240(sp)
-
     addi sp, sp, 288
+    sret
 
-    # If returning to U-mode (SPP=0), restore user sp from sscratch
-    csrr t0, sstatus
-    andi t0, t0, 0x100      # SPP bit (read from restored sstatus)
-    bnez t0, 4f             # S-mode: nothing to do
-    csrrw sp, sscratch, sp  # swap back: sp -> sscratch, sscratch -> user sp
-
-4:
+.Lret_u:
+    # U-mode return.  Restore all GPRs except x2/sp (handled below).
+    ld x1,   0(sp)
+    ld x3,  16(sp)
+    ld x4,  24(sp)
+    ld x5,  32(sp)
+    ld x6,  40(sp)
+    ld x7,  48(sp)
+    ld x8,  56(sp)
+    ld x9,  64(sp)
+    ld x10, 72(sp)
+    ld x11, 80(sp)
+    ld x12, 88(sp)
+    ld x13, 96(sp)
+    ld x14, 104(sp)
+    ld x15, 112(sp)
+    ld x16, 120(sp)
+    ld x17, 128(sp)
+    ld x18, 136(sp)
+    ld x19, 144(sp)
+    ld x20, 152(sp)
+    ld x21, 160(sp)
+    ld x22, 168(sp)
+    ld x23, 176(sp)
+    ld x24, 184(sp)
+    ld x25, 192(sp)
+    ld x26, 200(sp)
+    ld x27, 208(sp)
+    ld x28, 216(sp)
+    ld x29, 224(sp)
+    ld x30, 232(sp)
+    ld x31, 240(sp)
+    # Pop the frame: sp now equals kstack_top.
+    addi sp, sp, 288
+    # Write kstack_top back to sscratch so the NEXT U-mode trap entry can
+    # swap stacks again.  We CANNOT use csrrw here: the scheduler may have
+    # overwritten sscratch with kstack_top between the trap entry and now
+    # (e.g., after a yield inside a syscall), so sscratch no longer holds
+    # the original user_sp.  Instead, load user_sp from the trap frame
+    # where trap.S saved it at entry (offset 8 = kstack_top - 280).
+    csrw sscratch, sp       # sscratch = kstack_top
+    ld   sp, -280(sp)       # sp = user_sp (saved at frame[1], offset 8)
     sret

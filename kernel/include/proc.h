@@ -47,6 +47,10 @@ struct pcb {
     struct context context;         // saved registers for swtch()
     void          *kstack_page;     // kernel stack page (kernel virtual addr)
 
+    // Timer-based sleep: tick count at which this proc should wake.
+    // 0 means "not sleeping on a deadline" (sleeping on an event instead).
+    uint64_t       wake_tick;
+
     struct pcb    *next;            // intrusive linked list
 };
 
@@ -55,6 +59,7 @@ void  yield(void);
 void  swtch(struct context *old, struct context *new);
 
 struct pcb *current_proc(void);
+struct pcb *proc_list_head(void);  // for timer_handler sleeper scan
 struct pcb *alloc_proc(void);
 void        free_proc(struct pcb *p);
 
@@ -62,4 +67,5 @@ void proc_exit_current(int status);
 int  proc_wait_current(int *status);
 int  proc_fork_current(void);
 void proc_sleep(struct pcb *p);
+void proc_sleep_ms(uint64_t ms);   // timed sleep
 void proc_wakeup(int pid);
