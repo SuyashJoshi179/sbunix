@@ -71,6 +71,12 @@ static pgtable_t vmem_create(void) {
     #define PLIC_MAPSZ 0x400000UL
     vmem_map(pgtable, KVMEM_OFFSET + PLIC_PHYS, PLIC_PHYS, PLIC_MAPSZ, PTE_R | PTE_W);
 
+    // VirtIO MMIO: first slot at 0x10001000 (4 KB).
+    // QEMU virt board maps virtio-mmio-bus.0 here; IRQ 1 on the PLIC.
+    #define VIRTIO_PHYS 0x10001000UL
+    #define VIRTIO_SIZE 0x1000UL
+    vmem_map(pgtable, KVMEM_OFFSET + VIRTIO_PHYS, VIRTIO_PHYS, VIRTIO_SIZE, PTE_R | PTE_W);
+
     // Kernel text + mixed page: identity + high half, R|W|X
     // Using R|W|X because the last code page also contains .data variables
     // that must be writable.  Code-only pages could be R|X, but the gain

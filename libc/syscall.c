@@ -99,3 +99,12 @@ int chdir(const char *path) {
 long getcwd(char *buf, long n) {
     return ecall2(20, (long)buf, n);
 }
+
+int mkdir(const char *path, int mode) {
+    (void)mode;
+    return (int)ecall1(21, (long)path);
+}
+
+int unlink(const char *path) {
+    return (int)ecall1(22, (long)path);
+}

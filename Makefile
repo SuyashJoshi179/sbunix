@@ -23,7 +23,7 @@ else ifeq ($(KLANG),zig)
   KERN_ALL := $(KERN_ASM) $(KERN_LIB)
 endif
 
-DISK_SIZE ?= 16
+DISK_SIZE ?= 4
 DISK_IMG  := build/disk.img
 
 all: build/kernel.elf
@@ -76,15 +76,12 @@ build/tools/mkfs: tools/mkfs.c
 	gcc -Wall -o $@ $<
 
 $(DISK_IMG): build/tools/mkfs
-	build/tools/mkfs $@ $(DISK_SIZE)
+	build/tools/mkfs $@
 
 qemu: build/kernel.elf $(DISK_IMG)
 	qemu-system-riscv64 -machine virt -bios default -kernel $< \
 		-drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
-		-device virtio-blk-pci-non-transitional,drive=hd0 \
-		-device virtio-gpu-pci \
-		-device virtio-net-pci-non-transitional,netdev=net0 \
-		-netdev user,id=net0 \
+		-device virtio-blk-device,drive=hd0,bus=virtio-mmio-bus.0 \
 		-nographic
 
 clean:

@@ -6,6 +6,7 @@
 #include <proc.h>
 #include <drivers/plic.h>
 #include <drivers/uart.h>
+#include <drivers/virtio.h>
 
 #define SIE_SEIE  (1 << 9)   /* S-mode external interrupt enable */
 
@@ -50,6 +51,8 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
                 int irq = plic_claim();
                 if (irq == 10 /* UART_IRQ */) {
                     uart_rx_isr();
+                } else if (irq == 1 /* VIRTIO_IRQ */) {
+                    virtio_disk_intr();
                 }
                 if (irq) plic_complete(irq);
                 return;

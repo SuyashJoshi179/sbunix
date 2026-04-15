@@ -5,7 +5,9 @@
 #define PLIC_BASE  0x0c000000UL
 
 /* UART0 IRQ on QEMU virt */
-#define UART_IRQ   10
+#define UART_IRQ      10
+/* VirtIO MMIO slot 0 IRQ (virtio-mmio-bus.0 = 0x10001000) */
+#define VIRTIO_IRQ     1
 
 /* Per xv6-riscv convention for a single-hart machine (hart 0):
  *   M-mode = context 0,  S-mode = context 1.
@@ -34,12 +36,15 @@ extern unsigned long mem_offset;
     (*(volatile uint32_t *)((PLIC_BASE + mem_offset) + 0x200000 + 1*0x1000 + 4))
 
 void plic_init(void) {
-    /* Set UART IRQ priority to 1 (> threshold of 0 = "accept all"). */
+    /* Set UART IRQ priority to 1. */
     PLIC_PRIORITY_K(UART_IRQ) = 1;
-
-    /* Enable UART IRQ in S-mode enable register.
-     * The enable register is a bitmask; UART_IRQ=10 → bit 10 of word 0. */
+    /* Enable UART IRQ in S-mode enable register (bit 10 of word 0). */
     PLIC_ENABLE_S_K |= (1u << UART_IRQ);
+
+    /* Set VirtIO IRQ 1 priority to 1. */
+    PLIC_PRIORITY_K(VIRTIO_IRQ) = 1;
+    /* Enable VirtIO IRQ in S-mode enable register (bit 1 of word 0). */
+    PLIC_ENABLE_S_K |= (1u << VIRTIO_IRQ);
 
     /* Set S-mode priority threshold to 0 (accept any priority ≥ 1). */
     PLIC_THRESHOLD_S_K = 0;

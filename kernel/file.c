@@ -20,8 +20,8 @@ struct inode *inode_get(struct inode *ip) {
 
 void inode_put(struct inode *ip) {
     if (!ip) return;
-    ip->refcnt--;
-    // Static-pool inodes (tarfs, devfs) are never freed — refcnt just tracks refs.
+    if (--ip->refcnt == 0 && ip->ops && ip->ops->release)
+        ip->ops->release(ip);
 }
 
 // Allocate a file from the global table (refcnt = 1, caller fills fields).

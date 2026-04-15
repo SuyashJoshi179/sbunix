@@ -26,6 +26,10 @@
 #define SYS_chdir      19
 #define SYS_getcwd     20
 
+// Phase 5: writable sbfs syscalls
+#define SYS_mkdir      21
+#define SYS_unlink     22
+
 // Trap-frame word indices for registers saved by trap.S.
 // Frame layout (8 bytes per slot, from sp):
 //   offset   0: x1  (ra)

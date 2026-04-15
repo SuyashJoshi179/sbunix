@@ -41,9 +41,20 @@ static inline unsigned long make_satp(pgtable_t pgtable) {
 }
 
 // Convert kernel virtual address to physical address.
-// Uses mem_offset so it works both before and after vmem_init().
+//
+// Two cases after vmem_init():
+//   (a) High-virtual addresses (>= KVMEM_OFFSET) — from page_alloc() after
+//       pmem_rebase.  PA = VA - KVMEM_OFFSET.
+//   (b) Physical/identity-mapped addresses (< KVMEM_OFFSET) — kernel BSS,
+//       .data, and .text, which are still referenced by their link-time
+//       physical addresses (0x80XXXXXX) via the identity mapping.  PA = VA.
+//
+// Before vmem_init(), mem_offset==0 and all addresses are physical; the
+// < KVMEM_OFFSET branch handles that correctly too.
 static inline unsigned long virt_to_phys(unsigned long va) {
-    return va - mem_offset;
+    if (va < (unsigned long)KVMEM_OFFSET)
+        return va;            /* identity-mapped: VA already is PA */
+    return va - (unsigned long)KVMEM_OFFSET;
 }
 
 // Convert physical address to kernel virtual address.

@@ -469,6 +469,10 @@ void sched_init(void) {
     struct pcb *ptt = proc_spawn("bin/path_test");
     if (!ptt) panic("sched_init: failed to spawn bin/path_test");
 
+    // --- Phase 5: sbfs read-write filesystem ---
+    struct pcb *sbt = proc_spawn("bin/sbfs_basic_test");
+    if (!sbt) panic("sched_init: failed to spawn bin/sbfs_basic_test");
+
     printk("scheduler: starting\n");
     scheduler_run();
 }

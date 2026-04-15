@@ -1,11 +1,15 @@
+#include <bio.h>
 #include <exec.h>
 #include <file.h>
 #include <inode.h>
+#include <log.h>
 #include <pmem.h>
 #include <printk.h>
 #include <proc.h>
+#include <sbfs.h>
 #include <selftest.h>
 #include <stat.h>
+#include <string.h>
 #include <tarfs.h>
 #include <vfs.h>
 #include <vmem.h>
@@ -422,6 +426,93 @@ static void test_getdents_chunked(void) {
 }
 
 // ----------------------------------------------------------------------------
+// sbfs + bio unit tests (run after sbfs_mount / binit)
+// ----------------------------------------------------------------------------
+
+static void test_bio_basic(void) {
+    printk("[SELFTEST] -- bio cache basic --\n");
+
+    // bread block 1 (superblock), verify it is non-zero (magic)
+    struct buf *b = bread(1);
+    st_check(b != 0, "bio: bread block 1 returns non-null");
+    st_check(b->valid == 1, "bio: buffer is valid after bread");
+    uint32_t magic = *(uint32_t *)b->data;
+    st_check(magic == 0x53425631u, "bio: block 1 has sbfs magic 'SBV1'");
+    brelse(b);
+
+    // Re-bread same block — should hit the cache (same pointer from LRU)
+    struct buf *b2 = bread(1);
+    st_check(b2 != 0, "bio: second bread block 1 non-null");
+    st_check(*(uint32_t *)b2->data == 0x53425631u, "bio: cache hit returns same data");
+    brelse(b2);
+
+    // bread 32 distinct blocks — cache should handle without panic
+    for (int i = 0; i < 32; i++) {
+        struct buf *bi = bread(i + 2);   // blocks 2..33 (log area)
+        st_check(bi != 0, "bio: fill cache slot");
+        brelse(bi);
+    }
+    st_check(1, "bio: filled 32 cache slots without panic");
+}
+
+static void test_sbfs_namei(void) {
+    printk("[SELFTEST] -- sbfs namei /data --\n");
+
+    struct inode *ip = 0;
+    int rc = namei("/data", &ip);
+    st_check(rc == 0,        "namei '/data' returns 0");
+    st_check(ip != 0,        "namei '/data' non-null");
+    if (ip) {
+        st_check(ip->type == I_DIR, "namei '/data' is I_DIR");
+        inode_put(ip); ip = 0;
+    }
+
+    // /data itself must be writable (sbfs ops have write != NULL)
+    rc = namei("/data", &ip);
+    if (ip) {
+        st_check(ip->ops != 0 && ip->ops->write != 0,
+                 "sbfs: /data inode has write op (not EROFS)");
+        inode_put(ip);
+    }
+}
+
+static void test_sbfs_rw(void) {
+    printk("[SELFTEST] -- sbfs read/write --\n");
+
+    // Open the root data inode and do a simple directory listing
+    struct inode *root = 0;
+    if (namei("/data", &root) < 0 || !root) {
+        st_check(0, "sbfs_rw: /data not available");
+        return;
+    }
+
+    // Create a file and write to it
+    begin_op();
+    struct inode *ip = sbfs_create(root, "st_rw.txt", 1);
+    st_check(ip != 0, "sbfs: sbfs_create file");
+    if (ip) {
+        int w = sbfs_writei(ip, 0, "abcde", 5);
+        st_check(w == 5, "sbfs: writei 5 bytes");
+        end_op();
+
+        char rbuf[8] = {0};
+        int r = sbfs_readi(ip, 0, rbuf, 5);
+        st_check(r == 5, "sbfs: readi 5 bytes");
+        st_check(rbuf[0]=='a' && rbuf[4]=='e', "sbfs: data round-trips correctly");
+
+        // Unlink the test file
+        begin_op();
+        int rc = sbfs_unlink(root, "st_rw.txt");
+        st_check(rc == 0, "sbfs: unlink st_rw.txt");
+        end_op();
+        inode_put(ip);
+    } else {
+        end_op();
+    }
+    inode_put(root);
+}
+
+// ----------------------------------------------------------------------------
 // Entry point
 // ----------------------------------------------------------------------------
 
@@ -440,6 +531,9 @@ void selftest_run(void) {
     test_vfs_edge_cases();
     test_file_read();
     test_getdents_chunked();
+    test_bio_basic();
+    test_sbfs_namei();
+    test_sbfs_rw();
 
     printk("========================================\n");
     printk("[SELFTEST] Results: %d passed, %d failed\n", st_pass, st_fails);

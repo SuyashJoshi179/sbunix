@@ -5,6 +5,7 @@
 #include <printk.h>
 #include <proc.h>
 #include <riscv.h>
+#include <sbfs.h>
 #include <stat.h>
 #include <stdint.h>
 #include <string.h>
@@ -12,6 +13,7 @@
 #include <tarfs.h>
 #include <vfs.h>
 #include <vmem.h>
+#include <log.h>
 #include <drivers/uart.h>
 
 // ---------------------------------------------------------------------------
@@ -79,26 +81,94 @@ static int64_t sys_read(int fd, void *buf, uint64_t len) {
 }
 
 // ---------------------------------------------------------------------------
-// sys_open
+// path_split — split an absolute path into parent dir path + leaf name.
+// parent_buf must hold at least the length of path.
+// Returns 0 on success, -EINVAL if path has no parent component.
+// ---------------------------------------------------------------------------
+static int path_split(const char *path, char *parent_buf, const char **leaf_out) {
+    int len = 0;
+    while (path[len]) len++;
+    if (len == 0 || path[0] != '/') return -EINVAL;
+
+    // Find last '/' (excluding a trailing slash).
+    int last_slash = -1;
+    for (int i = len - 1; i >= 0; i--) {
+        if (path[i] == '/') { last_slash = i; break; }
+    }
+    if (last_slash < 0) return -EINVAL;
+
+    // parent = path[0..last_slash) — or "/" if last_slash == 0
+    int plen = last_slash == 0 ? 1 : last_slash;
+    for (int i = 0; i < plen; i++) parent_buf[i] = path[i];
+    parent_buf[plen] = '\0';
+
+    *leaf_out = &path[last_slash + 1];
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sys_open (Phase 5: handles O_CREAT on writable sbfs files)
 // ---------------------------------------------------------------------------
 static int64_t sys_open(const char *path, int flags) {
     if (!uptr_ok(path)) return -EFAULT;
 
-    struct inode *ip;
+    struct inode *ip = 0;
     int rc = namei(path, &ip);
-    if (rc < 0) return rc;
+
+    if (rc == -ENOENT && (flags & 0100 /* O_CREAT */)) {
+        // Create the file.  Walk to the parent directory, then sbfs_create.
+        char parent_path[256];
+        const char *leaf = 0;
+        if (path_split(path, parent_path, &leaf) < 0) return -EINVAL;
+        if (!leaf || !leaf[0]) return -EINVAL;
+
+        struct inode *parent = 0;
+        if (namei(parent_path, &parent) < 0) return -ENOENT;
+        if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
+        // sbfs_create only works on sbfs inodes
+        if (!parent->ops || parent->ops->write == 0) {
+            inode_put(parent);
+            return -EROFS;
+        }
+
+        begin_op();
+        ip = sbfs_create(parent, leaf, 1 /* regular file */);
+        inode_put(parent);
+        if (!ip) { end_op(); return -ENOSPC; }
+        end_op();
+    } else if (rc < 0) {
+        return rc;
+    }
 
     struct file *f = filealloc();
     if (!f) { inode_put(ip); return -EMFILE; }
 
     f->type     = FD_INODE;
-    f->ip       = ip;  // namei already bumped refcnt
+    f->ip       = ip;
     f->off      = 0;
-    f->readable = ((flags & 3) == 0 || (flags & 3) == 2) ? 1 : 0; // O_RDONLY or O_RDWR
-    f->writable = ((flags & 3) == 1 || (flags & 3) == 2) ? 1 : 0; // O_WRONLY or O_RDWR
-    // Character devices are always writable.
+    f->readable = ((flags & 3) == 0 || (flags & 3) == 2) ? 1 : 0;
+    f->writable = ((flags & 3) == 1 || (flags & 3) == 2) ? 1 : 0;
     if (ip->type == I_CHR) { f->readable = 1; f->writable = 1; }
-    if (flags & 02000 /* O_APPEND */) f->off = ip->size;
+    // O_APPEND: start writes at end
+    if (flags & 02000) f->off = ip->size;
+    // O_TRUNC: zero the file (sbfs only)
+    if ((flags & 01000) && f->writable && ip->type == I_REG && ip->ops->write) {
+        begin_op();
+        struct sbfs_inode *si = (struct sbfs_inode *)ip;
+        if (si && si->d.type) {
+            // Truncate: zero size (sbfs_itrunc is internal; use writei with 0 bytes at 0)
+            // Simplest: if size > 0, the op will be to just zero the size field.
+            si->d.size = 0;
+            si->vnode.size = 0;
+            for (int bn = 0; bn < SBFS_NDIRECT; bn++) {
+                // We don't free blocks on trunc in this simple path — just reset size.
+                // A future sbfs_itrunc call would be cleaner.
+            }
+            si->dirty = 1;
+            sbfs_iupdate(si);
+        }
+        end_op();
+    }
 
     struct pcb *p = current_proc();
     if (!p) { fileclose(f); return -EBADF; }
@@ -106,6 +176,62 @@ static int64_t sys_open(const char *path, int flags) {
     int fd = alloc_fd(p, f);
     if (fd < 0) { fileclose(f); return fd; }
     return fd;
+}
+
+// ---------------------------------------------------------------------------
+// sys_mkdir — create a directory on sbfs
+// ---------------------------------------------------------------------------
+static int64_t sys_mkdir(const char *path) {
+    if (!uptr_ok(path)) return -EFAULT;
+
+    char parent_path[256];
+    const char *leaf = 0;
+    if (path_split(path, parent_path, &leaf) < 0) return -EINVAL;
+    if (!leaf || !leaf[0]) return -EINVAL;
+
+    struct inode *parent = 0;
+    if (namei(parent_path, &parent) < 0) return -ENOENT;
+    if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
+    if (!parent->ops || !parent->ops->write) { inode_put(parent); return -EROFS; }
+
+    // Check name doesn't already exist
+    struct inode *existing = 0;
+    if (parent->ops->lookup(parent, leaf, &existing) == 0) {
+        inode_put(existing);
+        inode_put(parent);
+        return -EEXIST;
+    }
+
+    begin_op();
+    struct inode *ip = sbfs_create(parent, leaf, 2 /* directory */);
+    inode_put(parent);
+    if (!ip) { end_op(); return -ENOSPC; }
+    inode_put(ip);
+    end_op();
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sys_unlink — remove a file (not a non-empty directory) from sbfs
+// ---------------------------------------------------------------------------
+static int64_t sys_unlink(const char *path) {
+    if (!uptr_ok(path)) return -EFAULT;
+
+    char parent_path[256];
+    const char *leaf = 0;
+    if (path_split(path, parent_path, &leaf) < 0) return -EINVAL;
+    if (!leaf || !leaf[0]) return -EINVAL;
+
+    struct inode *parent = 0;
+    if (namei(parent_path, &parent) < 0) return -ENOENT;
+    if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
+    if (!parent->ops || !parent->ops->write) { inode_put(parent); return -EROFS; }
+
+    begin_op();
+    int rc = sbfs_unlink(parent, leaf);
+    end_op();
+    inode_put(parent);
+    return rc;
 }
 
 // ---------------------------------------------------------------------------
@@ -401,6 +527,12 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_getcwd:
             return sys_getcwd((char *)trapframe[TF_A0], trapframe[TF_A1]);
+
+        case SYS_mkdir:
+            return sys_mkdir((const char *)trapframe[TF_A0]);
+
+        case SYS_unlink:
+            return sys_unlink((const char *)trapframe[TF_A0]);
 
         default:
             printk("syscall: unknown number %lu from pid %d\n",
