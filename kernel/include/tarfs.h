@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <inode.h>
 
 // POSIX ustar tar header (512 bytes per block).
 struct tar_header {
@@ -22,8 +23,13 @@ struct tar_header {
     char pad[12];       // padding to 512 bytes
 };
 
-// Find a file by path in the embedded tar archive.
-// path may begin with '/' or not (e.g. "bin/init" or "/bin/init").
-// Returns a pointer to the file data and sets *out_size on success.
-// Returns NULL if the path is not found.
+// Build the inode tree from the embedded tar archive and mount it at "/".
+// Must be called before namei() or proc_spawn().
+void tarfs_init(void);
+
+// Root inode of the tarfs tree (set by tarfs_init).
+extern struct inode *tarfs_root;
+
+// Find a file by path in the embedded tar archive (legacy flat lookup).
+// Still used by the selftest; exec now goes through namei().
 const void *tarfs_find(const char *path, unsigned long *out_size);

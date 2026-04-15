@@ -1,9 +1,12 @@
 #include <exec.h>
+#include <inode.h>
 #include <pmem.h>
 #include <printk.h>
 #include <proc.h>
 #include <selftest.h>
+#include <stat.h>
 #include <tarfs.h>
+#include <vfs.h>
 #include <vmem.h>
 
 // ----------------------------------------------------------------------------
@@ -185,6 +188,85 @@ static void test_leak_spawn_free(void) {
 }
 
 // ----------------------------------------------------------------------------
+// namei tests
+// ----------------------------------------------------------------------------
+
+static void test_namei(void) {
+    printk("[SELFTEST] -- namei --\n");
+
+    struct inode *ip = 0;
+
+    // "/" must resolve to a directory.
+    int rc = namei("/", &ip);
+    st_check(rc == 0, "namei '/' returns 0");
+    st_check(ip != 0, "namei '/' non-null");
+    if (ip) { st_check(ip->type == I_DIR, "namei '/' is a directory"); inode_put(ip); ip = 0; }
+
+    // "/bin" must exist and be a directory.
+    rc = namei("/bin", &ip);
+    st_check(rc == 0, "namei '/bin' returns 0");
+    if (ip) { st_check(ip->type == I_DIR, "namei '/bin' is a directory"); inode_put(ip); ip = 0; }
+
+    // "/bin/init" must be a regular file.
+    rc = namei("/bin/init", &ip);
+    st_check(rc == 0, "namei '/bin/init' returns 0");
+    if (ip) {
+        st_check(ip->type == I_REG, "namei '/bin/init' is a regular file");
+        st_check(ip->size > 0,     "namei '/bin/init' size > 0");
+        inode_put(ip); ip = 0;
+    }
+
+    // Non-existent path.
+    rc = namei("/does/not/exist", &ip);
+    st_check(rc < 0, "namei '/does/not/exist' returns error");
+
+    // File used as directory component.
+    rc = namei("/bin/init/oops", &ip);
+    st_check(rc < 0, "namei '/bin/init/oops' returns error (not a dir)");
+
+    // /dev/console should cross the mount boundary and be I_CHR.
+    rc = namei("/dev/console", &ip);
+    st_check(rc == 0, "namei '/dev/console' returns 0");
+    if (ip) {
+        st_check(ip->type == I_CHR, "namei '/dev/console' is I_CHR");
+        inode_put(ip); ip = 0;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// tarfs directory tree test
+// ----------------------------------------------------------------------------
+
+static void test_tarfs_inode_tree(void) {
+    printk("[SELFTEST] -- tarfs inode tree --\n");
+
+    struct inode *bin = 0;
+    int rc = namei("/bin", &bin);
+    st_check(rc == 0 && bin != 0, "tarfs_tree: /bin resolves");
+    if (!bin) return;
+
+    // Count children of /bin.
+    char buf[1024];
+    uint64_t next = 0;
+    int total = 0;
+    while (1) {
+        uint64_t n = next;
+        int r = bin->ops->getdents(bin, n, buf, sizeof(buf), &next);
+        if (r <= 0) break;
+        // Walk records.
+        int off = 0;
+        while (off < r) {
+            struct dirent64 *de = (struct dirent64 *)(buf + off);
+            total++;
+            off += de->d_reclen;
+        }
+    }
+    st_check(total > 0, "tarfs_tree: /bin has entries");
+    printk("[SELFTEST]   /bin entry count: %d\n", total);
+    inode_put(bin);
+}
+
+// ----------------------------------------------------------------------------
 // Entry point
 // ----------------------------------------------------------------------------
 
@@ -198,6 +280,8 @@ void selftest_run(void) {
     test_load_elf();
     test_uvmcopy();
     test_leak_spawn_free();
+    test_namei();
+    test_tarfs_inode_tree();
 
     printk("========================================\n");
     printk("[SELFTEST] Results: %d passed, %d failed\n", st_pass, st_fails);

@@ -12,9 +12,19 @@
 #define SYS_getpid  8
 #define SYS_fork    9
 #define SYS_spawn   10
-#define SYS_getppid 11
-#define SYS_yield   12
-#define SYS_sleep   13  // arg0: milliseconds
+#define SYS_getppid    11
+#define SYS_yield      12
+#define SYS_sleep      13  // arg0: milliseconds
+
+// Phase 4: file descriptor syscalls
+// SYS_open (4), SYS_read (5), SYS_close (6) re-use existing slot numbers.
+#define SYS_dup        14
+#define SYS_dup2       15
+#define SYS_lseek      16
+#define SYS_fstat      17
+#define SYS_getdents64 18
+#define SYS_chdir      19
+#define SYS_getcwd     20
 
 // Trap-frame word indices for registers saved by trap.S.
 // Frame layout (8 bytes per slot, from sp):

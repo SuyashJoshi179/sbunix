@@ -1,6 +1,8 @@
 #pragma once
 #include <stdint.h>
 #include <vmem.h>
+#include <file.h>    // struct file, NOFILE
+#include <inode.h>   // struct inode
 
 #define KSTACK_SIZE PAGE_SIZE   // one 4KB page per process kernel stack
 
@@ -50,6 +52,11 @@ struct pcb {
     // Timer-based sleep: tick count at which this proc should wake.
     // 0 means "not sleeping on a deadline" (sleeping on an event instead).
     uint64_t       wake_tick;
+
+    // File descriptor table (Phase 4).
+    struct file   *ofile[NOFILE];   // open files; null = free slot
+    struct inode  *cwd;             // current working directory (refcounted)
+    char           cwd_path[256];   // string form of cwd, kept in sync by chdir
 
     struct pcb    *next;            // intrusive linked list
 };

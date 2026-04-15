@@ -1,4 +1,6 @@
 #include <exec.h>
+#include <file.h>
+#include <inode.h>
 #include <pmem.h>
 #include <printk.h>
 #include <proc.h>
@@ -7,6 +9,9 @@
 #include <syscall.h>
 #include <timer.h>
 #include <vmem.h>
+
+// Declared in devfs.c — returns the /dev/console inode.
+struct inode *devfs_console_inode(void);
 
 void forkret(void);  // forward declaration (defined below)
 
@@ -79,6 +84,20 @@ void free_proc(struct pcb *victim) {
     }
     if (prev) prev->next = victim->next;
     else      procs      = victim->next;
+
+    // Close any open file descriptors and drop cwd reference.
+    // Normally proc_exit_current does this, but free_proc is also called on
+    // processes that never ran (e.g. test_leak_spawn_free), so we must handle it.
+    for (int fd = 0; fd < NOFILE; fd++) {
+        if (victim->ofile[fd]) {
+            fileclose(victim->ofile[fd]);
+            victim->ofile[fd] = 0;
+        }
+    }
+    if (victim->cwd) {
+        inode_put(victim->cwd);
+        victim->cwd = 0;
+    }
 
     // Free user page table BEFORE the kstack and PCB pages.
     // The caller must ensure the hart is NOT currently translating
@@ -157,6 +176,22 @@ int proc_fork_current(void) {
     child->context.ra = (uint64_t)fork_child_return;
     child->context.sp = (uint64_t)child_tf;
 
+    // Duplicate open file descriptors into the child.
+    for (int fd = 0; fd < NOFILE; fd++) {
+        if (parent->ofile[fd])
+            child->ofile[fd] = filedup(parent->ofile[fd]);
+    }
+    if (parent->cwd) {
+        child->cwd = inode_get(parent->cwd);
+        // Copy cwd path string.
+        int i = 0;
+        while (parent->cwd_path[i] && i < 255) {
+            child->cwd_path[i] = parent->cwd_path[i];
+            i++;
+        }
+        child->cwd_path[i] = '\0';
+    }
+
     child->is_user    = 1;
     child->pagetable  = child_pt;
     child->user_entry = parent->user_entry;
@@ -214,6 +249,19 @@ void proc_exit_current(int status) {
 
     struct pcb *p = current;
     p->exit_status = status;
+
+    // Close all open file descriptors.
+    for (int fd = 0; fd < NOFILE; fd++) {
+        if (p->ofile[fd]) {
+            fileclose(p->ofile[fd]);
+            p->ofile[fd] = 0;
+        }
+    }
+    // Drop reference to current working directory.
+    if (p->cwd) {
+        inode_put(p->cwd);
+        p->cwd = 0;
+    }
 
     // Reparent children to init (pid 1) so they get reaped
     for (struct pcb *it = procs; it; it = it->next) {
@@ -391,6 +439,19 @@ void sched_init(void) {
     // --- Phase 3 tail: cooperative yield syscall ---
     struct pcb *yt = proc_spawn("bin/yield_test");
     if (!yt) panic("sched_init: failed to spawn bin/yield_test");
+
+    // --- Phase 4: file descriptors & VFS ---
+    struct pcb *fdt = proc_spawn("bin/fd_test");
+    if (!fdt) panic("sched_init: failed to spawn bin/fd_test");
+
+    struct pcb *stt = proc_spawn("bin/stat_test");
+    if (!stt) panic("sched_init: failed to spawn bin/stat_test");
+
+    struct pcb *gdt = proc_spawn("bin/getdents_test");
+    if (!gdt) panic("sched_init: failed to spawn bin/getdents_test");
+
+    struct pcb *cdt = proc_spawn("bin/chdir_test");
+    if (!cdt) panic("sched_init: failed to spawn bin/chdir_test");
 
     printk("scheduler: starting\n");
     scheduler_run();
