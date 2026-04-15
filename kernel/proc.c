@@ -5,6 +5,7 @@
 #include <riscv.h>
 #include <string.h>
 #include <syscall.h>
+#include <timer.h>
 #include <vmem.h>
 
 void forkret(void);  // forward declaration (defined below)
@@ -21,7 +22,8 @@ static struct pcb    *current = 0;   // currently running process
 static int            next_pid = 1;
 static struct context sched_context;
 
-struct pcb *current_proc(void) { return current; }
+struct pcb *current_proc(void)   { return current; }
+struct pcb *proc_list_head(void) { return procs;   }
 
 // ----------------------------------------------------------------
 // alloc_proc — allocate a PCB + kernel stack from physical memory
@@ -78,6 +80,13 @@ void free_proc(struct pcb *victim) {
     if (prev) prev->next = victim->next;
     else      procs      = victim->next;
 
+    // Free user page table BEFORE the kstack and PCB pages.
+    // The caller must ensure the hart is NOT currently translating
+    // through victim->pagetable (switch to kernel_pgtable first).
+    if (victim->pagetable) {
+        free_user_pgtable(victim->pagetable);
+        victim->pagetable = 0;
+    }
     if (victim->kstack_page) {
         page_free(victim->kstack_page);
         victim->kstack_page = 0;
@@ -312,12 +321,34 @@ static void scheduler_run(void) {
         // the loop restores the kernel SATP.
 
         // Returned from process — reap parentless zombies immediately.
+        // Switch to the kernel page table first: the hart may still be
+        // translating through the zombie's user pagetable, and free_proc
+        // calls free_user_pgtable which frees those pages.
         if (current && current->state == PROC_ZOMBIE && current->parent_pid == 0) {
             struct pcb *z = current;
             current = 0;
+            write_satp(make_satp(kernel_pgtable));
+            flush_tlb();
             free_proc(z);
         }
     }
+}
+
+// ----------------------------------------------------------------
+// proc_sleep_ms — sleep for (at least) ms milliseconds
+// ----------------------------------------------------------------
+
+void proc_sleep_ms(uint64_t ms) {
+    struct pcb *p = current;
+    if (!p) return;
+    if (ms == 0) { yield(); return; }
+
+    uint64_t wake = timer_ticks() + ms_to_ticks(ms);
+    if (wake == 0) wake = 1;  // never use 0 as a deadline
+    p->wake_tick = wake;
+    proc_sleep(p);             // marks SLEEPING, swtches to scheduler
+    // Resumed by timer_handler once wake_tick <= ticks.
+    p->wake_tick = 0;
 }
 
 // ----------------------------------------------------------------
@@ -344,6 +375,22 @@ void sched_init(void) {
     // --- Phase C / D: write() syscall ---
     struct pcb *wt = proc_spawn("bin/write_test");
     if (!wt) panic("sched_init: failed to spawn bin/write_test");
+
+    // --- Phase 3 tail: timer preemption ---
+    struct pcb *pr = proc_spawn("bin/preempt_test");
+    if (!pr) panic("sched_init: failed to spawn bin/preempt_test");
+
+    // --- Phase 3 tail: user fault → kill, not panic ---
+    struct pcb *sv = proc_spawn("bin/segv_test");
+    if (!sv) panic("sched_init: failed to spawn bin/segv_test");
+
+    // --- Phase 3 tail: sleep syscall ---
+    struct pcb *sl = proc_spawn("bin/sleep_test");
+    if (!sl) panic("sched_init: failed to spawn bin/sleep_test");
+
+    // --- Phase 3 tail: cooperative yield syscall ---
+    struct pcb *yt = proc_spawn("bin/yield_test");
+    if (!yt) panic("sched_init: failed to spawn bin/yield_test");
 
     printk("scheduler: starting\n");
     scheduler_run();

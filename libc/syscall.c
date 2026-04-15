@@ -19,9 +19,26 @@ int getpid(void) {
 }
 
 int fork(void) {
-    return (int)ecall3(9, 0, 0, 0);   // SYS_fork = 9
+    return (int)ecall3(9, 0, 0, 0);
 }
 
 int wait(int *status) {
-    return (int)ecall3(7, (long)status, 0, 0);  // SYS_wait = 7
+    return (int)ecall3(7, (long)status, 0, 0);
+}
+
+int getppid(void) {
+    return (int)ecall3(11, 0, 0, 0);
+}
+
+int sched_yield(void) {
+    return (int)ecall3(12, 0, 0, 0);
+}
+
+int sleep_ms(unsigned long ms) {
+    return (int)ecall3(13, (long)ms, 0, 0);
+}
+
+int usleep(unsigned long us) {
+    // Round up to milliseconds (kernel resolution is ~10 ms anyway).
+    return sleep_ms((us + 999UL) / 1000UL);
 }

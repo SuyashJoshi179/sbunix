@@ -8,7 +8,8 @@ static inline unsigned long page_round_up(unsigned long addr) {
     return (addr + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 }
 
-void  pmem_init(void *start, void *end);
-void  pmem_rebase(unsigned long offset);
-void *page_alloc(void);
-void  page_free(void *page);
+void          pmem_init(void *start, void *end);
+void          pmem_rebase(unsigned long offset);
+void         *page_alloc(void);
+void          page_free(void *page);
+unsigned long pmem_free_count(void);

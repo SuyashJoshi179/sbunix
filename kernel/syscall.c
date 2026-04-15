@@ -112,6 +112,30 @@ static int64_t sys_fork(void) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_getppid — return the parent PID of the calling process
+// ---------------------------------------------------------------------------
+static int64_t sys_getppid(void) {
+    struct pcb *p = current_proc();
+    return p ? (int64_t)p->parent_pid : -1;
+}
+
+// ---------------------------------------------------------------------------
+// sys_yield — voluntarily give up the CPU
+// ---------------------------------------------------------------------------
+static int64_t sys_yield(void) {
+    yield();
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sys_sleep — sleep for at least the given number of milliseconds
+// ---------------------------------------------------------------------------
+static int64_t sys_sleep(uint64_t ms) {
+    proc_sleep_ms(ms);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // syscall_dispatch — called from trap_handler when scause == 8 (U-mode ecall)
 //
 // trapframe is the pointer to the saved register file on the kernel stack
@@ -143,6 +167,15 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
                 return -1;
             return (int64_t)proc_wait_current(ustatus);
         }
+
+        case SYS_getppid:
+            return sys_getppid();
+
+        case SYS_yield:
+            return sys_yield();
+
+        case SYS_sleep:
+            return sys_sleep(trapframe[TF_A0]);
 
         default:
             printk("syscall: unknown number %lu from pid %d\n",
