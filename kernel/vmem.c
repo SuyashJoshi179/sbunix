@@ -65,6 +65,12 @@ static pgtable_t vmem_create(void) {
     vmem_map(pgtable, KVMEM_OFFSET + UART, UART, PAGE_SIZE, PTE_R | PTE_W);
     vmem_map(pgtable, UART,               UART, PAGE_SIZE, PTE_R | PTE_W);
 
+    // PLIC: high-half only (accessed after vmem_init enables VM).
+    // Maps 0x0c000000–0x0c3fffff (4 MB) covering all PLIC register regions.
+    #define PLIC_PHYS 0x0c000000UL
+    #define PLIC_MAPSZ 0x400000UL
+    vmem_map(pgtable, KVMEM_OFFSET + PLIC_PHYS, PLIC_PHYS, PLIC_MAPSZ, PTE_R | PTE_W);
+
     // Kernel text + mixed page: identity + high half, R|W|X
     // Using R|W|X because the last code page also contains .data variables
     // that must be writable.  Code-only pages could be R|X, but the gain

@@ -4,13 +4,17 @@
 #include <timer.h>
 #include <syscall.h>
 #include <proc.h>
+#include <drivers/plic.h>
+#include <drivers/uart.h>
+
+#define SIE_SEIE  (1 << 9)   /* S-mode external interrupt enable */
 
 void trap_init(void) {
     extern void trap_vector(void);
     write_stvec((uint64_t)trap_vector);
-    write_sie(read_sie() | SIE_STIE);
-    // Enable supervisor interrupts and allow S-mode to access U-mode pages
-    // (SUM=1 is required so that syscall handlers can read user buffers)
+    // Enable timer (STIE) and external (SEIE) interrupts in sie.
+    write_sie(read_sie() | SIE_STIE | SIE_SEIE);
+    // Enable supervisor interrupts and allow S-mode to access U-mode pages.
     write_sstatus(read_sstatus() | SSTATUS_SIE | SSTATUS_SUM);
 }
 
@@ -38,9 +42,18 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
 
     if (is_interrupt) {
         switch (cause_code) {
-            case 5:
+            case 5:   /* supervisor timer interrupt */
                 timer_handler();
                 return;
+            case 9:   /* supervisor external interrupt (PLIC) */
+            {
+                int irq = plic_claim();
+                if (irq == 10 /* UART_IRQ */) {
+                    uart_rx_isr();
+                }
+                if (irq) plic_complete(irq);
+                return;
+            }
             default:
                 printk("PANIC: unknown interrupt cause=%lu sepc=%lx\n",
                        cause_code, sepc);

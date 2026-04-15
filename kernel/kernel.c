@@ -7,6 +7,12 @@
 #include <timer.h>
 #include <proc.h>
 #include <selftest.h>
+#include <tarfs.h>
+#include <drivers/uart.h>
+#include <drivers/plic.h>
+
+// devfs_init declared here to avoid a new header for one function.
+void devfs_init(void);
 
 extern char _kernel_end[];
 
@@ -15,6 +21,16 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
 
     pmem_init(_kernel_end, (void *)PHYMEM_END);
     vmem_init();
+
+    // Build tarfs inode tree and mount at "/".
+    tarfs_init();
+
+    // Set up PLIC and enable UART RX interrupt.
+    plic_init();
+    uart_init();
+
+    // Mount synthetic /dev with /dev/console.
+    devfs_init();
 
     trap_init();
     timer_init();

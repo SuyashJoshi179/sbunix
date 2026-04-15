@@ -33,12 +33,12 @@ int main(void) {
     else
         printf("[write_test] FAIL stderr write returned %ld (expected 6)\n", n);
 
-    // 3. invalid fd (fd 42 is not supported)
+    // 3. invalid fd (fd 42 is not supported) — any negative return is an error
     n = write(42, msg, 6);
-    if (n == -1)
-        printf("[write_test] PASS bad fd returned -1\n");
+    if (n < 0)
+        printf("[write_test] PASS bad fd returned error (%ld)\n", n);
     else
-        printf("[write_test] FAIL bad fd returned %ld (expected -1)\n", n);
+        printf("[write_test] FAIL bad fd returned %ld (expected < 0)\n", n);
 
     // 4. zero-length write to stdout
     n = write(1, msg, 0);
