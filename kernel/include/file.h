@@ -16,7 +16,7 @@ struct file {
     struct inode *ip;
 };
 
-#define NFILE  64   /* global open-file table size */
+#define NFILE  128  /* global open-file table size */
 #define NOFILE 16   /* per-process fd table size   */
 
 /* Seek whence values (match POSIX) */

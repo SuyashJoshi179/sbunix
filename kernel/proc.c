@@ -453,6 +453,22 @@ void sched_init(void) {
     struct pcb *cdt = proc_spawn("bin/chdir_test");
     if (!cdt) panic("sched_init: failed to spawn bin/chdir_test");
 
+    // --- Phase 4 comprehensive tests ---
+    struct pcb *ort = proc_spawn("bin/open_read_test");
+    if (!ort) panic("sched_init: failed to spawn bin/open_read_test");
+
+    struct pcb *dpt = proc_spawn("bin/dup_test");
+    if (!dpt) panic("sched_init: failed to spawn bin/dup_test");
+
+    struct pcb *gwt = proc_spawn("bin/getcwd_test");
+    if (!gwt) panic("sched_init: failed to spawn bin/getcwd_test");
+
+    struct pcb *flt = proc_spawn("bin/fd_limits_test");
+    if (!flt) panic("sched_init: failed to spawn bin/fd_limits_test");
+
+    struct pcb *ptt = proc_spawn("bin/path_test");
+    if (!ptt) panic("sched_init: failed to spawn bin/path_test");
+
     printk("scheduler: starting\n");
     scheduler_run();
 }

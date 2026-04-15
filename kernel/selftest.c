@@ -1,4 +1,5 @@
 #include <exec.h>
+#include <file.h>
 #include <inode.h>
 #include <pmem.h>
 #include <printk.h>
@@ -267,6 +268,160 @@ static void test_tarfs_inode_tree(void) {
 }
 
 // ----------------------------------------------------------------------------
+// VFS edge-case tests — ".", "..", double-slash, trailing slash, dotdot
+// ----------------------------------------------------------------------------
+
+static void test_vfs_edge_cases(void) {
+    printk("[SELFTEST] -- vfs edge cases --\n");
+    struct inode *ip = 0;
+    int rc;
+
+    // /bin/. resolves to /bin (I_DIR).
+    rc = namei("/bin/.", &ip);
+    st_check(rc == 0, "namei /bin/. returns 0");
+    if (ip) { st_check(ip->type == I_DIR, "namei /bin/. is I_DIR"); inode_put(ip); ip = 0; }
+
+    // /bin/.. resolves to root (I_DIR with "bin" child).
+    rc = namei("/bin/..", &ip);
+    st_check(rc == 0, "namei /bin/.. returns 0");
+    if (ip) {
+        st_check(ip->type == I_DIR, "namei /bin/.. is I_DIR");
+        struct inode *child = 0;
+        int rc2 = ip->ops->lookup(ip, "bin", &child);
+        st_check(rc2 == 0, "namei /bin/.. parent has 'bin' child");
+        if (child) inode_put(child);
+        inode_put(ip); ip = 0;
+    }
+
+    // Double slash: //bin/init resolves to /bin/init (I_REG).
+    rc = namei("//bin/init", &ip);
+    st_check(rc == 0, "namei //bin/init returns 0");
+    if (ip) { st_check(ip->type == I_REG, "namei //bin/init is I_REG"); inode_put(ip); ip = 0; }
+
+    // Dotdot crossing directories: /bin/../etc/rc resolves to /etc/rc.
+    rc = namei("/bin/../etc/rc", &ip);
+    st_check(rc == 0, "namei /bin/../etc/rc returns 0");
+    if (ip) {
+        st_check(ip->type == I_REG, "namei /bin/../etc/rc is I_REG");
+        st_check(ip->size > 0,      "namei /bin/../etc/rc size > 0");
+        inode_put(ip); ip = 0;
+    }
+
+    // Trailing slash on directory: /bin/ resolves to /bin.
+    rc = namei("/bin/", &ip);
+    st_check(rc == 0, "namei /bin/ returns 0");
+    if (ip) { st_check(ip->type == I_DIR, "namei /bin/ is I_DIR"); inode_put(ip); ip = 0; }
+}
+
+// ----------------------------------------------------------------------------
+// File read / seek tests — exercises fileread + fileseek via struct file
+// ----------------------------------------------------------------------------
+
+static void test_file_read(void) {
+    printk("[SELFTEST] -- file read/seek --\n");
+
+    struct inode *ip = 0;
+    int rc = namei("/etc/rc", &ip);
+    st_check(rc == 0 && ip != 0, "file_read: namei /etc/rc");
+    if (!ip) return;
+
+    struct file *f = filealloc();
+    st_check(f != 0, "file_read: filealloc");
+    if (!f) { inode_put(ip); return; }
+
+    f->type     = FD_INODE;
+    f->ip       = ip;       // namei already bumped refcnt
+    f->off      = 0;
+    f->readable = 1;
+    f->writable = 0;
+
+    // Read first 3 bytes; offset must advance.
+    char buf[32];
+    int n = fileread(f, buf, 3);
+    st_check(n == 3,      "file_read: read 3 bytes returns 3");
+    st_check(f->off == 3, "file_read: offset advanced to 3");
+
+    // SEEK_CUR+0: query position.
+    int pos = fileseek(f, 0, SEEK_CUR);
+    st_check(pos == 3, "file_read: SEEK_CUR+0 == 3");
+
+    // SEEK_END+0: position equals file size.
+    int fsize = fileseek(f, 0, SEEK_END);
+    st_check(fsize >= 0 && (unsigned int)fsize == ip->size,
+             "file_read: SEEK_END+0 equals ip->size");
+
+    // Read at EOF returns 0.
+    n = fileread(f, buf, 1);
+    st_check(n == 0, "file_read: read at EOF returns 0");
+
+    // SEEK_SET to 0; re-read first 3 bytes.
+    pos = fileseek(f, 0, SEEK_SET);
+    st_check(pos == 0, "file_read: SEEK_SET to 0");
+    n = fileread(f, buf, 3);
+    st_check(n == 3, "file_read: re-read 3 bytes after seek-to-0");
+
+    // tarfs is read-only; write must return an error.
+    f->writable = 1;
+    int w = filewrite(f, "x", 1);
+    st_check(w < 0, "file_read: write to tarfs returns error (EROFS)");
+
+    fileclose(f);   // decrements refcnt on ip; tarfs inode stays alive (static pool)
+    st_check(1, "file_read: fileclose without crash");
+}
+
+// ----------------------------------------------------------------------------
+// Chunked getdents test — iterate /bin one entry at a time vs. bulk
+// ----------------------------------------------------------------------------
+
+static void test_getdents_chunked(void) {
+    printk("[SELFTEST] -- getdents chunked --\n");
+
+    struct inode *bin = 0;
+    int rc = namei("/bin", &bin);
+    st_check(rc == 0 && bin != 0, "getdents_chunked: /bin resolves");
+    if (!bin) return;
+
+    // Count entries with a large buffer.
+    char bigbuf[1024];
+    uint64_t next = 0;
+    int total_big = 0;
+    while (1) {
+        uint64_t prev = next;
+        int r = bin->ops->getdents(bin, prev, bigbuf, sizeof(bigbuf), &next);
+        if (r <= 0) break;
+        int off = 0;
+        while (off < r) {
+            struct dirent64 *de = (struct dirent64 *)(bigbuf + off);
+            total_big++;
+            off += de->d_reclen;
+        }
+    }
+
+    // Count the same entries one at a time using a 64-byte buffer.
+    // All binary names in /bin are short enough that reclen <= 40 bytes.
+    char smallbuf[64];
+    next = 0;
+    int total_small = 0;
+    while (1) {
+        uint64_t prev = next;
+        int r = bin->ops->getdents(bin, prev, smallbuf, sizeof(smallbuf), &next);
+        if (r <= 0 || next == prev) break;   // no progress or no entries
+        int off = 0;
+        while (off < r) {
+            struct dirent64 *de = (struct dirent64 *)(smallbuf + off);
+            total_small++;
+            off += de->d_reclen;
+        }
+    }
+
+    st_check(total_big > 0,            "getdents_chunked: big-buf count > 0");
+    st_check(total_small == total_big, "getdents_chunked: small-buf count == big-buf count");
+    printk("[SELFTEST]   getdents /bin: big=%d small=%d\n", total_big, total_small);
+
+    inode_put(bin);
+}
+
+// ----------------------------------------------------------------------------
 // Entry point
 // ----------------------------------------------------------------------------
 
@@ -282,6 +437,9 @@ void selftest_run(void) {
     test_leak_spawn_free();
     test_namei();
     test_tarfs_inode_tree();
+    test_vfs_edge_cases();
+    test_file_read();
+    test_getdents_chunked();
 
     printk("========================================\n");
     printk("[SELFTEST] Results: %d passed, %d failed\n", st_pass, st_fails);
