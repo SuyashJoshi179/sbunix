@@ -15,6 +15,7 @@
 
 // devfs_init declared here to avoid a new header for one function.
 void devfs_init(void);
+#include <console.h>
 
 extern char _kernel_end[];
 
