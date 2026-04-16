@@ -2,12 +2,12 @@
 #include <drivers/uart.h>
 #include <pmem.h>
 #include <vmem.h>
+#include <console.h>
 #include <riscv.h>
 #include <sbi.h>
 #include <trap.h>
 #include <timer.h>
 #include <proc.h>
-#include <console.h>
 #include <selftest.h>
 #include <tarfs.h>
 #include <drivers/uart.h>
@@ -15,7 +15,6 @@
 
 // devfs_init declared here to avoid a new header for one function.
 void devfs_init(void);
-#include <console.h>
 
 extern char _kernel_end[];
 
@@ -30,7 +29,7 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
 
     // Set up PLIC and enable UART RX interrupt.
     plic_init();
-    uart_init();
+    console_init();
 
     // Mount synthetic /dev with /dev/console.
     devfs_init();
