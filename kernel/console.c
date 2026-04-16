@@ -76,7 +76,7 @@ void console_intr(char c) {
 void console_rx_interrupt(void) {
 	int c;
     // Drain all available bytes from UART buffer
-    while ((c = uart_getc()) != -1) {
+    while ((c = uart_rx_getc()) != -1) {
         console_intr((char)c);
     }
 }
@@ -84,7 +84,7 @@ void console_rx_interrupt(void) {
 /* ----------------------------------------------------------------
  * Blocking read - sleep until data is available
  * ---------------------------------------------------------------- */
-int console_read(char *dst, int n) {
+int cons_read(char *dst, int n) {
     int target = n;
     
     while (n > 0) {
@@ -114,7 +114,7 @@ int console_read(char *dst, int n) {
  * Polling mode read - for early boot / panic handlers
  * Bypasses interrupt system entirely
  * ---------------------------------------------------------------- */
-int console_read_polled(char *dst, int n) {
+int cons_read_polled(char *dst, int n) {
     int target = n;
     
     while (n > 0) {
@@ -133,6 +133,14 @@ int console_read_polled(char *dst, int n) {
     }
     
     return target - n; 
+}
+
+// Add this to console.c
+int console_write(const char *src, int n) {
+    for (int i = 0; i < n; i++) {
+        console_putc(src[i]);
+    }
+    return n;
 }
 
 void console_init() {

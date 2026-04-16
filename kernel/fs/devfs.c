@@ -4,6 +4,7 @@
 #include <vfs.h>
 #include <string.h>
 #include <drivers/uart.h>
+#include <console.h>
 #include <printk.h>
 
 static int streq(const char *a, const char *b) { return strcmp(a, b) == 0; }
@@ -14,25 +15,14 @@ static int streq(const char *a, const char *b) { return strcmp(a, b) == 0; }
 
 static int console_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
     (void)ip; (void)off;
-    char *p = (char *)buf;
-    for (uint64_t i = 0; i < n; ) {
-        char c;
-        int r = uart_rx_get(&c);
-        if (r < 0) return (int)i;   // EOF (Ctrl-D)
-        if (r == 0) {               // EOL: return accumulated bytes
-            if (i == 0) return 0;   // empty read = EOF
-            return (int)i;
-        }
-        p[i++] = c;
-    }
-    return (int)n;
+    return cons_read((char *)buf, n);
 }
 
 static int console_write(struct inode *ip, uint64_t off, const void *buf,
                           uint64_t n) {
     (void)ip; (void)off;
     const char *p = (const char *)buf;
-    for (uint64_t i = 0; i < n; i++) write_char(p[i]);
+    for (uint64_t i = 0; i < n; i++) console_putc(p[i]);
     return (int)n;
 }
 
