@@ -151,23 +151,9 @@ static int64_t sys_open(const char *path, int flags) {
     if (ip->type == I_CHR) { f->readable = 1; f->writable = 1; }
     // O_APPEND: start writes at end
     if (flags & 02000) f->off = ip->size;
-    // O_TRUNC: zero the file (sbfs only)
-    if ((flags & 01000) && f->writable && ip->type == I_REG && ip->ops->write) {
-        begin_op();
-        struct sbfs_inode *si = (struct sbfs_inode *)ip;
-        if (si && si->d.type) {
-            // Truncate: zero size (sbfs_itrunc is internal; use writei with 0 bytes at 0)
-            // Simplest: if size > 0, the op will be to just zero the size field.
-            si->d.size = 0;
-            si->vnode.size = 0;
-            for (int bn = 0; bn < SBFS_NDIRECT; bn++) {
-                // We don't free blocks on trunc in this simple path — just reset size.
-                // A future sbfs_itrunc call would be cleaner.
-            }
-            si->dirty = 1;
-            sbfs_iupdate(si);
-        }
-        end_op();
+    // O_TRUNC: truncate to zero length, freeing any data blocks.
+    if ((flags & 01000) && f->writable && ip->type == I_REG && ip->ops->truncate) {
+        ip->ops->truncate(ip);
     }
 
     struct pcb *p = current_proc();

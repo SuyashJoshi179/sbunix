@@ -40,7 +40,11 @@ static int  sbfs_op_write(struct inode *, uint64_t, const void *, uint64_t);
 static int  sbfs_op_stat(struct inode *, struct stat *);
 static int  sbfs_op_lookup(struct inode *, const char *, struct inode **);
 static int  sbfs_op_getdents(struct inode *, uint64_t, void *, uint64_t, uint64_t *);
+static int  sbfs_op_truncate(struct inode *);
 static void sbfs_op_release(struct inode *);
+
+/* Internal helpers used before their definition. */
+static void sbfs_itrunc(struct sbfs_inode *si);
 
 static const struct inode_ops sbfs_iops = {
     .read     = sbfs_op_read,
@@ -48,6 +52,7 @@ static const struct inode_ops sbfs_iops = {
     .stat     = sbfs_op_stat,
     .lookup   = sbfs_op_lookup,
     .getdents = sbfs_op_getdents,
+    .truncate = sbfs_op_truncate,
     .release  = sbfs_op_release,
 };
 
@@ -64,14 +69,9 @@ static uint32_t balloc(void) {
             bp->data[byte] |= (1u << bit);
             log_write(bp);
             brelse(bp);
-            /* Zero the newly allocated block. */
-            struct buf *nb = bread(sb.inodestart + SBFS_NINODES/8 + 1 + i);
-            /* Note: sb.bmapstart + 1 + i would be cleaner but our DATA_START
-             * is at bmapstart+1 so we compute: data block i is at block
-             * (sb.bmapstart + 1 + i).  This equals sb.inodestart + INODE_BLOCKS + 1 + i. */
+            /* Zero the newly allocated data block. */
             uint32_t dblock = sb.bmapstart + 1 + i;
-            brelse(nb);
-            nb = bread(dblock);
+            struct buf *nb = bread(dblock);
             memset(nb->data, 0, SBFS_BSIZE);
             log_write(nb);
             brelse(nb);
@@ -166,12 +166,23 @@ struct inode *sbfs_iget(uint32_t inum) {
 /* release callback — called by inode_put when refcnt → 0 */
 static void sbfs_op_release(struct inode *ip) {
     struct sbfs_inode *si = (struct sbfs_inode *)ip;
-    if (si->dirty) {
+
+    /* POSIX deferred-free: file was unlinked (nlink==0) while other refs
+     * were still open.  Now that the last ref is gone, reclaim its blocks. */
+    int needs_free = (si->valid && si->d.nlink == 0 && si->d.type != 0);
+
+    if (needs_free || si->dirty) {
         begin_op();
-        sbfs_iupdate(si);
+        if (needs_free) {
+            sbfs_itrunc(si);        /* frees data blocks + iupdate */
+            si->d.type = 0;
+            sbfs_iupdate(si);
+        } else {
+            sbfs_iupdate(si);
+        }
         end_op();
-        si->dirty = 0;
     }
+    si->dirty = 0;
     si->valid = 0;
     si->inum  = 0;
     /* refcnt is already 0; slot is now free for reuse. */
@@ -247,6 +258,7 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
 
     uint64_t total = 0;
     const char *in = (const char *)src;
+    int enospc = 0;
     while (total < n) {
         uint32_t bn   = (off + total) / SBFS_BSIZE;
         uint32_t boff = (off + total) % SBFS_BSIZE;
@@ -254,7 +266,7 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
 
         if (si->d.addrs[bn] == 0) {
             uint32_t new_block = balloc();
-            if (new_block == 0) return total ? (int)total : -ENOSPC;
+            if (new_block == 0) { enospc = 1; break; }
             si->d.addrs[bn] = new_block;
             si->dirty = 1;
         }
@@ -273,9 +285,13 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
         si->vnode.size = si->d.size;
         si->dirty = 1;
     }
+    /* Always persist the inode before returning — this covers the partial-
+     * write ENOSPC path where we've allocated blocks but not yet recorded
+     * them in the on-disk inode. */
     if (si->dirty)
         sbfs_iupdate(si);
 
+    if (total == 0 && enospc) return -ENOSPC;
     return (int)total;
 }
 
@@ -402,9 +418,12 @@ struct inode *sbfs_create(struct inode *parent, const char *name, uint16_t type)
 
     /* Link into parent. */
     if (sbfs_dirlink(parent, name, si->inum) < 0) {
-        /* Roll back: mark inode free. */
+        /* Roll back: free any data blocks a new directory may have
+         * allocated for its "." / ".." entries, then mark the inode free. */
+        sbfs_itrunc(si);
         si->d.type  = 0;
         si->d.nlink = 0;
+        si->vnode.nlink = 0;
         sbfs_iupdate(si);
         inode_put(ip);
         return 0;
@@ -485,6 +504,16 @@ static int sbfs_op_write(struct inode *ip, uint64_t off, const void *buf, uint64
     ret = sbfs_writei(ip, off, buf, n);
     end_op();
     return ret;
+}
+
+static int sbfs_op_truncate(struct inode *ip) {
+    struct sbfs_inode *si = (struct sbfs_inode *)ip;
+    sbfs_ilock(si);
+    if (si->d.type != 1) return -EINVAL;   /* regular files only */
+    begin_op();
+    sbfs_itrunc(si);
+    end_op();
+    return 0;
 }
 
 static int sbfs_op_stat(struct inode *ip, struct stat *st) {
@@ -589,11 +618,3 @@ struct inode *sbfs_mount(void) {
     /* Return the root inode. */
     return sbfs_iget(SBFS_ROOTINUM);
 }
-
-/* Prevent use of EIO / ENOTEMPTY without errno.h defining them — provide minimal stubs. */
-#ifndef EIO
-#define EIO 5
-#endif
-#ifndef ENOTEMPTY
-#define ENOTEMPTY 39
-#endif
