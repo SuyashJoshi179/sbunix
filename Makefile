@@ -78,7 +78,8 @@ build/tools/mkfs: tools/mkfs.c
 $(DISK_IMG): build/tools/mkfs
 	build/tools/mkfs $@
 
-qemu: build/kernel.elf $(DISK_IMG)
+qemu: build/kernel.elf build/tools/mkfs
+	build/tools/mkfs $(DISK_IMG)
 	qemu-system-riscv64 -machine virt -bios default -kernel $< \
 		-drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
 		-device virtio-blk-device,drive=hd0,bus=virtio-mmio-bus.0 \

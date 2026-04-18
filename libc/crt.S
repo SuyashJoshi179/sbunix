@@ -1,7 +1,7 @@
 .global _start
 _start:
-    li   a0, 0          # argc = 0
-    li   a1, 0          # argv = NULL
+    ld   a0, 0(sp)      # argc
+    addi a1, sp, 8      # argv = sp + 8
     call main
     # a0 = main's return value, use as exit status
     li   a7, 1          # SYS_exit = 1
