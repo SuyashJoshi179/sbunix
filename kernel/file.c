@@ -1,5 +1,6 @@
 #include <file.h>
 #include <inode.h>
+#include <pipe.h>
 #include <stat.h>
 #include <errno.h>
 #include <riscv.h>
@@ -20,8 +21,8 @@ struct inode *inode_get(struct inode *ip) {
 
 void inode_put(struct inode *ip) {
     if (!ip) return;
-    ip->refcnt--;
-    // Static-pool inodes (tarfs, devfs) are never freed — refcnt just tracks refs.
+    if (--ip->refcnt == 0 && ip->ops && ip->ops->release)
+        ip->ops->release(ip);
 }
 
 // Allocate a file from the global table (refcnt = 1, caller fills fields).
@@ -56,14 +57,21 @@ void fileclose(struct file *f) {
     file_unlock();
 
     if (do_free) {
-        inode_put(f->ip);
-        f->ip   = 0;
+        if (f->type == FD_PIPE) {
+            pipe_close(f->pipe, f->writable);
+            f->pipe = 0;
+        } else {
+            inode_put(f->ip);
+            f->ip = 0;
+        }
         f->type = FD_NONE;
     }
 }
 
 int fileread(struct file *f, void *dst, uint64_t n) {
     if (!f->readable) return -EBADF;
+    if (f->type == FD_PIPE)
+        return pipe_read(f->pipe, (char *)dst, (int)n);
     if (f->type != FD_INODE || !f->ip || !f->ip->ops->read) return -EBADF;
     int r = f->ip->ops->read(f->ip, f->off, dst, n);
     if (r > 0) f->off += (uint64_t)r;
@@ -72,6 +80,8 @@ int fileread(struct file *f, void *dst, uint64_t n) {
 
 int filewrite(struct file *f, const void *src, uint64_t n) {
     if (!f->writable) return -EBADF;
+    if (f->type == FD_PIPE)
+        return pipe_write(f->pipe, (const char *)src, (int)n);
     if (f->type != FD_INODE || !f->ip || !f->ip->ops->write) return -EBADF;
     int w = f->ip->ops->write(f->ip, f->off, src, n);
     if (w > 0) f->off += (uint64_t)w;
@@ -79,11 +89,17 @@ int filewrite(struct file *f, const void *src, uint64_t n) {
 }
 
 int filestat(struct file *f, struct stat *st) {
+    if (f->type == FD_PIPE) {
+        memset(st, 0, sizeof(*st));
+        st->st_mode = 0010000;  /* S_IFIFO */
+        return 0;
+    }
     if (f->type != FD_INODE || !f->ip || !f->ip->ops->stat) return -EBADF;
     return f->ip->ops->stat(f->ip, st);
 }
 
 int fileseek(struct file *f, int64_t off, int whence) {
+    if (f->type == FD_PIPE) return -ESPIPE;
     if (f->type != FD_INODE) return -ESPIPE;
     // Character devices are not seekable.
     if (f->ip && f->ip->type == I_CHR) return -ESPIPE;

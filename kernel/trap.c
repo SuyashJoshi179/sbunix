@@ -4,8 +4,10 @@
 #include <timer.h>
 #include <syscall.h>
 #include <proc.h>
+#include <vma.h>
 #include <drivers/plic.h>
 #include <drivers/uart.h>
+#include <drivers/virtio.h>
 
 #define SIE_SEIE  (1 << 9)   /* S-mode external interrupt enable */
 
@@ -50,6 +52,8 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
                 int irq = plic_claim();
                 if (irq == 10 /* UART_IRQ */) {
                     uart_rx_isr();
+                } else if (irq == 1 /* VIRTIO_IRQ */) {
+                    virtio_disk_intr();
                 }
                 if (irq) plic_complete(irq);
                 return;
@@ -75,10 +79,14 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
     // For faults from S-mode, it is a kernel bug — panic.
     int from_user = (trapframe[TF_SSTATUS] & SSTATUS_SPP) == 0;
     if (from_user && is_user_fault(cause_code)) {
+        if (cause_code == 12 || cause_code == 13 || cause_code == 15) {
+            if (user_page_fault(cause_code, stval, trapframe) == 0)
+                return;
+        }
         struct pcb *p = current_proc();
         printk("[trap] pid=%d killed by fault: scause=%lx sepc=%lx stval=%lx\n",
                p ? p->pid : -1, scause, sepc, stval);
-        proc_exit_current(-14);  // SIGSEGV equivalent; never returns
+        proc_exit_current(-14);
     }
 
     printk("PANIC: kernel exception scause=%lx sepc=%lx stval=%lx\n",

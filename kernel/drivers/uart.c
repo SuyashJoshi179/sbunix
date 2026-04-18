@@ -120,6 +120,19 @@ void uart_rx_isr(void) {
                 write_char(' ');
                 write_char('\b');
             }
+        } else if (c == 0x03) {
+            /* Ctrl-C: discard line, push interrupt sentinel */
+            edit_len = 0;
+            write_char('^');
+            write_char('C');
+            write_char('\r');
+            write_char('\n');
+            char sentinel = 0x03;
+            line_push(&sentinel, 1);
+            if (rx_blocked_pid) {
+                proc_wakeup(rx_blocked_pid);
+                rx_blocked_pid = 0;
+            }
         } else if (c == 0x04) {
             /* Ctrl-D: EOF if at column 0, else ignored */
             if (edit_len == 0) {
@@ -156,7 +169,8 @@ int uart_rx_get(char *out) {
     line_head = (line_head + 1) % LINE_SZ;
     line_avail--;
 
-    if (c == '\0') return 0;   /* EOF sentinel */
+    if (c == '\0') return 0;    /* EOF sentinel */
+    if (c == 0x03) return -2;  /* Ctrl-C sentinel → EINTR */
     *out = c;
     return 1;
 }

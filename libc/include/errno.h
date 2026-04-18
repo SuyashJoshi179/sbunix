@@ -16,4 +16,6 @@
 #define EROFS        30
 #define ENAMETOOLONG 36
 #define ENOSYS       38
+#define EEXIST       17
+#define EFBIG        27
 #define ENOTSUP      95

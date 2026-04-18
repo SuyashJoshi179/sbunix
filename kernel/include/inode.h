@@ -5,12 +5,18 @@ struct inode;
 struct stat;
 
 struct inode_ops {
-    int (*read)    (struct inode *, uint64_t off, void *buf, uint64_t n);
-    int (*write)   (struct inode *, uint64_t off, const void *buf, uint64_t n);
-    int (*stat)    (struct inode *, struct stat *);
-    int (*lookup)  (struct inode *dir, const char *name, struct inode **out);
-    int (*getdents)(struct inode *dir, uint64_t off, void *buf, uint64_t n,
-                    uint64_t *out_next);
+    int  (*read)    (struct inode *, uint64_t off, void *buf, uint64_t n);
+    int  (*write)   (struct inode *, uint64_t off, const void *buf, uint64_t n);
+    int  (*stat)    (struct inode *, struct stat *);
+    int  (*lookup)  (struct inode *dir, const char *name, struct inode **out);
+    int  (*getdents)(struct inode *dir, uint64_t off, void *buf, uint64_t n,
+                     uint64_t *out_next);
+    /* Free all data blocks and reset size to 0 (for O_TRUNC).
+     * Caller must wrap in begin_op/end_op.  NULL for read-only filesystems. */
+    int  (*truncate)(struct inode *);
+    /* Called when refcnt drops to 0; may write back dirty state.
+     * NULL for static-pool filesystems (tarfs, devfs). */
+    void (*release) (struct inode *);
 };
 
 #define I_REG  1

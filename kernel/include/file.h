@@ -2,9 +2,12 @@
 #include <stdint.h>
 #include <inode.h>
 
+struct pipe;
+
 typedef enum {
     FD_NONE  = 0,
     FD_INODE = 1,
+    FD_PIPE  = 2,
 } file_type_t;
 
 struct file {
@@ -14,6 +17,7 @@ struct file {
     uint8_t      writable;
     uint64_t     off;
     struct inode *ip;
+    struct pipe  *pipe;
 };
 
 #define NFILE  128  /* global open-file table size */

@@ -53,6 +53,10 @@ struct pcb *alloc_proc(void) {
     p->user_entry = 0;
     p->user_sp    = 0;
     p->entry      = 0;
+    p->sleep_chan = 0;
+    p->vma_list   = 0;
+    p->heap_vma   = 0;
+    p->brk_start  = 0;
     p->next       = 0;
 
     // context is zeroed by page_alloc; set sp and ra
@@ -99,9 +103,11 @@ void free_proc(struct pcb *victim) {
         victim->cwd = 0;
     }
 
+    // Free VMAs before page table (metadata only — actual pages freed below).
+    vma_list_free(&victim->vma_list);
+    victim->heap_vma = 0;
+
     // Free user page table BEFORE the kstack and PCB pages.
-    // The caller must ensure the hart is NOT currently translating
-    // through victim->pagetable (switch to kernel_pgtable first).
     if (victim->pagetable) {
         free_user_pgtable(victim->pagetable);
         victim->pagetable = 0;
@@ -151,8 +157,7 @@ int proc_fork_current(void) {
     struct pcb *child = alloc_proc();
     if (!child) return -1;
 
-    // Deep-copy user address space
-    pgtable_t child_pt = uvmcopy(parent->pagetable);
+    pgtable_t child_pt = uvmcow_share(parent->pagetable);
     if (!child_pt) {
         free_proc(child);
         return -1;
@@ -197,6 +202,22 @@ int proc_fork_current(void) {
     child->user_entry = parent->user_entry;
     child->user_sp    = parent->user_sp;
     child->parent_pid = parent->pid;
+    child->brk_start  = parent->brk_start;
+
+    child->vma_list = vma_list_dup(parent->vma_list);
+    child->heap_vma = 0;
+    for (struct vma *v = child->vma_list; v; v = v->next) {
+        if (v->type == VMA_TYPE_HEAP) {
+            child->heap_vma = v;
+            break;
+        }
+    }
+
+    for (struct vma *v = parent->vma_list; v; v = v->next)
+        if (v->prot & VMA_PROT_W) v->flags |= VMA_FLAG_COW;
+    for (struct vma *v = child->vma_list; v; v = v->next)
+        if (v->prot & VMA_PROT_W) v->flags |= VMA_FLAG_COW;
+
     child->state      = PROC_READY;
 
     printk("[fork] parent pid=%d -> child pid=%d\n", parent->pid, child->pid);
@@ -235,6 +256,21 @@ void proc_sleep(struct pcb *p) {
 void proc_wakeup(int pid) {
     for (struct pcb *p = procs; p; p = p->next) {
         if (p->pid == pid && p->state == PROC_SLEEPING)
+            p->state = PROC_READY;
+    }
+}
+
+void proc_sleep_chan(void *chan) {
+    struct pcb *p = current_proc();
+    if (!p) return;
+    p->sleep_chan = chan;
+    proc_sleep(p);
+    p->sleep_chan = 0;
+}
+
+void proc_wakeup_chan(void *chan) {
+    for (struct pcb *p = procs; p; p = p->next) {
+        if (p->state == PROC_SLEEPING && p->sleep_chan == chan)
             p->state = PROC_READY;
     }
 }
@@ -404,70 +440,8 @@ void proc_sleep_ms(uint64_t ms) {
 // ----------------------------------------------------------------
 
 void sched_init(void) {
-    // --- Phase D: fork() contract ---
-    struct pcb *ft = proc_spawn("bin/fork_test");
-    if (!ft) panic("sched_init: failed to spawn bin/fork_test");
-
-    // --- Phase D: pid / getpid() contract ---
-    struct pcb *pt = proc_spawn("bin/pid_test");
-    if (!pt) panic("sched_init: failed to spawn bin/pid_test");
-
-    // --- Phase D: address-space independence after fork() ---
-    struct pcb *at = proc_spawn("bin/addrspace_test");
-    if (!at) panic("sched_init: failed to spawn bin/addrspace_test");
-
-    // --- Phase D: multiple forks produce unique PIDs ---
-    struct pcb *mt = proc_spawn("bin/multi_fork_test");
-    if (!mt) panic("sched_init: failed to spawn bin/multi_fork_test");
-
-    // --- Phase C / D: write() syscall ---
-    struct pcb *wt = proc_spawn("bin/write_test");
-    if (!wt) panic("sched_init: failed to spawn bin/write_test");
-
-    // --- Phase 3 tail: timer preemption ---
-    struct pcb *pr = proc_spawn("bin/preempt_test");
-    if (!pr) panic("sched_init: failed to spawn bin/preempt_test");
-
-    // --- Phase 3 tail: user fault → kill, not panic ---
-    struct pcb *sv = proc_spawn("bin/segv_test");
-    if (!sv) panic("sched_init: failed to spawn bin/segv_test");
-
-    // --- Phase 3 tail: sleep syscall ---
-    struct pcb *sl = proc_spawn("bin/sleep_test");
-    if (!sl) panic("sched_init: failed to spawn bin/sleep_test");
-
-    // --- Phase 3 tail: cooperative yield syscall ---
-    struct pcb *yt = proc_spawn("bin/yield_test");
-    if (!yt) panic("sched_init: failed to spawn bin/yield_test");
-
-    // --- Phase 4: file descriptors & VFS ---
-    struct pcb *fdt = proc_spawn("bin/fd_test");
-    if (!fdt) panic("sched_init: failed to spawn bin/fd_test");
-
-    struct pcb *stt = proc_spawn("bin/stat_test");
-    if (!stt) panic("sched_init: failed to spawn bin/stat_test");
-
-    struct pcb *gdt = proc_spawn("bin/getdents_test");
-    if (!gdt) panic("sched_init: failed to spawn bin/getdents_test");
-
-    struct pcb *cdt = proc_spawn("bin/chdir_test");
-    if (!cdt) panic("sched_init: failed to spawn bin/chdir_test");
-
-    // --- Phase 4 comprehensive tests ---
-    struct pcb *ort = proc_spawn("bin/open_read_test");
-    if (!ort) panic("sched_init: failed to spawn bin/open_read_test");
-
-    struct pcb *dpt = proc_spawn("bin/dup_test");
-    if (!dpt) panic("sched_init: failed to spawn bin/dup_test");
-
-    struct pcb *gwt = proc_spawn("bin/getcwd_test");
-    if (!gwt) panic("sched_init: failed to spawn bin/getcwd_test");
-
-    struct pcb *flt = proc_spawn("bin/fd_limits_test");
-    if (!flt) panic("sched_init: failed to spawn bin/fd_limits_test");
-
-    struct pcb *ptt = proc_spawn("bin/path_test");
-    if (!ptt) panic("sched_init: failed to spawn bin/path_test");
+    struct pcb *init = proc_spawn("bin/init");
+    if (!init) panic("sched_init: failed to spawn init");
 
     printk("scheduler: starting\n");
     scheduler_run();

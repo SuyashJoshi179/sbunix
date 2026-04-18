@@ -1,5 +1,8 @@
+#include <page_ref.h>
 #include <pmem.h>
+#include <printk.h>
 #include <string.h>
+#include <vmem.h>
 
 // The freelist stores whatever addresses were passed to page_free().
 //
@@ -42,17 +45,26 @@ void pmem_rebase(unsigned long offset) {
     }
 }
 
-// Returns a zeroed 4KB page (kernel virtual address after rebase, physical before).
+extern int page_refs_ready;
+
 void *page_alloc(void) {
     if (!freelist) return 0;
     struct free_page *p = freelist;
     freelist = p->next;
     memset(p, 0, PAGE_SIZE);
+    if (page_refs_ready)
+        page_ref_set(virt_to_phys((unsigned long)p), 1);
     return p;
 }
 
-// page is whatever address was returned by page_alloc().
 void page_free(void *page) {
+    if (page_refs_ready) {
+        unsigned long pa = virt_to_phys((unsigned long)page);
+        unsigned char ref = page_ref_get(pa);
+        if (ref != 1 && ref != 0)
+            panic("page_free: refcount != 1");
+        page_ref_set(pa, 0);
+    }
     struct free_page *p = (struct free_page *)page;
     p->next = freelist;
     freelist = p;
