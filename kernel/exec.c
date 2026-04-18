@@ -8,6 +8,7 @@
 #include <string.h>
 #include <tarfs.h>
 #include <vfs.h>
+#include <vma.h>
 #include <vmem.h>
 
 // Declared in devfs.c.
@@ -17,7 +18,8 @@ struct inode *devfs_console_inode(void);
 // load_user_elf — map an ELF binary into a user page table
 // ---------------------------------------------------------------------------
 int load_user_elf(pgtable_t pt, const void *img, unsigned long img_size,
-                  unsigned long *entry_out) {
+                  unsigned long *entry_out, struct vma **vma_list_out,
+                  uint64_t *brk_out) {
     const Elf64_Ehdr *ehdr = (const Elf64_Ehdr *)img;
 
     if (*(const uint32_t *)ehdr->e_ident != ELF_MAGIC) {
@@ -36,6 +38,9 @@ int load_user_elf(pgtable_t pt, const void *img, unsigned long img_size,
     const Elf64_Phdr *phdrs =
         (const Elf64_Phdr *)((const char *)img + ehdr->e_phoff);
 
+    struct vma *vlist = 0;
+    uint64_t highest_end = 0;
+
     for (int i = 0; i < ehdr->e_phnum; i++) {
         const Elf64_Phdr *ph = &phdrs[i];
         if (ph->p_type != PT_LOAD) continue;
@@ -53,6 +58,7 @@ int load_user_elf(pgtable_t pt, const void *img, unsigned long img_size,
             void *kpage = page_alloc();
             if (!kpage) {
                 printk("exec: OOM loading segment\n");
+                vma_list_free(&vlist);
                 return -1;
             }
 
@@ -72,9 +78,28 @@ int load_user_elf(pgtable_t pt, const void *img, unsigned long img_size,
 
             vmem_map(pt, va, virt_to_phys((unsigned long)kpage), PAGE_SIZE, perm);
         }
+
+        struct vma *seg_vma = vma_alloc();
+        if (!seg_vma) {
+            vma_list_free(&vlist);
+            return -1;
+        }
+        seg_vma->start = va_start;
+        seg_vma->end   = va_end;
+        seg_vma->prot  = 0;
+        if (ph->p_flags & PF_R) seg_vma->prot |= VMA_PROT_R;
+        if (ph->p_flags & PF_W) seg_vma->prot |= VMA_PROT_W;
+        if (ph->p_flags & PF_X) seg_vma->prot |= VMA_PROT_X;
+        seg_vma->type = VMA_TYPE_ANON;
+        vma_insert(&vlist, seg_vma);
+
+        if (va_end > highest_end)
+            highest_end = va_end;
     }
 
     *entry_out = ehdr->e_entry;
+    *vma_list_out = vlist;
+    *brk_out = page_round_up(highest_end);
     return 0;
 }
 
@@ -140,23 +165,65 @@ struct pcb *proc_spawn(const char *path) {
         return 0;
     }
 
+    struct vma *vlist = 0;
+    uint64_t brk = 0;
     unsigned long entry;
-    if (load_user_elf(p->pagetable, img, img_sz, &entry) < 0) {
+    if (load_user_elf(p->pagetable, img, img_sz, &entry, &vlist, &brk) < 0) {
         free_user_pgtable(p->pagetable);
         free_proc(p);
         return 0;
     }
 
-    if (map_stack(p->pagetable) < 0) {
+    void *kstack = map_stack(p->pagetable);
+    if (!kstack) {
         printk("proc_spawn: map_stack failed\n");
+        vma_list_free(&vlist);
         free_user_pgtable(p->pagetable);
         free_proc(p);
         return 0;
     }
+
+    // Heap VMA (zero-length initially)
+    struct vma *heap_vma = vma_alloc();
+    if (!heap_vma) {
+        vma_list_free(&vlist);
+        free_user_pgtable(p->pagetable);
+        free_proc(p);
+        return 0;
+    }
+    heap_vma->start = brk;
+    heap_vma->end   = brk;
+    heap_vma->prot  = VMA_PROT_R | VMA_PROT_W;
+    heap_vma->type  = VMA_TYPE_HEAP;
+    vma_insert(&vlist, heap_vma);
+
+    // Stack VMA
+    struct vma *stack_vma = vma_alloc();
+    if (!stack_vma) {
+        vma_list_free(&vlist);
+        free_user_pgtable(p->pagetable);
+        free_proc(p);
+        return 0;
+    }
+    stack_vma->start = USER_STACK_TOP - PAGE_SIZE;
+    stack_vma->end   = USER_STACK_TOP;
+    stack_vma->prot  = VMA_PROT_R | VMA_PROT_W;
+    stack_vma->type  = VMA_TYPE_STACK;
+    vma_insert(&vlist, stack_vma);
+
+    p->vma_list   = vlist;
+    p->heap_vma   = heap_vma;
+    p->brk_start  = brk;
+
+    // Set up empty argv frame: [argc=0] [argv[0]=NULL] [envp[0]=NULL]
+    uint64_t *frame = (uint64_t *)((char *)kstack + PAGE_SIZE - 24);
+    frame[0] = 0;  // argc
+    frame[1] = 0;  // argv[0] = NULL
+    frame[2] = 0;  // envp[0] = NULL
 
     p->is_user    = 1;
     p->user_entry = entry;
-    p->user_sp    = USER_STACK_TOP;
+    p->user_sp    = USER_STACK_TOP - 24;
     p->state      = PROC_READY;
 
     // Set up stdin/stdout/stderr → /dev/console.

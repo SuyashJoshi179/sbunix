@@ -2,6 +2,8 @@
 #include <exec.h>
 #include <file.h>
 #include <inode.h>
+#include <page_ref.h>
+#include <pipe.h>
 #include <log.h>
 #include <pmem.h>
 #include <printk.h>
@@ -12,6 +14,7 @@
 #include <string.h>
 #include <tarfs.h>
 #include <vfs.h>
+#include <vma.h>
 #include <vmem.h>
 
 // ----------------------------------------------------------------------------
@@ -107,63 +110,69 @@ static void test_load_elf(void) {
     if (!pt) return;
 
     unsigned long entry = 0;
-    int rc = load_user_elf(pt, img, sz, &entry);
+    struct vma *vlist = 0;
+    uint64_t brk = 0;
+    int rc = load_user_elf(pt, img, sz, &entry, &vlist, &brk);
     st_check(rc == 0,                    "load_elf: load_user_elf returns 0");
     st_check(entry >= USER_TEXT_BASE,    "load_elf: entry >= USER_TEXT_BASE");
     st_check(entry <  KVMEM_OFFSET,      "load_elf: entry in user virtual space");
+    st_check(vlist != 0,                 "load_elf: VMA list non-null");
+    st_check(brk > 0,                   "load_elf: brk > 0");
 
+    vma_list_free(&vlist);
     free_user_pgtable(pt);
     st_check(1, "load_elf: free_user_pgtable without crash");
 }
 
 // ----------------------------------------------------------------------------
-// uvmcopy test — copy a page table and verify it is a distinct object
+// uvmcow_share test — COW share a page table and verify pages are shared
 // ----------------------------------------------------------------------------
 
-static void test_uvmcopy(void) {
-    printk("[SELFTEST] -- uvmcopy --\n");
+static void test_uvmcow_share(void) {
+    printk("[SELFTEST] -- uvmcow_share --\n");
 
     unsigned long sz = 0;
     const void *img = tarfs_find("bin/init", &sz);
-    if (!img) { st_check(0, "uvmcopy: tarfs setup"); return; }
+    if (!img) { st_check(0, "cow_share: tarfs setup"); return; }
 
     pgtable_t parent_pt = create_user_pgtable();
-    if (!parent_pt) { st_check(0, "uvmcopy: parent create_user_pgtable"); return; }
+    if (!parent_pt) { st_check(0, "cow_share: parent create_user_pgtable"); return; }
 
     unsigned long entry = 0;
-    if (load_user_elf(parent_pt, img, sz, &entry) < 0) {
+    struct vma *vlist = 0;
+    uint64_t brk = 0;
+    if (load_user_elf(parent_pt, img, sz, &entry, &vlist, &brk) < 0) {
         free_user_pgtable(parent_pt);
-        st_check(0, "uvmcopy: parent load_user_elf");
+        st_check(0, "cow_share: parent load_user_elf");
         return;
     }
-    if (map_stack(parent_pt) < 0) {
+    vma_list_free(&vlist);
+    if (!map_stack(parent_pt)) {
         free_user_pgtable(parent_pt);
-        st_check(0, "uvmcopy: parent map_stack");
+        st_check(0, "cow_share: parent map_stack");
         return;
     }
 
-    pgtable_t child_pt = uvmcopy(parent_pt);
-    st_check(child_pt != 0,              "uvmcopy: returns non-null");
-    st_check(child_pt != parent_pt,      "uvmcopy: distinct page table root");
+    pgtable_t child_pt = uvmcow_share(parent_pt);
+    st_check(child_pt != 0,              "cow_share: returns non-null");
+    st_check(child_pt != parent_pt,      "cow_share: distinct page table root");
 
-    // Both page tables should map the same virtual entry; if a PTE is
-    // present in the parent's user range, the child must have one too.
     if (child_pt) {
-        pte_t *ppte = get_pte(parent_pt, entry, /*alloc=*/0);
-        pte_t *cpte = get_pte(child_pt,  entry, /*alloc=*/0);
-        st_check(ppte != 0, "uvmcopy: parent PTE at entry present");
-        st_check(cpte != 0, "uvmcopy: child PTE at entry present");
+        pte_t *ppte = get_pte(parent_pt, entry, 0);
+        pte_t *cpte = get_pte(child_pt,  entry, 0);
+        st_check(ppte != 0, "cow_share: parent PTE at entry present");
+        st_check(cpte != 0, "cow_share: child PTE at entry present");
 
         if (ppte && cpte) {
             unsigned long ppa = pte_to_phyaddr(*ppte);
             unsigned long cpa = pte_to_phyaddr(*cpte);
-            st_check(ppa != cpa, "uvmcopy: child page is a physical copy (different PA)");
+            st_check(ppa == cpa, "cow_share: child shares same physical page (COW)");
         }
 
         free_user_pgtable(child_pt);
     }
     free_user_pgtable(parent_pt);
-    st_check(1, "uvmcopy: cleanup without crash");
+    st_check(1, "cow_share: cleanup without crash");
 }
 
 // ----------------------------------------------------------------------------
@@ -513,6 +522,243 @@ static void test_sbfs_rw(void) {
 }
 
 // ----------------------------------------------------------------------------
+// Pipe kernel tests
+// ----------------------------------------------------------------------------
+
+static void test_pipe_basic(void) {
+    printk("[SELFTEST] -- pipe basic --\n");
+
+    struct file *rf = 0, *wf = 0;
+    int rc = pipe_alloc(&rf, &wf);
+    st_check(rc == 0, "pipe: alloc returns 0");
+    st_check(rf != 0 && wf != 0, "pipe: file pointers non-null");
+    st_check(rf->type == FD_PIPE, "pipe: read end is FD_PIPE");
+    st_check(wf->type == FD_PIPE, "pipe: write end is FD_PIPE");
+    st_check(rf->readable == 1 && rf->writable == 0, "pipe: read end perms");
+    st_check(wf->readable == 0 && wf->writable == 1, "pipe: write end perms");
+
+    // Write 10 bytes and read them back.
+    pipe_write(wf->pipe, "0123456789", 10);
+    char buf[16] = {0};
+    int r = pipe_read(rf->pipe, buf, 10);
+    st_check(r == 10, "pipe: read returns 10");
+    st_check(buf[0] == '0' && buf[9] == '9', "pipe: data matches");
+
+    fileclose(rf);
+    fileclose(wf);
+}
+
+static void test_pipe_close_write_eof(void) {
+    printk("[SELFTEST] -- pipe close-write EOF --\n");
+
+    struct file *rf = 0, *wf = 0;
+    pipe_alloc(&rf, &wf);
+
+    pipe_write(wf->pipe, "abc", 3);
+    fileclose(wf);
+
+    char buf[8];
+    int r = pipe_read(rf->pipe, buf, 8);
+    st_check(r == 3, "pipe_eof: read returns remaining 3 bytes");
+
+    r = pipe_read(rf->pipe, buf, 8);
+    st_check(r == 0, "pipe_eof: second read returns 0 (EOF)");
+
+    fileclose(rf);
+}
+
+static void test_pipe_alloc_free_cycle(void) {
+    printk("[SELFTEST] -- pipe alloc/free cycle --\n");
+
+    for (int i = 0; i < 50; i++) {
+        struct file *rf = 0, *wf = 0;
+        int rc = pipe_alloc(&rf, &wf);
+        st_check(rc == 0, "pipe_cycle: alloc");
+        fileclose(rf);
+        fileclose(wf);
+    }
+    st_check(1, "pipe_cycle: 50 alloc/free cycles ok");
+}
+
+// ----------------------------------------------------------------------------
+// Page refcount tests
+// ----------------------------------------------------------------------------
+
+static void test_page_refcount(void) {
+    printk("[SELFTEST] -- page_refcount --\n");
+    void *p = page_alloc();
+    st_check(p != 0, "refcount: alloc succeeds");
+    unsigned long pa = virt_to_phys((unsigned long)p);
+    st_check(page_ref_get(pa) == 1, "refcount: new page has ref=1");
+    page_get(pa);
+    st_check(page_ref_get(pa) == 2, "refcount: after page_get ref=2");
+    page_put(pa);
+    st_check(page_ref_get(pa) == 1, "refcount: after page_put ref=1");
+    page_put(pa);
+    st_check(page_ref_get(pa) == 0, "refcount: after second page_put ref=0 (freed)");
+}
+
+// ----------------------------------------------------------------------------
+// VMA tests
+// ----------------------------------------------------------------------------
+
+static void test_vma_pool(void) {
+    printk("[SELFTEST] -- vma_pool --\n");
+    struct vma *arr[10];
+    for (int i = 0; i < 10; i++) {
+        arr[i] = vma_alloc();
+        st_check(arr[i] != 0, "vma_alloc succeeds");
+    }
+    for (int i = 0; i < 10; i++)
+        vma_free(arr[i]);
+    struct vma *v = vma_alloc();
+    st_check(v != 0, "vma_alloc after free succeeds (no leak)");
+    vma_free(v);
+}
+
+static void test_vma_insert_find(void) {
+    printk("[SELFTEST] -- vma_insert_find --\n");
+    struct vma *list = 0;
+    struct vma *arr[10];
+    for (int i = 0; i < 10; i++) {
+        arr[i] = vma_alloc();
+        arr[i]->start = (uint64_t)(i * 2) * PAGE_SIZE;
+        arr[i]->end   = arr[i]->start + PAGE_SIZE;
+        arr[i]->prot  = VMA_PROT_R;
+        arr[i]->type  = VMA_TYPE_ANON;
+        vma_insert(&list, arr[i]);
+    }
+    for (int i = 0; i < 10; i++) {
+        uint64_t va = (uint64_t)(i * 2) * PAGE_SIZE;
+        struct vma *found = vma_find(list, va);
+        st_check(found == arr[i], "vma_find returns correct VMA");
+    }
+    // Verify sorted order
+    int sorted = 1;
+    for (struct vma *v = list; v && v->next; v = v->next) {
+        if (v->start >= v->next->start) { sorted = 0; break; }
+    }
+    st_check(sorted, "vma_insert maintains sorted order");
+    vma_list_free(&list);
+    st_check(list == 0, "vma_list_free clears list");
+}
+
+static void test_vma_find_miss(void) {
+    printk("[SELFTEST] -- vma_find_miss --\n");
+    struct vma *list = 0;
+    struct vma *v = vma_alloc();
+    v->start = 0x1000;
+    v->end   = 0x2000;
+    v->prot  = VMA_PROT_R;
+    v->type  = VMA_TYPE_ANON;
+    vma_insert(&list, v);
+    st_check(vma_find(list, 0x0500) == 0, "vma_find below range returns NULL");
+    st_check(vma_find(list, 0x2000) == 0, "vma_find at end returns NULL");
+    st_check(vma_find(list, 0x3000) == 0, "vma_find above range returns NULL");
+    st_check(vma_find(list, 0x1000) == v, "vma_find at start returns VMA");
+    st_check(vma_find(list, 0x1FFF) == v, "vma_find at last byte returns VMA");
+    vma_list_free(&list);
+}
+
+static void test_vma_list_dup(void) {
+    printk("[SELFTEST] -- vma_list_dup --\n");
+    struct vma *list = 0;
+    for (int i = 0; i < 5; i++) {
+        struct vma *v = vma_alloc();
+        v->start = (uint64_t)(i * 2) * PAGE_SIZE;
+        v->end   = v->start + PAGE_SIZE;
+        v->prot  = VMA_PROT_R | VMA_PROT_W;
+        v->type  = VMA_TYPE_ANON;
+        vma_insert(&list, v);
+    }
+    struct vma *dup = vma_list_dup(list);
+    st_check(dup != 0, "vma_list_dup returns non-null");
+    int count_orig = 0, count_dup = 0;
+    for (struct vma *v = list; v; v = v->next) count_orig++;
+    for (struct vma *v = dup;  v; v = v->next) count_dup++;
+    st_check(count_orig == count_dup, "vma_list_dup has same count");
+    struct vma *o = list, *d = dup;
+    int match = 1;
+    while (o && d) {
+        if (o->start != d->start || o->end != d->end || o == d) { match = 0; break; }
+        o = o->next; d = d->next;
+    }
+    st_check(match, "vma_list_dup copies are independent with same ranges");
+    vma_list_free(&list);
+    vma_list_free(&dup);
+}
+
+static void test_vma_remove(void) {
+    printk("[SELFTEST] -- vma_remove --\n");
+    struct vma *list = 0;
+    struct vma *arr[5];
+    for (int i = 0; i < 5; i++) {
+        arr[i] = vma_alloc();
+        arr[i]->start = (uint64_t)(i * 2) * PAGE_SIZE;
+        arr[i]->end   = arr[i]->start + PAGE_SIZE;
+        arr[i]->prot  = VMA_PROT_R;
+        arr[i]->type  = VMA_TYPE_ANON;
+        vma_insert(&list, arr[i]);
+    }
+    vma_remove(&list, arr[2]);
+    st_check(vma_find(list, arr[2]->start) == 0, "removed VMA not found");
+    int count = 0;
+    for (struct vma *v = list; v; v = v->next) count++;
+    st_check(count == 4, "list has 4 VMAs after remove");
+    vma_free(arr[2]);
+    vma_list_free(&list);
+}
+
+static void test_vma_split(void) {
+    printk("[SELFTEST] -- vma_split --\n");
+
+    // Split in the middle
+    struct vma *list = 0;
+    struct vma *v = vma_alloc();
+    v->start = 0x10000;
+    v->end   = 0x30000;
+    v->prot  = VMA_PROT_R | VMA_PROT_W;
+    v->type  = VMA_TYPE_ANON;
+    vma_insert(&list, v);
+
+    int rc = vma_split(&list, v, 0x18000, 0x20000);
+    st_check(rc == 0, "vma_split: middle split returns 0");
+    int count = 0;
+    for (struct vma *w = list; w; w = w->next) count++;
+    st_check(count == 2, "vma_split: middle split produces 2 VMAs");
+    st_check(vma_find(list, 0x10000) != 0, "vma_split: left part present");
+    st_check(vma_find(list, 0x1C000) == 0, "vma_split: middle gone");
+    st_check(vma_find(list, 0x20000) != 0, "vma_split: right part present");
+    vma_list_free(&list);
+
+    // Split at left edge
+    v = vma_alloc();
+    v->start = 0x10000;
+    v->end   = 0x20000;
+    v->prot  = VMA_PROT_R;
+    v->type  = VMA_TYPE_ANON;
+    list = 0;
+    vma_insert(&list, v);
+    rc = vma_split(&list, v, 0x10000, 0x14000);
+    st_check(rc == 0, "vma_split: left edge returns 0");
+    st_check(list != 0, "vma_split: list non-null");
+    st_check(list->start == 0x14000, "vma_split: left trimmed start correct");
+    vma_list_free(&list);
+
+    // Exact match (removes entirely)
+    v = vma_alloc();
+    v->start = 0x10000;
+    v->end   = 0x20000;
+    v->prot  = VMA_PROT_R;
+    v->type  = VMA_TYPE_ANON;
+    list = 0;
+    vma_insert(&list, v);
+    rc = vma_split(&list, v, 0x10000, 0x20000);
+    st_check(rc == 0, "vma_split: exact match returns 0");
+    st_check(list == 0, "vma_split: exact match removes VMA");
+}
+
+// ----------------------------------------------------------------------------
 // Entry point
 // ----------------------------------------------------------------------------
 
@@ -524,7 +770,7 @@ void selftest_run(void) {
     test_tarfs();
     test_alloc_free_proc();
     test_load_elf();
-    test_uvmcopy();
+    test_uvmcow_share();
     test_leak_spawn_free();
     test_namei();
     test_tarfs_inode_tree();
@@ -534,6 +780,16 @@ void selftest_run(void) {
     test_bio_basic();
     test_sbfs_namei();
     test_sbfs_rw();
+    test_pipe_basic();
+    test_pipe_close_write_eof();
+    test_pipe_alloc_free_cycle();
+    test_page_refcount();
+    test_vma_pool();
+    test_vma_insert_find();
+    test_vma_find_miss();
+    test_vma_list_dup();
+    test_vma_remove();
+    test_vma_split();
 
     printk("========================================\n");
     printk("[SELFTEST] Results: %d passed, %d failed\n", st_pass, st_fails);

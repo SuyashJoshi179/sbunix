@@ -22,3 +22,6 @@ int   chdir(const char *path);
 long  getcwd(char *buf, long n);
 int   mkdir(const char *path, int mode);
 int   unlink(const char *path);
+int   pipe(int fds[2]);
+int   execv(const char *path, char *const argv[]);
+void *sbrk(long incr);

@@ -1,14 +1,13 @@
 #pragma once
+#include <stdint.h>
 #include <vmem.h>
 
 struct pcb;
+struct vma;
 
-// Load an ELF binary image into the given user page table.
-// Maps each PT_LOAD segment at its p_vaddr.
-// Stores the ELF entry point in *entry_out.
-// Returns 0 on success, -1 on failure.
 int load_user_elf(pgtable_t pt, const void *img, unsigned long img_size,
-                  unsigned long *entry_out);
+                  unsigned long *entry_out, struct vma **vma_list_out,
+                  uint64_t *brk_out);
 
 // Allocate and fully initialize a PROC_READY user process from a tarfs path.
 // Returns the PCB on success, NULL on failure.

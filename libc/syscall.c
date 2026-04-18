@@ -108,3 +108,38 @@ int mkdir(const char *path, int mode) {
 int unlink(const char *path) {
     return (int)ecall1(22, (long)path);
 }
+
+int pipe(int fds[2]) {
+    return (int)ecall1(23, (long)fds);
+}
+
+int execv(const char *path, char *const argv[]) {
+    return (int)ecall2(24, (long)path, (long)argv);
+}
+
+void *sbrk(long incr) {
+    return (void *)ecall1(70, incr);
+}
+
+static long ecall6(long num, long a0, long a1, long a2, long a3, long a4, long a5) {
+    register long _a7 asm("a7") = num;
+    register long _a0 asm("a0") = a0;
+    register long _a1 asm("a1") = a1;
+    register long _a2 asm("a2") = a2;
+    register long _a3 asm("a3") = a3;
+    register long _a4 asm("a4") = a4;
+    register long _a5 asm("a5") = a5;
+    asm volatile("ecall"
+        : "+r"(_a0)
+        : "r"(_a7), "r"(_a1), "r"(_a2), "r"(_a3), "r"(_a4), "r"(_a5)
+        : "memory");
+    return _a0;
+}
+
+void *mmap(void *addr, long len, int prot, int flags, int fd, long off) {
+    return (void *)ecall6(71, (long)addr, len, (long)prot, (long)flags, (long)fd, off);
+}
+
+int munmap(void *addr, long len) {
+    return (int)ecall2(72, (long)addr, len);
+}

@@ -81,5 +81,6 @@ void      vmem_map(pgtable_t pgtable, unsigned long virt_addr,
 // User address-space management
 pgtable_t create_user_pgtable(void);
 void      free_user_pgtable(pgtable_t pt);
-int       map_stack(pgtable_t pt);     // maps one page at USER_STACK_TOP - PAGE_SIZE
-pgtable_t uvmcopy(pgtable_t parent);   // deep-copy user address space for fork()
+void     *map_stack(pgtable_t pt);     // maps one page at USER_STACK_TOP - PAGE_SIZE; returns kpage
+pgtable_t uvmcow_share(pgtable_t parent);  // COW share user address space for fork()
+void      uvmunmap_range(pgtable_t pt, unsigned long va_start, unsigned long va_end);

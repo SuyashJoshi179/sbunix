@@ -1,4 +1,5 @@
 #include <printk.h>
+#include <page_ref.h>
 #include <pmem.h>
 #include <vmem.h>
 #include <riscv.h>
@@ -25,6 +26,7 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
 
     pmem_init(_kernel_end, (void *)PHYMEM_END);
     vmem_init();
+    page_ref_init();
 
     // Build tarfs inode tree and mount at "/".
     tarfs_init();

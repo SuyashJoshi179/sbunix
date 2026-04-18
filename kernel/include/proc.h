@@ -3,6 +3,7 @@
 #include <vmem.h>
 #include <file.h>    // struct file, NOFILE
 #include <inode.h>   // struct inode
+#include <vma.h>
 
 #define KSTACK_SIZE PAGE_SIZE   // one 4KB page per process kernel stack
 
@@ -53,10 +54,18 @@ struct pcb {
     // 0 means "not sleeping on a deadline" (sleeping on an event instead).
     uint64_t       wake_tick;
 
+    // Channel-based sleep: non-NULL while sleeping on a specific address.
+    void          *sleep_chan;
+
     // File descriptor table (Phase 4).
     struct file   *ofile[NOFILE];   // open files; null = free slot
     struct inode  *cwd;             // current working directory (refcounted)
     char           cwd_path[256];   // string form of cwd, kept in sync by chdir
+
+    // Virtual memory areas (Phase 7)
+    struct vma    *vma_list;        // sorted VMA list head
+    struct vma    *heap_vma;        // pointer to heap VMA for fast sbrk
+    uint64_t       brk_start;       // ELF data end, page-aligned up
 
     struct pcb    *next;            // intrusive linked list
 };
@@ -76,3 +85,5 @@ int  proc_fork_current(void);
 void proc_sleep(struct pcb *p);
 void proc_sleep_ms(uint64_t ms);   // timed sleep
 void proc_wakeup(int pid);
+void proc_sleep_chan(void *chan);
+void proc_wakeup_chan(void *chan);

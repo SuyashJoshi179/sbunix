@@ -18,9 +18,10 @@ static int console_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
     for (uint64_t i = 0; i < n; ) {
         char c;
         int r = uart_rx_get(&c);
-        if (r < 0) return (int)i;   // EOF (Ctrl-D)
-        if (r == 0) {               // EOL: return accumulated bytes
-            if (i == 0) return 0;   // empty read = EOF
+        if (r == -2) return -EINTR;  // Ctrl-C
+        if (r < 0) return (int)i;    // error
+        if (r == 0) {                // EOF (Ctrl-D)
+            if (i == 0) return 0;
             return (int)i;
         }
         p[i++] = c;

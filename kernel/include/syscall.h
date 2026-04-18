@@ -30,6 +30,15 @@
 #define SYS_mkdir      21
 #define SYS_unlink     22
 
+// Phase 6: pipes and exec with argv
+#define SYS_pipe       23
+#define SYS_execv      24
+
+// Phase 7: memory management
+#define SYS_sbrk       70
+#define SYS_mmap       71
+#define SYS_munmap     72
+
 // Trap-frame word indices for registers saved by trap.S.
 // Frame layout (8 bytes per slot, from sp):
 //   offset   0: x1  (ra)
@@ -49,6 +58,8 @@
 #define TF_A1      10
 #define TF_A2      11
 #define TF_A3      12
+#define TF_A4      13
+#define TF_A5      14
 #define TF_A7      16
 #define TF_SEPC    31
 #define TF_SSTATUS 32

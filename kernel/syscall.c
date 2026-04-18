@@ -2,6 +2,8 @@
 #include <exec.h>
 #include <file.h>
 #include <inode.h>
+#include <pipe.h>
+#include <pmem.h>
 #include <printk.h>
 #include <proc.h>
 #include <riscv.h>
@@ -12,6 +14,7 @@
 #include <syscall.h>
 #include <tarfs.h>
 #include <vfs.h>
+#include <vma.h>
 #include <vmem.h>
 #include <log.h>
 #include <drivers/uart.h>
@@ -358,21 +361,86 @@ static int64_t sys_getpid(void) {
 }
 
 // ---------------------------------------------------------------------------
-// sys_exec — replace the current process image with an ELF via VFS
+// setup_user_stack — build argc/argv on a fresh user stack page.
+//
+// If argv_user is NULL, sets up an empty frame (argc=0).
+// If non-NULL, copies strings from the OLD user address space (still active
+// when called from sys_execv before switching page tables) to the new stack.
+//
+// Returns the user SP to use, or 0 on error.
 // ---------------------------------------------------------------------------
-static int64_t sys_exec(const char *path, uint64_t *trapframe) {
+static unsigned long setup_user_stack(void *kstack, char *const *argv_user) {
+    char *base = (char *)kstack;
+    char *top  = base + 4096;
+
+    if (!argv_user) {
+        uint64_t *frame = (uint64_t *)(top - 24);
+        frame[0] = 0;  // argc
+        frame[1] = 0;  // argv[0] = NULL
+        frame[2] = 0;  // envp[0] = NULL
+        return USER_STACK_TOP - 24;
+    }
+
+    // Count args and copy strings to bottom of stack page.
+    int argc = 0;
+    char *strp = base;
+    unsigned long uaddrs[32];
+
+    for (int i = 0; i < 32; i++) {
+        if (!argv_user[i]) break;
+        const char *s = argv_user[i];
+        if (!uptr_ok(s)) break;
+        int len = 0;
+        while (s[len]) len++;
+        len++; // include NUL
+        if (strp + len > top - (long)sizeof(uint64_t) * (argc + 4))
+            break; // out of space
+        for (int j = 0; j < len; j++) strp[j] = s[j];
+        // Compute the user VA for this string
+        uaddrs[argc] = (USER_STACK_TOP - 4096) + (unsigned long)(strp - base);
+        strp += len;
+        argc++;
+    }
+
+    // Build frame at top of page (growing down):
+    // [argc] [argv[0]] ... [argv[argc-1]] [NULL] [NULL(envp)]
+    int nslots = 1 + argc + 1 + 1;  // argc + pointers + NULL + envp NULL
+    uint64_t *frame = (uint64_t *)(top - nslots * 8);
+    // Alignment
+    frame = (uint64_t *)((unsigned long)frame & ~7UL);
+
+    frame[0] = (uint64_t)argc;
+    for (int i = 0; i < argc; i++)
+        frame[1 + i] = uaddrs[i];
+    frame[1 + argc] = 0;  // argv[argc] = NULL
+    frame[2 + argc] = 0;  // envp[0] = NULL
+
+    unsigned long frame_off = (unsigned long)((char *)frame - base);
+    return (USER_STACK_TOP - 4096) + frame_off;
+}
+
+// ---------------------------------------------------------------------------
+// do_exec — shared exec logic for both SYS_exec and SYS_execv
+// ---------------------------------------------------------------------------
+static int64_t do_exec(const char *path, char *const *argv_user,
+                       uint64_t *trapframe) {
     struct pcb *p = current_proc();
     if (!p || !p->is_user) return -1;
     if (!uptr_ok(path)) return -EFAULT;
 
+    // Copy path to kernel buffer before we switch page tables.
+    char kpath[128];
+    int pi = 0;
+    while (path[pi] && pi < 126) { kpath[pi] = path[pi]; pi++; }
+    kpath[pi] = 0;
+
     // Resolve through VFS.
     struct inode *ip;
-    if (namei(path, &ip) < 0) {
-        printk("exec: '%s' not found\n", path);
+    if (namei(kpath, &ip) < 0) {
+        printk("exec: '%s' not found\n", kpath);
         return -ENOENT;
     }
     unsigned long img_sz = ip->size;
-    // tarfs: direct data pointer via fs_data.
     struct { const char *data; unsigned long file_size; } *td = ip->fs_data;
     const void *img = td->data;
     inode_put(ip);
@@ -382,28 +450,176 @@ static int64_t sys_exec(const char *path, uint64_t *trapframe) {
     pgtable_t new_pt = create_user_pgtable();
     if (!new_pt) return -ENOMEM;
 
+    struct vma *vlist = 0;
+    uint64_t brk = 0;
     unsigned long entry;
-    if (load_user_elf(new_pt, img, img_sz, &entry) < 0) {
+    if (load_user_elf(new_pt, img, img_sz, &entry, &vlist, &brk) < 0) {
         free_user_pgtable(new_pt);
         return -1;
     }
-    if (map_stack(new_pt) < 0) {
+    void *kstack = map_stack(new_pt);
+    if (!kstack) {
+        vma_list_free(&vlist);
         free_user_pgtable(new_pt);
         return -1;
     }
 
+    // Build user stack (copies argv strings from OLD address space before switch)
+    unsigned long new_sp = setup_user_stack(kstack, argv_user);
+    if (new_sp == 0) {
+        vma_list_free(&vlist);
+        free_user_pgtable(new_pt);
+        return -ENOMEM;
+    }
+
+    // Heap VMA (zero-length initially)
+    struct vma *heap_vma = vma_alloc();
+    if (!heap_vma) {
+        vma_list_free(&vlist);
+        free_user_pgtable(new_pt);
+        return -ENOMEM;
+    }
+    heap_vma->start = brk;
+    heap_vma->end   = brk;
+    heap_vma->prot  = VMA_PROT_R | VMA_PROT_W;
+    heap_vma->type  = VMA_TYPE_HEAP;
+    vma_insert(&vlist, heap_vma);
+
+    // Stack VMA
+    struct vma *stack_vma = vma_alloc();
+    if (!stack_vma) {
+        vma_list_free(&vlist);
+        free_user_pgtable(new_pt);
+        return -ENOMEM;
+    }
+    stack_vma->start = USER_STACK_TOP - 4096;
+    stack_vma->end   = USER_STACK_TOP;
+    stack_vma->prot  = VMA_PROT_R | VMA_PROT_W;
+    stack_vma->type  = VMA_TYPE_STACK;
+    vma_insert(&vlist, stack_vma);
+
+    // Free old VMAs and page table
+    vma_list_free(&p->vma_list);
     pgtable_t old_pt = p->pagetable;
+
     p->pagetable  = new_pt;
     p->user_entry = entry;
-    p->user_sp    = USER_STACK_TOP;
+    p->user_sp    = new_sp;
+    p->vma_list   = vlist;
+    p->heap_vma   = heap_vma;
+    p->brk_start  = brk;
 
     trapframe[TF_SEPC] = entry;
-    write_sscratch(USER_STACK_TOP);
+    trapframe[1] = new_sp;   // x2 = sp
     write_satp(make_satp(new_pt));
     flush_tlb();
     free_user_pgtable(old_pt);
 
-    printk("exec: '%s' loaded, entry=0x%lx\n", path, entry);
+    printk("exec: '%s' loaded, entry=0x%lx sp=0x%lx\n", kpath, entry, new_sp);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sys_sbrk
+// ---------------------------------------------------------------------------
+static int64_t sys_sbrk(int64_t incr) {
+    struct pcb *p = current_proc();
+    if (!p || !p->heap_vma) return -1;
+
+    uint64_t old_end = p->heap_vma->end;
+    uint64_t new_end = old_end + (uint64_t)incr;
+
+    if (incr > 0) {
+        if (new_end > HEAP_MAX) return -ENOMEM;
+        p->heap_vma->end = new_end;
+    } else if (incr < 0) {
+        if (new_end < p->heap_vma->start) return -EINVAL;
+        uvmunmap_range(p->pagetable, new_end, old_end);
+        p->heap_vma->end = new_end;
+    }
+
+    return (int64_t)old_end;
+}
+
+// ---------------------------------------------------------------------------
+// sys_mmap
+// ---------------------------------------------------------------------------
+#define MAP_ANON    0x20
+#define PROT_READ   0x1
+#define PROT_WRITE  0x2
+
+static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
+                        int fd, int64_t off) {
+    (void)addr;
+    struct pcb *p = current_proc();
+    if (!p) return -1;
+    if (len == 0) return -EINVAL;
+    if (!(flags & MAP_ANON) || fd != -1 || off != 0) return -EINVAL;
+
+    len = page_round_up(len);
+
+    uint64_t search = MMAP_END - len;
+    while (search >= MMAP_START) {
+        int overlap = 0;
+        for (struct vma *v = p->vma_list; v; v = v->next) {
+            if (v->start < search + len && v->end > search) {
+                if (v->start < MMAP_START) { overlap = 1; break; }
+                search = (v->start >= len) ? v->start - len : 0;
+                overlap = 1;
+                break;
+            }
+        }
+        if (!overlap) break;
+        if (search < MMAP_START) return -ENOMEM;
+    }
+    if (search < MMAP_START) return -ENOMEM;
+
+    struct vma *v = vma_alloc();
+    if (!v) return -ENOMEM;
+    v->start = search;
+    v->end   = search + len;
+    v->prot  = 0;
+    if (prot & PROT_READ)  v->prot |= VMA_PROT_R;
+    if (prot & PROT_WRITE) v->prot |= VMA_PROT_W;
+    v->type = VMA_TYPE_ANON;
+    vma_insert(&p->vma_list, v);
+
+    return (int64_t)search;
+}
+
+// ---------------------------------------------------------------------------
+// sys_munmap
+// ---------------------------------------------------------------------------
+static int64_t sys_munmap(uint64_t addr, uint64_t len) {
+    struct pcb *p = current_proc();
+    if (!p) return -1;
+    if (addr & (PAGE_SIZE - 1)) return -EINVAL;
+    if (len == 0) return -EINVAL;
+    len = page_round_up(len);
+
+    struct vma *v = vma_find(p->vma_list, addr);
+    if (!v) return -EINVAL;
+    if (addr + len > v->end) return -EINVAL;
+
+    uvmunmap_range(p->pagetable, addr, addr + len);
+    vma_split(&p->vma_list, v, addr, addr + len);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sys_pipe
+// ---------------------------------------------------------------------------
+static int64_t sys_pipe(int *fds) {
+    if (!uptr_ok(fds)) return -EFAULT;
+    struct file *rf = 0, *wf = 0;
+    if (pipe_alloc(&rf, &wf) < 0) return -ENOMEM;
+    struct pcb *p = current_proc();
+    int fd0 = alloc_fd(p, rf);
+    if (fd0 < 0) { fileclose(rf); fileclose(wf); return -EMFILE; }
+    int fd1 = alloc_fd(p, wf);
+    if (fd1 < 0) { p->ofile[fd0] = 0; fileclose(rf); fileclose(wf); return -EMFILE; }
+    fds[0] = fd0;
+    fds[1] = fd1;
     return 0;
 }
 
@@ -467,7 +683,11 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
             return sys_getpid();
 
         case SYS_exec:
-            return sys_exec((const char *)trapframe[TF_A0], trapframe);
+            return do_exec((const char *)trapframe[TF_A0], 0, trapframe);
+
+        case SYS_execv:
+            return do_exec((const char *)trapframe[TF_A0],
+                           (char *const *)trapframe[TF_A1], trapframe);
 
         case SYS_fork:
             return sys_fork();
@@ -519,6 +739,22 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_unlink:
             return sys_unlink((const char *)trapframe[TF_A0]);
+
+        case SYS_pipe:
+            return sys_pipe((int *)trapframe[TF_A0]);
+
+        case SYS_sbrk:
+            return sys_sbrk((int64_t)trapframe[TF_A0]);
+
+        case SYS_mmap:
+            return sys_mmap(trapframe[TF_A0], trapframe[TF_A1],
+                            (int)(int64_t)trapframe[TF_A2],
+                            (int)(int64_t)trapframe[TF_A3],
+                            (int)(int64_t)trapframe[TF_A4],
+                            (int64_t)trapframe[TF_A5]);
+
+        case SYS_munmap:
+            return sys_munmap(trapframe[TF_A0], trapframe[TF_A1]);
 
         default:
             printk("syscall: unknown number %lu from pid %d\n",
