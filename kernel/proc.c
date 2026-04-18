@@ -1,10 +1,12 @@
 #include <exec.h>
+#include <errno.h>
 #include <file.h>
 #include <inode.h>
 #include <pmem.h>
 #include <printk.h>
 #include <proc.h>
 #include <riscv.h>
+#include <signal.h>
 #include <string.h>
 #include <syscall.h>
 #include <timer.h>
@@ -58,6 +60,18 @@ struct pcb *alloc_proc(void) {
     p->heap_vma   = 0;
     p->brk_start  = 0;
     p->next       = 0;
+
+    p->sig_pending    = 0;
+    p->sig_blocked    = 0;
+    p->sig_saved_mask = 0;
+    p->in_sighandler  = 0;
+    p->delivering_segv= 0;
+    for (int i = 0; i < NSIG; i++) {
+        p->sig_handlers[i].sa_handler  = SIG_DFL;
+        p->sig_handlers[i].sa_mask     = 0;
+        p->sig_handlers[i].sa_flags    = 0;
+        p->sig_handlers[i].sa_restorer = 0;
+    }
 
     // context is zeroed by page_alloc; set sp and ra
     p->context.sp = (uint64_t)p->kstack_page + KSTACK_SIZE;
@@ -204,6 +218,14 @@ int proc_fork_current(void) {
     child->parent_pid = parent->pid;
     child->brk_start  = parent->brk_start;
 
+    /* Inherit signal handlers and mask; child starts with no pending signals. */
+    for (int i = 0; i < NSIG; i++)
+        child->sig_handlers[i] = parent->sig_handlers[i];
+    child->sig_blocked    = parent->sig_blocked;
+    child->sig_pending    = 0;
+    child->in_sighandler  = 0;
+    child->delivering_segv= 0;
+
     child->vma_list = vma_list_dup(parent->vma_list);
     child->heap_vma = 0;
     for (struct vma *v = child->vma_list; v; v = v->next) {
@@ -305,7 +327,8 @@ void proc_exit_current(int status) {
             it->parent_pid = 1;
     }
 
-    // Wake parent if it's sleeping in wait
+    // Notify parent: send SIGCHLD, then wake it if sleeping in wait
+    send_signal_by_pid(p->parent_pid, SIGCHLD);
     proc_wakeup(p->parent_pid);
 
     p->state = PROC_ZOMBIE;
@@ -318,7 +341,7 @@ void proc_exit_current(int status) {
 // ----------------------------------------------------------------
 
 int proc_wait_current(int *status) {
-    if (current == 0) return -1;
+    if (current == 0) return -ECHILD;
 
     while (1) {
         int found_child = 0;
@@ -334,7 +357,13 @@ int proc_wait_current(int *status) {
             }
         }
 
-        if (!found_child) return -1;   // no children at all
+        if (!found_child) return -ECHILD;   // no children at all
+
+        // If interrupted by an actionable signal while no child is ready,
+        // report EINTR. Reaping always takes priority when a zombie exists.
+        // SIGCHLD is default-ignored, so it does not interrupt wait().
+        if (sig_has_actionable(current))
+            return -EINTR;
 
         // Sleep until a child exits
         proc_sleep(current);

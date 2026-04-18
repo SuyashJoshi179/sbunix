@@ -10,9 +10,12 @@
 #include <proc.h>
 #include <sbfs.h>
 #include <selftest.h>
+#include <signal.h>
 #include <stat.h>
 #include <string.h>
 #include <tarfs.h>
+#include <termios.h>
+#include <timer.h>
 #include <vfs.h>
 #include <vma.h>
 #include <vmem.h>
@@ -759,6 +762,62 @@ static void test_vma_split(void) {
 }
 
 // ----------------------------------------------------------------------------
+// Phase 8 selftests
+// ----------------------------------------------------------------------------
+
+static void test_signal_defaults(void) {
+    printk("[SELFTEST] -- signal defaults --\n");
+
+    struct pcb *p = alloc_proc();
+    st_check(p != 0, "signal_defaults: alloc proc");
+    if (!p) return;
+
+    st_check(p->sig_pending == 0, "signal_defaults: pending is zero");
+    st_check(p->sig_blocked == 0, "signal_defaults: blocked is zero");
+    st_check(p->sig_saved_mask == 0, "signal_defaults: saved mask is zero");
+    st_check(p->sig_handlers[SIGTERM].sa_handler == SIG_DFL,
+             "signal_defaults: SIGTERM handler is SIG_DFL");
+    st_check(p->sig_handlers[SIGCHLD].sa_handler == SIG_DFL,
+             "signal_defaults: SIGCHLD handler is SIG_DFL");
+
+    free_proc(p);
+}
+
+static void test_signal_pending_bitops(void) {
+    printk("[SELFTEST] -- signal pending bitops --\n");
+    sigset_t pending = 0;
+    sigset_t blocked = 0;
+
+    pending |= (1ULL << SIGTERM);
+    st_check(sig_has_pending(pending, blocked), "signal_bitops: deliverable when unblocked");
+
+    blocked |= (1ULL << SIGTERM);
+    st_check(!sig_has_pending(pending, blocked), "signal_bitops: masked when blocked");
+
+    blocked &= ~(1ULL << SIGTERM);
+    st_check(sig_has_pending(pending, blocked), "signal_bitops: deliverable again after unblock");
+}
+
+static void test_termios_defaults(void) {
+    printk("[SELFTEST] -- termios defaults --\n");
+
+    struct termios t;
+    termios_get(&t);
+    st_check((t.c_lflag & (ISIG | ICANON | ECHO)) == (ISIG | ICANON | ECHO),
+             "termios_defaults: lflag has ISIG|ICANON|ECHO");
+    st_check((t.c_iflag & ICRNL) != 0, "termios_defaults: ICRNL set");
+    st_check(t.c_cc[VINTR] == 0x03, "termios_defaults: VINTR is Ctrl-C");
+    st_check(t.c_cc[VEOF] == 0x04, "termios_defaults: VEOF is Ctrl-D");
+}
+
+static void test_time_monotonic_basic(void) {
+    printk("[SELFTEST] -- time monotonic basic --\n");
+    uint64_t t1 = timer_ticks();
+    uint64_t t2 = timer_ticks();
+    st_check(t2 >= t1, "time_monotonic: timer_ticks non-decreasing");
+}
+
+// ----------------------------------------------------------------------------
 // Entry point
 // ----------------------------------------------------------------------------
 
@@ -790,6 +849,10 @@ void selftest_run(void) {
     test_vma_list_dup();
     test_vma_remove();
     test_vma_split();
+    test_signal_defaults();
+    test_signal_pending_bitops();
+    test_termios_defaults();
+    test_time_monotonic_basic();
 
     printk("========================================\n");
     printk("[SELFTEST] Results: %d passed, %d failed\n", st_pass, st_fails);

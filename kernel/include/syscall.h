@@ -39,6 +39,29 @@
 #define SYS_mmap       71
 #define SYS_munmap     72
 
+// Phase 8a: time
+#define SYS_clock_gettime  80   // (clockid, struct timespec *)
+#define SYS_gettimeofday   81   // (struct timeval *, NULL)
+#define SYS_nanosleep      82   // (const struct timespec *req, struct timespec *rem)
+
+// Phase 8b: signals
+#define SYS_kill           90   // (pid, sig)
+#define SYS_sigaction      91   // (sig, const struct sigaction *act, struct sigaction *oldact)
+#define SYS_sigprocmask    92   // (how, const sigset_t *set, sigset_t *oldset)
+#define SYS_sigreturn      93   // ()
+#define SYS_pause          94   // ()
+
+// Phase 8a: uid/gid stubs
+#define SYS_getuid        100
+#define SYS_geteuid       101
+#define SYS_getgid        102
+#define SYS_getegid       103
+#define SYS_setuid        104   // (uid)
+#define SYS_setgid        105   // (gid)
+
+// Phase 8c: ioctl
+#define SYS_ioctl         110   // (fd, cmd, arg)
+
 // Trap-frame word indices for registers saved by trap.S.
 // Frame layout (8 bytes per slot, from sp):
 //   offset   0: x1  (ra)
@@ -54,6 +77,7 @@
 //   ...
 //   offset 248: sepc       → TF_SEPC
 //   offset 256: sstatus    → TF_SSTATUS
+#define TF_RA       0   /* x1 = ra */
 #define TF_A0       9
 #define TF_A1      10
 #define TF_A2      11

@@ -2,6 +2,7 @@
 #include <file.h>
 #include <proc.h>
 #include <errno.h>
+#include <signal.h>
 #include <string.h>
 
 #define NPIPE 8
@@ -53,8 +54,11 @@ int pipe_alloc(struct file **rf, struct file **wf) {
 }
 
 int pipe_read(struct pipe *p, char *buf, int n) {
-    while (p->nread == p->nwrite && p->writeopen)
+    while (p->nread == p->nwrite && p->writeopen) {
         proc_sleep_chan(p);
+        if (sig_has_actionable(current_proc()))
+            return -EINTR;
+    }
 
     int i;
     for (i = 0; i < n; i++) {
@@ -72,13 +76,19 @@ int pipe_write(struct pipe *p, const char *buf, int n) {
     int i;
     for (i = 0; i < n; i++) {
         while (p->nwrite == p->nread + PIPESIZE) {
-            if (!p->readopen)
+            if (!p->readopen) {
+                send_signal(current_proc(), SIGPIPE);
                 return -EPIPE;
+            }
             proc_wakeup_chan(p);
             proc_sleep_chan(p);
+            if (sig_has_actionable(current_proc()))
+                return i > 0 ? i : -EINTR;
         }
-        if (!p->readopen)
+        if (!p->readopen) {
+            send_signal(current_proc(), SIGPIPE);
             return -EPIPE;
+        }
         p->data[p->nwrite % PIPESIZE] = buf[i];
         p->nwrite++;
     }

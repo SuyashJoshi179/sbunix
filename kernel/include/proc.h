@@ -4,6 +4,7 @@
 #include <file.h>    // struct file, NOFILE
 #include <inode.h>   // struct inode
 #include <vma.h>
+#include <signal.h>  // sigset_t, struct sigaction, NSIG
 
 #define KSTACK_SIZE PAGE_SIZE   // one 4KB page per process kernel stack
 
@@ -66,6 +67,14 @@ struct pcb {
     struct vma    *vma_list;        // sorted VMA list head
     struct vma    *heap_vma;        // pointer to heap VMA for fast sbrk
     uint64_t       brk_start;       // ELF data end, page-aligned up
+
+    // Signals (Phase 8)
+    sigset_t       sig_pending;     // bitmap of pending signals
+    sigset_t       sig_blocked;     // bitmap of blocked signals (never has SIGKILL/SIGSTOP)
+    sigset_t       sig_saved_mask;  // mask saved by signal delivery, restored by sigreturn
+    struct sigaction sig_handlers[NSIG];
+    uint8_t        in_sighandler;   // 1 while a user signal handler is running
+    uint8_t        delivering_segv; // guard against recursive SIGSEGV default-kill
 
     struct pcb    *next;            // intrusive linked list
 };

@@ -143,3 +143,7 @@ void *mmap(void *addr, long len, int prot, int flags, int fd, long off) {
 int munmap(void *addr, long len) {
     return (int)ecall2(72, (long)addr, len);
 }
+
+int ioctl(int fd, int cmd, void *arg) {
+    return (int)ecall3(110, (long)fd, (long)cmd, (long)arg);
+}

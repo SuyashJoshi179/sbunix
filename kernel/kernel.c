@@ -12,6 +12,7 @@
 #include <vfs.h>
 #include <bio.h>
 #include <sbfs.h>
+#include <termios.h>
 #include <drivers/uart.h>
 #include <drivers/plic.h>
 #include <drivers/virtio.h>
@@ -37,6 +38,7 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
 
     // Mount synthetic /dev with /dev/console.
     devfs_init();
+    termios_init();
 
     // Phase 5: initialise buffer cache and VirtIO block device.
     binit();

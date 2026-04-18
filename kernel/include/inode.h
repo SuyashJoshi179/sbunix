@@ -7,6 +7,7 @@ struct stat;
 struct inode_ops {
     int  (*read)    (struct inode *, uint64_t off, void *buf, uint64_t n);
     int  (*write)   (struct inode *, uint64_t off, const void *buf, uint64_t n);
+    int  (*ioctl)   (struct inode *, int cmd, unsigned long arg);
     int  (*stat)    (struct inode *, struct stat *);
     int  (*lookup)  (struct inode *dir, const char *name, struct inode **out);
     int  (*getdents)(struct inode *dir, uint64_t off, void *buf, uint64_t n,

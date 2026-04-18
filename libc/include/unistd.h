@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 long  write(int fd, const void *buf, long len);
 long  read(int fd, void *buf, long len);
@@ -25,3 +26,11 @@ int   unlink(const char *path);
 int   pipe(int fds[2]);
 int   execv(const char *path, char *const argv[]);
 void *sbrk(long incr);
+
+/* uid/gid stubs */
+uid_t getuid(void);
+uid_t geteuid(void);
+gid_t getgid(void);
+gid_t getegid(void);
+int   setuid(uid_t uid);
+int   setgid(gid_t gid);
