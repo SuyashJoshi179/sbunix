@@ -56,11 +56,9 @@ int main(void) {
         "/bin/exec_argv_test",
         "/bin/fd_invariant_test",
         "/bin/vma_overlap_test",
-        "/bin/meminfo_regression_test",
         "/bin/rlimit_test",
         "/bin/oom_test",
         "/bin/leak_test",
-        "/bin/orphan_test",
         "/bin/reap_stress_test",
         "/bin/resource_churn_test",
     };

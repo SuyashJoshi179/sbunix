@@ -349,7 +349,8 @@ void proc_exit_current(int status) {
     struct pcb *p = current;
     p->exit_status = status;
 
-    // Reparent children to init (pid 1) so they get reaped
+    // Safe unlocked on single-hart: only scheduler-context code mutates
+    // the process list, and proc_exit_current runs in scheduler context.
     int reparented_any = 0;
     for (struct pcb *it = procs; it; it = it->next) {
         if (it->parent_pid == p->pid) {

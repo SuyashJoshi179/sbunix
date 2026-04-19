@@ -349,7 +349,7 @@ static int64_t sys_dup2(int oldfd, int newfd) {
 
     if (oldfd == newfd) return newfd;
 
-    if (newfd >= proc_fd_limit(p)) return -EMFILE;
+    if (newfd >= proc_fd_limit(p)) return -EBADF;
     if (!p->ofile[newfd] && proc_open_fd_count(p) >= proc_fd_limit(p))
         return -EMFILE;
 
