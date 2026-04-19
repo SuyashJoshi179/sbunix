@@ -5,6 +5,7 @@
 #include <syscall.h>
 #include <proc.h>
 #include <vma.h>
+#include <signal.h>
 #include <drivers/plic.h>
 #include <drivers/uart.h>
 #include <drivers/virtio.h>
@@ -66,27 +67,33 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
     }
 
     // Exception — check cause_code
+    int from_user = (trapframe[TF_SSTATUS] & SSTATUS_SPP) == 0;
+
     if (cause_code == 8) {
         // U-mode ecall: advance sepc past the ecall before dispatching so
         // that yield() inside a syscall resumes at the instruction after ecall.
         trapframe[TF_SEPC] += 4;
         int64_t ret = syscall_dispatch(trapframe[TF_A7], trapframe);
         trapframe[TF_A0] = (uint64_t)ret;
+        check_signals(trapframe);
         return;
     }
 
     // For faults from U-mode, kill only the faulting process.
     // For faults from S-mode, it is a kernel bug — panic.
-    int from_user = (trapframe[TF_SSTATUS] & SSTATUS_SPP) == 0;
     if (from_user && is_user_fault(cause_code)) {
         if (cause_code == 12 || cause_code == 13 || cause_code == 15) {
-            if (user_page_fault(cause_code, stval, trapframe) == 0)
+            if (user_page_fault(cause_code, stval, trapframe) == 0) {
+                check_signals(trapframe);
                 return;
+            }
         }
         struct pcb *p = current_proc();
         printk("[trap] pid=%d killed by fault: scause=%lx sepc=%lx stval=%lx\n",
                p ? p->pid : -1, scause, sepc, stval);
-        proc_exit_current(-14);
+        send_signal(p, SIGSEGV);
+        check_signals(trapframe);
+        return;
     }
 
     printk("PANIC: kernel exception scause=%lx sepc=%lx stval=%lx\n",

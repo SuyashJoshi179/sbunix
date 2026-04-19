@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <unistd.h>
 
 int main(void) {
@@ -39,6 +40,17 @@ int main(void) {
         "/bin/pipe_stress_test",
         "/bin/exec_reset_test",
         "/bin/comprehensive_test",
+        /* Phase 8a: time + uid/gid */
+        "/bin/time_test",
+        "/bin/date",
+        "/bin/uid_test",
+        /* Phase 8b/8c: signals + termios */
+        "/bin/signal_test",
+        "/bin/sigchld_test",
+        "/bin/sigpipe_test",
+        "/bin/sigsegv_handler_test",
+        "/bin/eintr_test",
+        "/bin/termios_test",
     };
     int ntests = (int)(sizeof(tests) / sizeof(tests[0]));
 
@@ -50,8 +62,16 @@ int main(void) {
             printf("init: exec '%s' failed\n", tests[i]);
             exit(1);
         }
-        int status;
-        wait(&status);
+        int status = -1;
+        while (1) {
+            int got = wait(&status);
+            if (got == pid) break;
+            if (got == -EINTR) continue;
+            if (got < 0) {
+                status = 1;
+                break;
+            }
+        }
         if (status == 0) {
             pass++;
         } else {
@@ -69,6 +89,11 @@ int main(void) {
             printf("init: exec /bin/sh failed\n");
             exit(1);
         }
-        wait(0);
+        while (1) {
+            int got = wait(0);
+            if (got == pid) break;
+            if (got == -EINTR) continue;
+            if (got < 0) break;
+        }
     }
 }

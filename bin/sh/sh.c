@@ -1,5 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <signal.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
@@ -9,7 +13,7 @@
 #define MAXARG  16
 
 // Token types
-enum { T_WORD, T_PIPE, T_REDIR_IN, T_REDIR_OUT, T_REDIR_APPEND, T_END };
+enum { T_WORD, T_PIPE, T_REDIR_IN, T_REDIR_OUT, T_REDIR_APPEND, T_AND, T_END };
 
 struct token {
     int  type;
@@ -20,9 +24,25 @@ static char linebuf[MAXLINE];
 static struct token tokens[MAXTOK];
 static int ntokens;
 
+static volatile int shell_interrupted;
+
+static void on_sigint(int sig) {
+    (void)sig;
+    shell_interrupted = 1;
+}
+
+static void set_console_fg(int pid) {
+    ioctl(0, TIOCSPGRP, &pid);
+}
+
 static int readline(void) {
     write(2, "sh> ", 4);
     long n = read(0, linebuf, MAXLINE - 1);
+    if (n == -EINTR) {
+        linebuf[0] = 0;
+        write(2, "\n", 1);
+        return 0;
+    }
     if (n <= 0) return -1;
     if (n > 0 && linebuf[n - 1] == '\n') n--;
     linebuf[n] = 0;
@@ -44,6 +64,10 @@ static void tokenize(void) {
             tokens[ntokens].type = T_PIPE;
             tokens[ntokens].val = 0;
             ntokens++; p++;
+        } else if (*p == '&' && p[1] == '&') {
+            tokens[ntokens].type = T_AND;
+            tokens[ntokens].val = 0;
+            ntokens++; p += 2;
         } else if (*p == '<') {
             tokens[ntokens].type = T_REDIR_IN;
             tokens[ntokens].val = 0;
@@ -119,6 +143,20 @@ static int parse_cmd(int start, char **argv, int *argc_out,
 
 static char pathbuf[128];
 
+static int parse_int(const char *s) {
+    int sign = 1;
+    int v = 0;
+    if (*s == '-') {
+        sign = -1;
+        s++;
+    }
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (*s - '0');
+        s++;
+    }
+    return sign * v;
+}
+
 static char *resolve_path(const char *cmd) {
     if (cmd[0] == '/' || cmd[0] == '.') return (char *)cmd;
     // Try /bin/cmd
@@ -168,7 +206,7 @@ static void run_simple(char **argv, int argc, char *redir_in, char *redir_out,
 
 // Execute the pipeline starting from token index `start`.
 // If `in_fd` >= 0, stdin has been redirected to that fd.
-static void run_pipeline(int start, int in_fd) {
+static int run_pipeline(int start, int in_fd) {
     char *argv[MAXARG];
     int argc;
     char *redir_in, *redir_out;
@@ -182,7 +220,7 @@ static void run_pipeline(int start, int in_fd) {
         int pfd[2];
         if (pipe(pfd) < 0) {
             printf("sh: pipe failed\n");
-            return;
+            return 1;
         }
 
         int pid = fork();
@@ -195,28 +233,51 @@ static void run_pipeline(int start, int in_fd) {
             run_simple(argv, argc, redir_in, 0, 0);
         }
 
+        set_console_fg(pid);
+
         close(pfd[1]);
         if (in_fd >= 0) close(in_fd);
 
-        run_pipeline(next + 1, pfd[0]);
+        int st = run_pipeline(next + 1, pfd[0]);
         wait(0);
+        return st;
     } else {
         int pid = fork();
         if (pid == 0) {
             if (in_fd >= 0) { close(0); dup(in_fd); close(in_fd); }
             run_simple(argv, argc, redir_in, redir_out, append);
         }
+        set_console_fg(pid);
         if (in_fd >= 0) close(in_fd);
-        wait(0);
+        int st = 0;
+        for (;;) {
+            int r = wait(&st);
+            if (r >= 0) break;
+        }
+        return st;
     }
 }
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
+    struct sigaction sa;
+    sa.sa_handler = on_sigint;
+    sa.sa_mask = 0;
+    sa.sa_flags = 0;
+    sa.sa_restorer = 0;
+    sigaction(SIGINT, &sa, 0);
+
+    set_console_fg(getpid());
+
     while (1) {
-        if (readline() < 0) break;
+        int rl = readline();
+        if (rl < 0) break;
         if (linebuf[0] == 0) continue;
+
+        if (shell_interrupted) {
+            shell_interrupted = 0;
+        }
 
         tokenize();
         if (ntokens == 0) continue;
@@ -236,6 +297,24 @@ int main(int argc, char **argv) {
             char cwdbuf[256];
             if (getcwd(cwdbuf, sizeof(cwdbuf)) >= 0)
                 printf("%s\n", cwdbuf);
+            continue;
+        }
+
+        if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "kill") == 0) {
+            int sig = SIGTERM;
+            int argi = 1;
+            if (ntokens > 2 && tokens[1].type == T_WORD && tokens[1].val[0] == '-') {
+                sig = parse_int(tokens[1].val + 1);
+                argi = 2;
+            }
+            if (argi >= ntokens || tokens[argi].type != T_WORD) {
+                printf("usage: kill [-sig] <pid>\n");
+                continue;
+            }
+            int pid = parse_int(tokens[argi].val);
+            int rc = kill(pid, sig);
+            if (rc < 0)
+                printf("kill: failed (%d)\n", rc);
             continue;
         }
 
@@ -262,7 +341,24 @@ int main(int argc, char **argv) {
             }
         }
 
-        run_pipeline(0, -1);
+        int cmd_start = 0;
+        int last_status = 0;
+
+        for (int i = 0;; i++) {
+            if (tokens[i].type == T_AND || tokens[i].type == T_END) {
+                int saved = tokens[i].type;
+                tokens[i].type = T_END;
+                last_status = run_pipeline(cmd_start, -1);
+                tokens[i].type = saved;
+                set_console_fg(getpid());
+
+                if (saved == T_END)
+                    break;
+                if (last_status != 0)
+                    break;
+                cmd_start = i + 1;
+            }
+        }
     }
 
     return 0;

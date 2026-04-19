@@ -37,3 +37,4 @@ int          fileread(struct file *f, void *dst, uint64_t n);
 int          filewrite(struct file *f, const void *src, uint64_t n);
 int          filestat(struct file *f, struct stat *st);
 int          fileseek(struct file *f, int64_t off, int whence);
+int          fileioctl(struct file *f, int cmd, unsigned long arg);

@@ -116,3 +116,10 @@ int fileseek(struct file *f, int64_t off, int whence) {
     f->off = (uint64_t)newoff;
     return (int)newoff;
 }
+
+int fileioctl(struct file *f, int cmd, unsigned long arg) {
+    if (!f) return -EBADF;
+    if (f->type != FD_INODE || !f->ip) return -ENOTTY;
+    if (!f->ip->ops || !f->ip->ops->ioctl) return -ENOTTY;
+    return f->ip->ops->ioctl(f->ip, cmd, arg);
+}

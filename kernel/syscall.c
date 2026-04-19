@@ -8,11 +8,14 @@
 #include <proc.h>
 #include <riscv.h>
 #include <sbfs.h>
+#include <signal.h>
 #include <stat.h>
 #include <stdint.h>
 #include <string.h>
 #include <syscall.h>
 #include <tarfs.h>
+#include <time.h>
+#include <timer.h>
 #include <vfs.h>
 #include <vma.h>
 #include <vmem.h>
@@ -515,6 +518,17 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     flush_tlb();
     free_user_pgtable(old_pt);
 
+    /* Reset caught signals to SIG_DFL; preserve mask and pending. */
+    for (int i = 1; i < NSIG; i++) {
+        if (p->sig_handlers[i].sa_handler != SIG_IGN)
+            p->sig_handlers[i].sa_handler = SIG_DFL;
+        p->sig_handlers[i].sa_restorer = 0;
+        p->sig_handlers[i].sa_mask     = 0;
+        p->sig_handlers[i].sa_flags    = 0;
+    }
+    p->in_sighandler   = 0;
+    p->delivering_segv = 0;
+
     printk("exec: '%s' loaded, entry=0x%lx sp=0x%lx\n", kpath, entry, new_sp);
     return 0;
 }
@@ -655,6 +669,90 @@ static int64_t sys_sleep(uint64_t ms) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_clock_gettime
+// ---------------------------------------------------------------------------
+static int64_t sys_clock_gettime(int clockid, struct timespec *ts) {
+    if (!uptr_ok(ts)) return -EFAULT;
+    if (clockid != CLOCK_REALTIME && clockid != CLOCK_MONOTONIC) return -EINVAL;
+    uint64_t ticks = timer_ticks();
+    ts->tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
+    ts->tv_nsec = (int64_t)((ticks % TICKS_PER_SEC) * (1000000000UL / TICKS_PER_SEC));
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sys_gettimeofday
+// ---------------------------------------------------------------------------
+static int64_t sys_gettimeofday(struct timeval *tv, void *tz) {
+    (void)tz;
+    if (!uptr_ok(tv)) return -EFAULT;
+    uint64_t ticks = timer_ticks();
+    tv->tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
+    tv->tv_usec = (int64_t)((ticks % TICKS_PER_SEC) * (1000000UL / TICKS_PER_SEC));
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sys_nanosleep — basic version; -EINTR added in Phase 8b once signals land
+// ---------------------------------------------------------------------------
+static int64_t sys_nanosleep(const struct timespec *req, struct timespec *rem) {
+    if (!uptr_ok(req)) return -EFAULT;
+    if (req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000LL)
+        return -EINVAL;
+
+    struct pcb *p = current_proc();
+    if (!p) return -EINVAL;
+
+    uint64_t total_ticks = (uint64_t)req->tv_sec * (uint64_t)TICKS_PER_SEC
+                         + ((uint64_t)req->tv_nsec * (uint64_t)TICKS_PER_SEC) / 1000000000ULL;
+    if (total_ticks == 0 && req->tv_nsec > 0) total_ticks = 1;
+
+    uint64_t start = timer_ticks();
+    uint64_t wake  = start + total_ticks;
+
+    while (timer_ticks() < wake) {
+        p->wake_tick = wake;
+        proc_sleep(p);
+        if (sig_has_actionable(p)) {
+            uint64_t now = timer_ticks();
+            uint64_t rem_ticks = (now >= wake) ? 0 : (wake - now);
+            if (rem && uptr_ok(rem)) {
+                rem->tv_sec  = (int64_t)(rem_ticks / TICKS_PER_SEC);
+                rem->tv_nsec = (int64_t)((rem_ticks % TICKS_PER_SEC) * (1000000000ULL / TICKS_PER_SEC));
+            }
+            p->wake_tick = 0;
+            return -EINTR;
+        }
+    }
+
+    p->wake_tick = 0;
+    if (rem && uptr_ok(rem)) {
+        rem->tv_sec  = 0;
+        rem->tv_nsec = 0;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// uid/gid stubs — always 0, never fail
+// ---------------------------------------------------------------------------
+static int64_t sys_getuid(void)  { return 0; }
+static int64_t sys_geteuid(void) { return 0; }
+static int64_t sys_getgid(void)  { return 0; }
+static int64_t sys_getegid(void) { return 0; }
+static int64_t sys_setuid(int uid)  { (void)uid; return 0; }
+static int64_t sys_setgid(int gid)  { (void)gid; return 0; }
+
+// ---------------------------------------------------------------------------
+// sys_ioctl
+// ---------------------------------------------------------------------------
+static int64_t sys_ioctl(int fd, int cmd, unsigned long arg) {
+    struct pcb *p = current_proc();
+    if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
+    return fileioctl(p->ofile[fd], cmd, arg);
+}
+
+// ---------------------------------------------------------------------------
 // syscall_dispatch
 // ---------------------------------------------------------------------------
 int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
@@ -755,6 +853,50 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_munmap:
             return sys_munmap(trapframe[TF_A0], trapframe[TF_A1]);
+
+        case SYS_clock_gettime:
+            return sys_clock_gettime((int)(int64_t)trapframe[TF_A0],
+                                     (struct timespec *)trapframe[TF_A1]);
+
+        case SYS_gettimeofday:
+            return sys_gettimeofday((struct timeval *)trapframe[TF_A0],
+                                    (void *)trapframe[TF_A1]);
+
+        case SYS_nanosleep:
+            return sys_nanosleep((const struct timespec *)trapframe[TF_A0],
+                                 (struct timespec *)trapframe[TF_A1]);
+
+        case SYS_kill:
+            return sys_kill((int)(int64_t)trapframe[TF_A0],
+                            (int)(int64_t)trapframe[TF_A1]);
+
+        case SYS_sigaction:
+            return sys_sigaction((int)(int64_t)trapframe[TF_A0],
+                                 (const struct sigaction *)trapframe[TF_A1],
+                                 (struct sigaction *)trapframe[TF_A2]);
+
+        case SYS_sigprocmask:
+            return sys_sigprocmask((int)(int64_t)trapframe[TF_A0],
+                                   (const sigset_t *)trapframe[TF_A1],
+                                   (sigset_t *)trapframe[TF_A2]);
+
+        case SYS_sigreturn:
+            return sys_sigreturn(trapframe);
+
+        case SYS_pause:
+            return sys_pause();
+
+        case SYS_getuid:  return sys_getuid();
+        case SYS_geteuid: return sys_geteuid();
+        case SYS_getgid:  return sys_getgid();
+        case SYS_getegid: return sys_getegid();
+        case SYS_setuid:  return sys_setuid((int)(int64_t)trapframe[TF_A0]);
+        case SYS_setgid:  return sys_setgid((int)(int64_t)trapframe[TF_A0]);
+
+        case SYS_ioctl:
+            return sys_ioctl((int)(int64_t)trapframe[TF_A0],
+                             (int)(int64_t)trapframe[TF_A1],
+                             (unsigned long)trapframe[TF_A2]);
 
         default:
             printk("syscall: unknown number %lu from pid %d\n",

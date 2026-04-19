@@ -1,6 +1,9 @@
 #include <drivers/uart.h>
+#include <errno.h>
 #include <proc.h>
 #include <riscv.h>
+#include <signal.h>
+#include <termios.h>
 
 extern unsigned long mem_offset;
 
@@ -108,40 +111,57 @@ void uart_rx_isr(void) {
     while (DR) {
         char c = RBR;
 
-        if (c == '\r' || c == '\n') {
-            write_char('\r');
-            write_char('\n');
-            line_commit();
-        } else if (c == 0x7f || c == '\b') {
-            /* Backspace */
-            if (edit_len > 0) {
-                edit_len--;
-                write_char('\b');
-                write_char(' ');
-                write_char('\b');
-            }
-        } else if (c == 0x03) {
-            /* Ctrl-C: discard line, push interrupt sentinel */
+        struct termios tio;
+        termios_get(&tio);
+
+        if ((tio.c_lflag & ISIG) && c == (char)tio.c_cc[VINTR]) {
             edit_len = 0;
-            write_char('^');
-            write_char('C');
-            write_char('\r');
-            write_char('\n');
-            char sentinel = 0x03;
-            line_push(&sentinel, 1);
+            if (tio.c_lflag & ECHO) {
+                write_char('^');
+                write_char('C');
+                write_char('\r');
+                write_char('\n');
+            }
+            int fg = termios_get_fg_pid();
+            if (fg > 0)
+                send_signal_by_pid(fg, SIGINT);
+            continue;
+        }
+
+        if ((tio.c_iflag & ICRNL) && c == '\r')
+            c = '\n';
+
+        if (tio.c_lflag & ICANON) {
+            if ((tio.c_lflag & ISIG) && c == (char)tio.c_cc[VEOF] && edit_len == 0) {
+                line_commit_eof();
+            } else if (c == '\n') {
+                if (tio.c_lflag & ECHO) {
+                    write_char('\r');
+                    write_char('\n');
+                }
+                line_commit();
+            } else if (c == (char)tio.c_cc[VERASE] || c == '\b') {
+                if (edit_len > 0) {
+                    edit_len--;
+                    if (tio.c_lflag & ECHO) {
+                        write_char('\b');
+                        write_char(' ');
+                        write_char('\b');
+                    }
+                }
+            } else if (c >= 0x20 && edit_len < EDIT_SZ - 1) {
+                edit_buf[edit_len++] = c;
+                if (tio.c_lflag & ECHO)
+                    write_char(c);
+            }
+        } else {
+            line_push(&c, 1);
+            if (tio.c_lflag & ECHO)
+                write_char(c);
             if (rx_blocked_pid) {
                 proc_wakeup(rx_blocked_pid);
                 rx_blocked_pid = 0;
             }
-        } else if (c == 0x04) {
-            /* Ctrl-D: EOF if at column 0, else ignored */
-            if (edit_len == 0) {
-                line_commit_eof();
-            }
-        } else if (c >= 0x20 && edit_len < EDIT_SZ - 1) {
-            /* Printable character */
-            edit_buf[edit_len++] = c;
-            write_char(c);  /* echo */
         }
     }
 }
@@ -163,6 +183,8 @@ int uart_rx_get(char *out) {
         rx_blocked_pid = p->pid;
         proc_sleep(p);
         /* Resumed by proc_wakeup in uart_rx_isr / line_commit. */
+        if (sig_has_actionable(p))
+            return -EINTR;
     }
 
     char c = line_buf[line_head];
@@ -170,7 +192,6 @@ int uart_rx_get(char *out) {
     line_avail--;
 
     if (c == '\0') return 0;    /* EOF sentinel */
-    if (c == 0x03) return -2;  /* Ctrl-C sentinel → EINTR */
     *out = c;
     return 1;
 }

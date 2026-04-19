@@ -1,12 +1,18 @@
 #include <inode.h>
 #include <stat.h>
 #include <errno.h>
+#include <riscv.h>
+#include <termios.h>
 #include <vfs.h>
+#include <vmem.h>
 #include <string.h>
 #include <drivers/uart.h>
 #include <printk.h>
 
 static int streq(const char *a, const char *b) { return strcmp(a, b) == 0; }
+static int uptr_ok(const void *p) {
+    return p && (unsigned long)p < KVMEM_OFFSET;
+}
 
 /* ----------------------------------------------------------------
  * Console inode ops
@@ -15,16 +21,21 @@ static int streq(const char *a, const char *b) { return strcmp(a, b) == 0; }
 static int console_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
     (void)ip; (void)off;
     char *p = (char *)buf;
+    struct termios tio;
+    termios_get(&tio);
+    int canonical = (tio.c_lflag & ICANON) != 0;
+
     for (uint64_t i = 0; i < n; ) {
         char c;
         int r = uart_rx_get(&c);
-        if (r == -2) return -EINTR;  // Ctrl-C
+        if (r == -EINTR) return i > 0 ? (int)i : -EINTR;
         if (r < 0) return (int)i;    // error
         if (r == 0) {                // EOF (Ctrl-D)
             if (i == 0) return 0;
             return (int)i;
         }
         p[i++] = c;
+        if (canonical && c == '\n') return (int)i;
     }
     return (int)n;
 }
@@ -61,9 +72,56 @@ static int console_getdents(struct inode *dir, uint64_t off, void *buf,
     return -ENOTDIR;
 }
 
+static int console_ioctl(struct inode *ip, int cmd, unsigned long arg) {
+    (void)ip;
+    if (!uptr_ok((void *)arg)) return -EFAULT;
+
+    uint64_t sstatus = read_sstatus();
+    write_sstatus(sstatus & ~SSTATUS_SIE);
+
+    int rc = 0;
+    switch (cmd) {
+        case TCGETS: {
+            struct termios t;
+            termios_get(&t);
+            memcpy((void *)arg, &t, sizeof(t));
+            break;
+        }
+        case TCSETS: {
+            struct termios t;
+            memcpy(&t, (void *)arg, sizeof(t));
+            termios_set(&t);
+            break;
+        }
+        case TIOCGWINSZ: {
+            struct winsize ws = {24, 80, 0, 0};
+            memcpy((void *)arg, &ws, sizeof(ws));
+            break;
+        }
+        case TIOCSPGRP: {
+            int pid;
+            memcpy(&pid, (void *)arg, sizeof(pid));
+            termios_set_fg_pid(pid);
+            break;
+        }
+        case TIOCGPGRP: {
+            int pid = termios_get_fg_pid();
+            memcpy((void *)arg, &pid, sizeof(pid));
+            break;
+        }
+        default:
+            rc = -EINVAL;
+            break;
+    }
+
+    write_sstatus(sstatus);
+    return rc;
+}
+
 static const struct inode_ops console_ops = {
     .read     = console_read,
     .write    = console_write,
+    .ioctl    = console_ioctl,
     .stat     = console_stat,
     .lookup   = console_lookup,
     .getdents = console_getdents,
