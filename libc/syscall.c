@@ -147,3 +147,6 @@ int munmap(void *addr, long len) {
 int ioctl(int fd, int cmd, void *arg) {
     return (int)ecall3(110, (long)fd, (long)cmd, (long)arg);
 }
+long meminfo(void) {
+    return ecall1(111, 0);
+}

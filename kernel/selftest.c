@@ -186,16 +186,28 @@ static void test_leak_spawn_free(void) {
     printk("[SELFTEST] -- leak: spawn/free 1000x --\n");
 
     unsigned long before = pmem_free_count();
+    int ok = 1;
 
     for (int i = 0; i < 1000; i++) {
         struct pcb *p = proc_spawn("bin/init");
-        st_check(p != 0, "spawn bin/init");
-        if (!p) continue;
+        if (!p) {
+            ok = 0;
+            printk("[SELFTEST] leak: spawn failed at iter=%d\n", i);
+            break;
+        }
         // Tear down the address space and proc manually (mirrors what
         // free_proc now does, exercising the full allocation/free path
         // without needing the scheduler running).
         free_proc(p);
+        /* Invariant: with no scheduler activity, process list must be empty. */
+        if (proc_list_head() != 0) {
+            printk("[SELFTEST] proc list not empty after free (iter=%d head=%p)\n",
+                   i, proc_list_head());
+            panic("selftest: proc list corruption");
+        }
     }
+
+    st_check(ok, "leak: spawn/free loop completed 1000x");
 
     unsigned long after = pmem_free_count();
     st_check(before == after, "pmem free count invariant after 1000x spawn/free");

@@ -26,6 +26,7 @@ int   unlink(const char *path);
 int   pipe(int fds[2]);
 int   execv(const char *path, char *const argv[]);
 void *sbrk(long incr);
+long  meminfo(void);
 
 /* uid/gid stubs */
 uid_t getuid(void);

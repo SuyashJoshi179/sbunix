@@ -224,6 +224,13 @@ static int run_pipeline(int start, int in_fd) {
         }
 
         int pid = fork();
+        if (pid < 0) {
+            close(pfd[0]);
+            close(pfd[1]);
+            if (in_fd >= 0) close(in_fd);
+            printf("sh: fork failed\n");
+            return 1;
+        }
         if (pid == 0) {
             close(pfd[0]);
             if (in_fd >= 0) { close(0); dup(in_fd); close(in_fd); }
@@ -243,6 +250,11 @@ static int run_pipeline(int start, int in_fd) {
         return st;
     } else {
         int pid = fork();
+        if (pid < 0) {
+            if (in_fd >= 0) close(in_fd);
+            printf("sh: fork failed\n");
+            return 1;
+        }
         if (pid == 0) {
             if (in_fd >= 0) { close(0); dup(in_fd); close(in_fd); }
             run_simple(argv, argc, redir_in, redir_out, append);

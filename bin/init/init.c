@@ -51,6 +51,16 @@ int main(void) {
         "/bin/sigsegv_handler_test",
         "/bin/eintr_test",
         "/bin/termios_test",
+        "/bin/copyio_test",
+        "/bin/copyio_fuzz_test",
+        "/bin/exec_argv_test",
+        "/bin/fd_invariant_test",
+        "/bin/vma_overlap_test",
+        "/bin/rlimit_test",
+        "/bin/oom_test",
+        "/bin/leak_test",
+        "/bin/reap_stress_test",
+        "/bin/resource_churn_test",
     };
     int ntests = (int)(sizeof(tests) / sizeof(tests[0]));
 

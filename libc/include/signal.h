@@ -29,6 +29,7 @@ typedef void (*sighandler_t)(int);
 #define SIG_IGN ((sighandler_t)1)
 
 struct sigaction {
+    /* Only write(2) and _exit(2) are async-signal-safe in this libc. */
     sighandler_t sa_handler;
     sigset_t     sa_mask;
     int          sa_flags;

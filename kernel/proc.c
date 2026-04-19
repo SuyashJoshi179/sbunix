@@ -29,8 +29,72 @@ static struct pcb    *current = 0;   // currently running process
 static int            next_pid = 1;
 static struct context sched_context;
 
+#define RLIM_NOFILE_DEFAULT 16
+#define RLIM_NVMA_DEFAULT   64
+#define RLIM_NPAGES_DEFAULT 256
+
 struct pcb *current_proc(void)   { return current; }
 struct pcb *proc_list_head(void) { return procs;   }
+
+static void proc_unlink(struct pcb *victim) {
+    struct pcb *prev = 0;
+    int found = 0;
+    for (struct pcb *p = procs; p; p = p->next) {
+        if (p == victim) {
+            found = 1;
+            break;
+        }
+        prev = p;
+    }
+    if (!found)
+        panic("proc_unlink: victim not found");
+    if (prev) prev->next = victim->next;
+    else if (procs == victim) procs = victim->next;
+    victim->next = 0;
+}
+
+static void proc_destroy(struct pcb *p) {
+    if (!p) return;
+    if (current == p)
+        panic("proc_destroy: destroying current process");
+
+    // 1) remove from scheduler / process list.
+    uint64_t sstatus = read_sstatus();
+    write_sstatus(sstatus & ~SSTATUS_SIE);
+    proc_unlink(p);
+    write_sstatus(read_sstatus() | (sstatus & SSTATUS_SIE));
+
+    // 2) close all open fds.
+    for (int fd = 0; fd < NOFILE; fd++) {
+        if (p->ofile[fd]) {
+            fileclose(p->ofile[fd]);
+            p->ofile[fd] = 0;
+        }
+    }
+    if (p->cwd) {
+        inode_put(p->cwd);
+        p->cwd = 0;
+    }
+
+    // 3) free VMA metadata.
+    vma_list_free(&p->vma_list);
+    p->heap_vma = 0;
+
+    // 4) free user page table/pages.
+    if (p->pagetable) {
+        free_user_pgtable(p->pagetable);
+        p->pagetable = 0;
+    }
+
+    // 5) free kernel stack.
+    if (p->kstack_page) {
+        page_free(p->kstack_page);
+        p->kstack_page = 0;
+    }
+
+    // 6) free PCB page.
+    page_free(p);
+}
 
 // ----------------------------------------------------------------
 // alloc_proc — allocate a PCB + kernel stack from physical memory
@@ -73,11 +137,16 @@ struct pcb *alloc_proc(void) {
         p->sig_handlers[i].sa_restorer = 0;
     }
 
+    p->rlim_nofile = RLIM_NOFILE_DEFAULT;
+    p->rlim_nvma   = RLIM_NVMA_DEFAULT;
+    p->rlim_npages = RLIM_NPAGES_DEFAULT;
     // context is zeroed by page_alloc; set sp and ra
     p->context.sp = (uint64_t)p->kstack_page + KSTACK_SIZE;
     p->context.ra = (uint64_t)forkret;
 
     // append to process list
+    uint64_t sstatus = read_sstatus();
+    write_sstatus(sstatus & ~SSTATUS_SIE);
     if (procs == 0) {
         procs = p;
     } else {
@@ -85,6 +154,7 @@ struct pcb *alloc_proc(void) {
         while (tail->next) tail = tail->next;
         tail->next = p;
     }
+    write_sstatus(read_sstatus() | (sstatus & SSTATUS_SIE));
 
     return p;
 }
@@ -94,43 +164,7 @@ struct pcb *alloc_proc(void) {
 // ----------------------------------------------------------------
 
 void free_proc(struct pcb *victim) {
-    // Unlink from list
-    struct pcb *prev = 0;
-    for (struct pcb *p = procs; p; p = p->next) {
-        if (p == victim) break;
-        prev = p;
-    }
-    if (prev) prev->next = victim->next;
-    else      procs      = victim->next;
-
-    // Close any open file descriptors and drop cwd reference.
-    // Normally proc_exit_current does this, but free_proc is also called on
-    // processes that never ran (e.g. test_leak_spawn_free), so we must handle it.
-    for (int fd = 0; fd < NOFILE; fd++) {
-        if (victim->ofile[fd]) {
-            fileclose(victim->ofile[fd]);
-            victim->ofile[fd] = 0;
-        }
-    }
-    if (victim->cwd) {
-        inode_put(victim->cwd);
-        victim->cwd = 0;
-    }
-
-    // Free VMAs before page table (metadata only — actual pages freed below).
-    vma_list_free(&victim->vma_list);
-    victim->heap_vma = 0;
-
-    // Free user page table BEFORE the kstack and PCB pages.
-    if (victim->pagetable) {
-        free_user_pgtable(victim->pagetable);
-        victim->pagetable = 0;
-    }
-    if (victim->kstack_page) {
-        page_free(victim->kstack_page);
-        victim->kstack_page = 0;
-    }
-    page_free(victim);
+    proc_destroy(victim);
 }
 
 // ----------------------------------------------------------------
@@ -169,12 +203,12 @@ int proc_fork_current(void) {
     if (!parent || !parent->is_user) return -1;
 
     struct pcb *child = alloc_proc();
-    if (!child) return -1;
+    if (!child) return -ENOMEM;
 
     pgtable_t child_pt = uvmcow_share(parent->pagetable);
     if (!child_pt) {
-        free_proc(child);
-        return -1;
+        proc_destroy(child);
+        return -ENOMEM;
     }
 
     // The trap frame is always at kstack_top - 288 (trap.S: addi sp, sp, -288
@@ -225,8 +259,15 @@ int proc_fork_current(void) {
     child->sig_pending    = 0;
     child->in_sighandler  = 0;
     child->delivering_segv= 0;
+    child->rlim_nofile    = parent->rlim_nofile;
+    child->rlim_nvma      = parent->rlim_nvma;
+    child->rlim_npages    = parent->rlim_npages;
 
     child->vma_list = vma_list_dup(parent->vma_list);
+    if (!child->vma_list) {
+        proc_destroy(child);
+        return -ENOMEM;
+    }
     child->heap_vma = 0;
     for (struct vma *v = child->vma_list; v; v = v->next) {
         if (v->type == VMA_TYPE_HEAP) {
@@ -242,7 +283,6 @@ int proc_fork_current(void) {
 
     child->state      = PROC_READY;
 
-    printk("[fork] parent pid=%d -> child pid=%d\n", parent->pid, child->pid);
     return child->pid;
 }
 
@@ -308,24 +348,17 @@ void proc_exit_current(int status) {
     struct pcb *p = current;
     p->exit_status = status;
 
-    // Close all open file descriptors.
-    for (int fd = 0; fd < NOFILE; fd++) {
-        if (p->ofile[fd]) {
-            fileclose(p->ofile[fd]);
-            p->ofile[fd] = 0;
+    // Safe unlocked on single-hart: only scheduler-context code mutates
+    // the process list, and proc_exit_current runs in scheduler context.
+    int reparented_any = 0;
+    for (struct pcb *it = procs; it; it = it->next) {
+        if (it->parent_pid == p->pid) {
+            it->parent_pid = 1;
+            reparented_any = 1;
         }
     }
-    // Drop reference to current working directory.
-    if (p->cwd) {
-        inode_put(p->cwd);
-        p->cwd = 0;
-    }
-
-    // Reparent children to init (pid 1) so they get reaped
-    for (struct pcb *it = procs; it; it = it->next) {
-        if (it->parent_pid == p->pid)
-            it->parent_pid = 1;
-    }
+    if (reparented_any)
+        proc_wakeup(1);
 
     // Notify parent: send SIGCHLD, then wake it if sleeping in wait
     send_signal_by_pid(p->parent_pid, SIGCHLD);
@@ -352,7 +385,7 @@ int proc_wait_current(int *status) {
             if (p->state == PROC_ZOMBIE) {
                 int cpid = p->pid;
                 if (status) *status = p->exit_status;
-                free_proc(p);
+                proc_destroy(p);
                 return cpid;
             }
         }
@@ -435,14 +468,14 @@ static void scheduler_run(void) {
 
         // Returned from process — reap parentless zombies immediately.
         // Switch to the kernel page table first: the hart may still be
-        // translating through the zombie's user pagetable, and free_proc
+        // translating through the zombie's user pagetable, and proc_destroy
         // calls free_user_pgtable which frees those pages.
         if (current && current->state == PROC_ZOMBIE && current->parent_pid == 0) {
             struct pcb *z = current;
             current = 0;
             write_satp(make_satp(kernel_pgtable));
             flush_tlb();
-            free_proc(z);
+            proc_destroy(z);
         }
     }
 }

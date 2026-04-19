@@ -19,60 +19,6 @@ static const uint8_t default_action[NSIG] = {
 };
 
 /* ----------------------------------------------------------------
- * copyout_kern_to_user — write kernel buffer to user VA.
- *
- * Faults in pages one page at a time before writing.
- * Returns 0 on success, -EFAULT on failure.
- * ---------------------------------------------------------------- */
-static int copyout_kern_to_user(pgtable_t pt, uint64_t uaddr,
-                                const void *kbuf, uint64_t n) {
-    const uint8_t *src = (const uint8_t *)kbuf;
-    uint64_t va = uaddr;
-    uint64_t remaining = n;
-
-    while (remaining > 0) {
-        uint64_t page_start = va & ~(uint64_t)(PAGE_SIZE - 1);
-        uint64_t page_end   = page_start + PAGE_SIZE;
-        uint64_t chunk      = page_end - va;
-        if (chunk > remaining) chunk = remaining;
-
-        /* Ensure the page is present and writable. */
-        pte_t *pte = get_pte(pt, va, 0);
-        if (!pte || !(*pte & PTE_V)) {
-            void *pg = page_alloc();
-            if (!pg) return -EFAULT;
-            memset(pg, 0, PAGE_SIZE);
-            uint64_t pa = virt_to_phys((uint64_t)pg);
-            vmem_map(pt, page_start, pa, PAGE_SIZE, PTE_U | PTE_R | PTE_W);
-            flush_tlb();
-        }
-
-        /* SUM bit is set while in trap handler — write directly to user VA. */
-        uint8_t *dst = (uint8_t *)va;
-        for (uint64_t i = 0; i < chunk; i++) dst[i] = src[i];
-
-        src       += chunk;
-        va        += chunk;
-        remaining -= chunk;
-    }
-    return 0;
-}
-
-/* ----------------------------------------------------------------
- * copyin_user_to_kern — read user VA to kernel buffer.
- * Returns 0 on success, -EFAULT on failure.
- * ---------------------------------------------------------------- */
-static int copyin_user_to_kern(pgtable_t pt, void *kbuf,
-                               uint64_t uaddr, uint64_t n) {
-    (void)pt;  /* SUM bit lets us read user VAs directly */
-    if (!uaddr || uaddr + n > KVMEM_OFFSET) return -EFAULT;
-    uint8_t *dst = (uint8_t *)kbuf;
-    const uint8_t *src = (const uint8_t *)uaddr;
-    for (uint64_t i = 0; i < n; i++) dst[i] = src[i];
-    return 0;
-}
-
-/* ----------------------------------------------------------------
  * send_signal — set a signal pending on a process.
  * ---------------------------------------------------------------- */
 void send_signal(struct pcb *target, int sig) {
@@ -143,7 +89,7 @@ static void build_sigframe_and_redirect(struct pcb *p, uint64_t *tf,
     memcpy(fr.saved_trapframe, tf, 288);
 
     /* Write frame to user stack — faults in lazy/COW pages as needed. */
-    if (copyout_kern_to_user(p->pagetable, frame_va, &fr, sizeof(fr)) < 0) {
+    if (copyout((void *)frame_va, &fr, sizeof(fr)) < 0) {
         p->delivering_segv = 1;
         proc_exit_current(128 + SIGSEGV);
     }
@@ -232,13 +178,17 @@ int64_t sys_sigaction(int sig, const struct sigaction *act,
     struct pcb *p = current_proc();
     if (!p) return -EINVAL;
 
-    if (oldact && (uint64_t)oldact < KVMEM_OFFSET)
-        memcpy(oldact, &p->sig_handlers[sig], sizeof(struct sigaction));
-
-    if (act && (uint64_t)act < KVMEM_OFFSET) {
-        memcpy(&p->sig_handlers[sig], act, sizeof(struct sigaction));
-        p->sig_handlers[sig].sa_mask &=
-            ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
+    /* Stage both sides before mutating state so a faulting user pointer
+     * cannot leave the handler half-updated (and so oldact == act works). */
+    struct sigaction kold = p->sig_handlers[sig];
+    struct sigaction kact;
+    if (act && copyin(&kact, act, sizeof(kact)) < 0)
+        return -EFAULT;
+    if (oldact && copyout(oldact, &kold, sizeof(kold)) < 0)
+        return -EFAULT;
+    if (act) {
+        kact.sa_mask &= ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
+        p->sig_handlers[sig] = kact;
     }
     return 0;
 }
@@ -250,11 +200,17 @@ int64_t sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     struct pcb *p = current_proc();
     if (!p) return -EINVAL;
 
-    if (oldset && (uint64_t)oldset < KVMEM_OFFSET)
-        *oldset = p->sig_blocked;
+    if (set && how != SIG_BLOCK && how != SIG_UNBLOCK && how != SIG_SETMASK)
+        return -EINVAL;
 
-    if (set && (uint64_t)set < KVMEM_OFFSET) {
-        sigset_t s = *set;
+    /* Stage both sides before mutating — atomic on partial user-copy failure. */
+    sigset_t kold = p->sig_blocked;
+    sigset_t s = 0;
+    if (set && copyin(&s, set, sizeof(sigset_t)) < 0)
+        return -EFAULT;
+    if (oldset && copyout(oldset, &kold, sizeof(sigset_t)) < 0)
+        return -EFAULT;
+    if (set) {
         s &= ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
         switch (how) {
         case SIG_BLOCK:   p->sig_blocked |= s;  break;
@@ -276,7 +232,7 @@ int64_t sys_sigreturn(uint64_t *trapframe) {
     uint64_t frame_va = trapframe[1];   /* user sp after handler */
 
     struct sigframe fr;
-    if (copyin_user_to_kern(p->pagetable, &fr, frame_va, sizeof(fr)) < 0)
+    if (copyin(&fr, (const void *)frame_va, sizeof(fr)) < 0)
         proc_exit_current(128 + SIGSEGV);
 
     if (fr.magic != SIGFRAME_MAGIC)
