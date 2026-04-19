@@ -1,7 +1,9 @@
 #include <drivers/uart.h>
+#include <errno.h>
 #include <page_ref.h>
 #include <pmem.h>   // pmem_rebase
 #include <printk.h>
+#include <proc.h>
 #include <string.h>
 #include <vmem.h>
 
@@ -234,6 +236,55 @@ void uvmunmap_range(pgtable_t pt, unsigned long va_start, unsigned long va_end) 
         *pte = 0;
     }
     flush_tlb();
+}
+
+static int copy_user_range_checked(void *kptr, const void *uptr, unsigned long n, int write_user) {
+    struct pcb *p = current_proc();
+    if (!p || !p->is_user || !p->pagetable) return -EFAULT;
+
+    if (n == 0) return 0;
+
+    uintptr_t uva = (uintptr_t)uptr;
+    if (uva == 0 || uva >= KVMEM_OFFSET) return -EFAULT;
+    if (uva + n < uva || uva + n > KVMEM_OFFSET) return -EFAULT;
+
+    uint8_t *kdst = (uint8_t *)kptr;
+    const uint8_t *ksrc = (const uint8_t *)kptr;
+    unsigned long done = 0;
+
+    while (done < n) {
+        uintptr_t cur_uva = uva + done;
+        unsigned long page_off = cur_uva & (PAGE_SIZE - 1);
+        unsigned long chunk = PAGE_SIZE - page_off;
+        if (chunk > n - done) chunk = n - done;
+
+        pte_t *pte = get_pte(p->pagetable, cur_uva, false);
+        if (!pte || !(*pte & PTE_V) || !(*pte & PTE_U)) return -EFAULT;
+        if (write_user) {
+            if (!(*pte & PTE_W)) return -EFAULT;
+        } else {
+            if (!(*pte & PTE_R)) return -EFAULT;
+        }
+
+        uintptr_t pa = pte_to_phyaddr(*pte) + page_off;
+        uint8_t *kuser = (uint8_t *)phys_to_virt(pa);
+        if (write_user)
+            memcpy(kuser, ksrc + done, chunk);
+        else
+            memcpy(kdst + done, kuser, chunk);
+
+        done += chunk;
+    }
+
+    return 0;
+}
+
+int copyin(void *kdst, const void *usrc, unsigned long n) {
+    return copy_user_range_checked(kdst, usrc, n, 0);
+}
+
+int copyout(void *udst, const void *ksrc, unsigned long n) {
+    return copy_user_range_checked((void *)ksrc, udst, n, 1);
 }
 
 void vmem_init(void) {

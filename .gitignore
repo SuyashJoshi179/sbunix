@@ -1,4 +1,5 @@
 build/
+build/disk_*.img
 CLAUDE.md
 zig-out/
 .zig-cache/

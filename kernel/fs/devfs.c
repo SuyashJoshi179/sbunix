@@ -10,9 +10,6 @@
 #include <printk.h>
 
 static int streq(const char *a, const char *b) { return strcmp(a, b) == 0; }
-static int uptr_ok(const void *p) {
-    return p && (unsigned long)p < KVMEM_OFFSET;
-}
 
 /* ----------------------------------------------------------------
  * Console inode ops
@@ -74,7 +71,7 @@ static int console_getdents(struct inode *dir, uint64_t off, void *buf,
 
 static int console_ioctl(struct inode *ip, int cmd, unsigned long arg) {
     (void)ip;
-    if (!uptr_ok((void *)arg)) return -EFAULT;
+    if (!arg) return -EFAULT;
 
     uint64_t sstatus = read_sstatus();
     write_sstatus(sstatus & ~SSTATUS_SIE);
@@ -84,29 +81,35 @@ static int console_ioctl(struct inode *ip, int cmd, unsigned long arg) {
         case TCGETS: {
             struct termios t;
             termios_get(&t);
-            memcpy((void *)arg, &t, sizeof(t));
+            if (copyout((void *)arg, &t, sizeof(t)) < 0) rc = -EFAULT;
             break;
         }
         case TCSETS: {
             struct termios t;
-            memcpy(&t, (void *)arg, sizeof(t));
+            if (copyin(&t, (void *)arg, sizeof(t)) < 0) {
+                rc = -EFAULT;
+                break;
+            }
             termios_set(&t);
             break;
         }
         case TIOCGWINSZ: {
             struct winsize ws = {24, 80, 0, 0};
-            memcpy((void *)arg, &ws, sizeof(ws));
+            if (copyout((void *)arg, &ws, sizeof(ws)) < 0) rc = -EFAULT;
             break;
         }
         case TIOCSPGRP: {
             int pid;
-            memcpy(&pid, (void *)arg, sizeof(pid));
+            if (copyin(&pid, (void *)arg, sizeof(pid)) < 0) {
+                rc = -EFAULT;
+                break;
+            }
             termios_set_fg_pid(pid);
             break;
         }
         case TIOCGPGRP: {
             int pid = termios_get_fg_pid();
-            memcpy((void *)arg, &pid, sizeof(pid));
+            if (copyout((void *)arg, &pid, sizeof(pid)) < 0) rc = -EFAULT;
             break;
         }
         default:

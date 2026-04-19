@@ -1,4 +1,5 @@
 #include <elf.h>
+#include <errno.h>
 #include <exec.h>
 #include <file.h>
 #include <inode.h>
@@ -59,7 +60,7 @@ int load_user_elf(pgtable_t pt, const void *img, unsigned long img_size,
             if (!kpage) {
                 printk("exec: OOM loading segment\n");
                 vma_list_free(&vlist);
-                return -1;
+                return -ENOMEM;
             }
 
             unsigned long page_end        = va + PAGE_SIZE;
@@ -82,7 +83,7 @@ int load_user_elf(pgtable_t pt, const void *img, unsigned long img_size,
         struct vma *seg_vma = vma_alloc();
         if (!seg_vma) {
             vma_list_free(&vlist);
-            return -1;
+            return -ENOMEM;
         }
         seg_vma->start = va_start;
         seg_vma->end   = va_end;
@@ -160,7 +161,6 @@ struct pcb *proc_spawn(const char *path) {
 
     if (!img) {
         printk("proc_spawn: '%s' not found\n", path);
-        free_user_pgtable(p->pagetable);
         free_proc(p);
         return 0;
     }
@@ -169,16 +169,14 @@ struct pcb *proc_spawn(const char *path) {
     uint64_t brk = 0;
     unsigned long entry;
     if (load_user_elf(p->pagetable, img, img_sz, &entry, &vlist, &brk) < 0) {
-        free_user_pgtable(p->pagetable);
         free_proc(p);
         return 0;
     }
+    p->vma_list = vlist;
 
     void *kstack = map_stack(p->pagetable);
     if (!kstack) {
         printk("proc_spawn: map_stack failed\n");
-        vma_list_free(&vlist);
-        free_user_pgtable(p->pagetable);
         free_proc(p);
         return 0;
     }
@@ -186,8 +184,6 @@ struct pcb *proc_spawn(const char *path) {
     // Heap VMA (zero-length initially)
     struct vma *heap_vma = vma_alloc();
     if (!heap_vma) {
-        vma_list_free(&vlist);
-        free_user_pgtable(p->pagetable);
         free_proc(p);
         return 0;
     }
@@ -200,8 +196,6 @@ struct pcb *proc_spawn(const char *path) {
     // Stack VMA
     struct vma *stack_vma = vma_alloc();
     if (!stack_vma) {
-        vma_list_free(&vlist);
-        free_user_pgtable(p->pagetable);
         free_proc(p);
         return 0;
     }
@@ -211,7 +205,6 @@ struct pcb *proc_spawn(const char *path) {
     stack_vma->type  = VMA_TYPE_STACK;
     vma_insert(&vlist, stack_vma);
 
-    p->vma_list   = vlist;
     p->heap_vma   = heap_vma;
     p->brk_start  = brk;
 
@@ -234,7 +227,5 @@ struct pcb *proc_spawn(const char *path) {
     p->cwd_path[0] = '/';
     p->cwd_path[1] = '\0';
 
-    printk("proc_spawn: spawned pid=%d from '%s', entry=0x%lx\n",
-           p->pid, path, entry);
     return p;
 }

@@ -26,9 +26,56 @@
 // Helpers
 // ---------------------------------------------------------------------------
 
-// Validate a user pointer: must be non-null and below the kernel base.
-static int uptr_ok(const void *p) {
-    return p && (unsigned long)p < KVMEM_OFFSET;
+enum {
+    UIO_CHUNK = 256,
+    PATH_MAX_LOCAL = 256,
+    ARGV_MAX_LOCAL = 32,
+};
+
+static int copyin_cstr(const char *usrc, char *kdst, unsigned long cap) {
+    if (!usrc || !kdst || cap == 0) return -EFAULT;
+    for (unsigned long i = 0; i < cap; i++) {
+        char c;
+        if (copyin(&c, usrc + i, 1) < 0) return -EFAULT;
+        kdst[i] = c;
+        if (c == '\0') return 0;
+    }
+    kdst[cap - 1] = '\0';
+    return -ENAMETOOLONG;
+}
+
+static int proc_fd_limit(const struct pcb *p) {
+    if (!p) return 0;
+    int lim = p->rlim_nofile;
+    if (lim < 0) lim = 0;
+    if (lim > NOFILE) lim = NOFILE;
+    return lim;
+}
+
+static int proc_open_fd_count(const struct pcb *p) {
+    int n = 0;
+    if (!p) return 0;
+    for (int fd = 0; fd < NOFILE; fd++)
+        if (p->ofile[fd]) n++;
+    return n;
+}
+
+static int proc_vma_count(const struct pcb *p) {
+    int n = 0;
+    if (!p) return 0;
+    for (struct vma *v = p->vma_list; v; v = v->next)
+        n++;
+    return n;
+}
+
+static uint64_t proc_vma_total_pages(const struct pcb *p) {
+    uint64_t pages = 0;
+    if (!p) return 0;
+    for (struct vma *v = p->vma_list; v; v = v->next) {
+        if (v->end > v->start)
+            pages += (v->end - v->start) / PAGE_SIZE;
+    }
+    return pages;
 }
 
 // Allocate the lowest free fd slot in the current process.
@@ -58,17 +105,38 @@ static int64_t sys_exit(int status) {
 // (kernel threads, early-boot selftests).
 // ---------------------------------------------------------------------------
 static int64_t sys_write(int fd, const char *buf, uint64_t len) {
-    if (!uptr_ok(buf)) return -EFAULT;
+    if (len > 0 && !buf) return -EFAULT;
 
     struct pcb *p = current_proc();
+    char kbuf[UIO_CHUNK];
+    uint64_t done = 0;
+
     if (p && fd >= 0 && fd < NOFILE && p->ofile[fd]) {
-        return filewrite(p->ofile[fd], buf, len);
+        while (done < len) {
+            uint64_t chunk = len - done;
+            if (chunk > sizeof(kbuf)) chunk = sizeof(kbuf);
+            if (copyin(kbuf, buf + done, chunk) < 0)
+                return done > 0 ? (int64_t)done : -EFAULT;
+            int w = filewrite(p->ofile[fd], kbuf, chunk);
+            if (w < 0) return done > 0 ? (int64_t)done : w;
+            if (w == 0) break;
+            done += (uint64_t)w;
+            if ((uint64_t)w < chunk) break;
+        }
+        return (int64_t)done;
     }
 
     // Fallback: direct UART for fd 1/2 (handles early boot and kernel threads).
     if (fd == 1 || fd == 2) {
-        for (uint64_t i = 0; i < len; i++) write_char(buf[i]);
-        return (int64_t)len;
+        while (done < len) {
+            uint64_t chunk = len - done;
+            if (chunk > sizeof(kbuf)) chunk = sizeof(kbuf);
+            if (copyin(kbuf, buf + done, chunk) < 0)
+                return done > 0 ? (int64_t)done : -EFAULT;
+            for (uint64_t i = 0; i < chunk; i++) write_char(kbuf[i]);
+            done += chunk;
+        }
+        return (int64_t)done;
     }
     return -EBADF;
 }
@@ -77,13 +145,26 @@ static int64_t sys_write(int fd, const char *buf, uint64_t len) {
 // sys_read — read through the FD table
 // ---------------------------------------------------------------------------
 static int64_t sys_read(int fd, void *buf, uint64_t len) {
-    if (!uptr_ok(buf)) return -EFAULT;
+    if (len > 0 && !buf) return -EFAULT;
 
     struct pcb *p = current_proc();
     if (!p) return -EBADF;
     if (fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
 
-    return fileread(p->ofile[fd], buf, len);
+    char kbuf[UIO_CHUNK];
+    uint64_t done = 0;
+    while (done < len) {
+        uint64_t chunk = len - done;
+        if (chunk > sizeof(kbuf)) chunk = sizeof(kbuf);
+        int r = fileread(p->ofile[fd], kbuf, chunk);
+        if (r < 0) return done > 0 ? (int64_t)done : r;
+        if (r == 0) break;
+        if (copyout((char *)buf + done, kbuf, (unsigned long)r) < 0)
+            return done > 0 ? (int64_t)done : -EFAULT;
+        done += (uint64_t)r;
+        if ((uint64_t)r < chunk) break;
+    }
+    return (int64_t)done;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,16 +197,22 @@ static int path_split(const char *path, char *parent_buf, const char **leaf_out)
 // sys_open (Phase 5: handles O_CREAT on writable sbfs files)
 // ---------------------------------------------------------------------------
 static int64_t sys_open(const char *path, int flags) {
-    if (!uptr_ok(path)) return -EFAULT;
+    struct pcb *p = current_proc();
+    if (!p) return -EBADF;
+    if (proc_open_fd_count(p) >= proc_fd_limit(p)) return -EMFILE;
+
+    char kpath[PATH_MAX_LOCAL];
+    int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc_path < 0) return rc_path;
 
     struct inode *ip = 0;
-    int rc = namei(path, &ip);
+    int rc = namei(kpath, &ip);
 
     if (rc == -ENOENT && (flags & 0100 /* O_CREAT */)) {
         // Create the file.  Walk to the parent directory, then sbfs_create.
         char parent_path[256];
         const char *leaf = 0;
-        if (path_split(path, parent_path, &leaf) < 0) return -EINVAL;
+        if (path_split(kpath, parent_path, &leaf) < 0) return -EINVAL;
         if (!leaf || !leaf[0]) return -EINVAL;
 
         struct inode *parent = 0;
@@ -162,9 +249,6 @@ static int64_t sys_open(const char *path, int flags) {
         ip->ops->truncate(ip);
     }
 
-    struct pcb *p = current_proc();
-    if (!p) { fileclose(f); return -EBADF; }
-
     int fd = alloc_fd(p, f);
     if (fd < 0) { fileclose(f); return fd; }
     return fd;
@@ -174,11 +258,13 @@ static int64_t sys_open(const char *path, int flags) {
 // sys_mkdir — create a directory on sbfs
 // ---------------------------------------------------------------------------
 static int64_t sys_mkdir(const char *path) {
-    if (!uptr_ok(path)) return -EFAULT;
+    char kpath[PATH_MAX_LOCAL];
+    int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc_path < 0) return rc_path;
 
     char parent_path[256];
     const char *leaf = 0;
-    if (path_split(path, parent_path, &leaf) < 0) return -EINVAL;
+    if (path_split(kpath, parent_path, &leaf) < 0) return -EINVAL;
     if (!leaf || !leaf[0]) return -EINVAL;
 
     struct inode *parent = 0;
@@ -207,11 +293,13 @@ static int64_t sys_mkdir(const char *path) {
 // sys_unlink — remove a file (not a non-empty directory) from sbfs
 // ---------------------------------------------------------------------------
 static int64_t sys_unlink(const char *path) {
-    if (!uptr_ok(path)) return -EFAULT;
+    char kpath[PATH_MAX_LOCAL];
+    int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc_path < 0) return rc_path;
 
     char parent_path[256];
     const char *leaf = 0;
-    if (path_split(path, parent_path, &leaf) < 0) return -EINVAL;
+    if (path_split(kpath, parent_path, &leaf) < 0) return -EINVAL;
     if (!leaf || !leaf[0]) return -EINVAL;
 
     struct inode *parent = 0;
@@ -243,6 +331,7 @@ static int64_t sys_close(int fd) {
 static int64_t sys_dup(int fd) {
     struct pcb *p = current_proc();
     if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
+    if (proc_open_fd_count(p) >= proc_fd_limit(p)) return -EMFILE;
     struct file *f = filedup(p->ofile[fd]);
     int newfd = alloc_fd(p, f);
     if (newfd < 0) { fileclose(f); return newfd; }
@@ -259,6 +348,10 @@ static int64_t sys_dup2(int oldfd, int newfd) {
     if (newfd < 0 || newfd >= NOFILE) return -EBADF;
 
     if (oldfd == newfd) return newfd;
+
+    if (newfd >= proc_fd_limit(p)) return -EMFILE;
+    if (!p->ofile[newfd] && proc_open_fd_count(p) >= proc_fd_limit(p))
+        return -EMFILE;
 
     if (p->ofile[newfd]) fileclose(p->ofile[newfd]);
     p->ofile[newfd] = filedup(p->ofile[oldfd]);
@@ -278,26 +371,33 @@ static int64_t sys_lseek(int fd, int64_t off, int whence) {
 // sys_fstat
 // ---------------------------------------------------------------------------
 static int64_t sys_fstat(int fd, struct stat *st) {
-    if (!uptr_ok(st)) return -EFAULT;
     struct pcb *p = current_proc();
     if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
-    return filestat(p->ofile[fd], st);
+    struct stat kst;
+    int rc = filestat(p->ofile[fd], &kst);
+    if (rc < 0) return rc;
+    if (copyout(st, &kst, (unsigned long)sizeof(kst)) < 0) return -EFAULT;
+    return rc;
 }
 
 // ---------------------------------------------------------------------------
 // sys_getdents64
 // ---------------------------------------------------------------------------
 static int64_t sys_getdents64(int fd, void *buf, uint64_t n) {
-    if (!uptr_ok(buf)) return -EFAULT;
+    if (n > 0 && !buf) return -EFAULT;
     struct pcb *p = current_proc();
     if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
 
     struct file *f = p->ofile[fd];
     if (f->type != FD_INODE || !f->ip || f->ip->type != I_DIR) return -ENOTDIR;
 
+    char kbuf[1024];
+    uint64_t chunk = n;
+    if (chunk > sizeof(kbuf)) chunk = sizeof(kbuf);
     uint64_t next;
-    int r = f->ip->ops->getdents(f->ip, f->off, buf, n, &next);
+    int r = f->ip->ops->getdents(f->ip, f->off, kbuf, chunk, &next);
     if (r > 0) f->off = next;
+    if (r > 0 && copyout(buf, kbuf, (unsigned long)r) < 0) return -EFAULT;
     return r;
 }
 
@@ -305,10 +405,12 @@ static int64_t sys_getdents64(int fd, void *buf, uint64_t n) {
 // sys_chdir
 // ---------------------------------------------------------------------------
 static int64_t sys_chdir(const char *path) {
-    if (!uptr_ok(path)) return -EFAULT;
+    char kpath[PATH_MAX_LOCAL];
+    int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc_path < 0) return rc_path;
 
     struct inode *ip;
-    int rc = namei(path, &ip);
+    int rc = namei(kpath, &ip);
     if (rc < 0) return rc;
     if (ip->type != I_DIR) { inode_put(ip); return -ENOTDIR; }
 
@@ -321,9 +423,9 @@ static int64_t sys_chdir(const char *path) {
     // Update cwd_path string.
     // Normalize: for simplicity just store the requested path if absolute,
     // otherwise recompute from parent path + "/" + component.
-    if (path[0] == '/') {
+    if (kpath[0] == '/') {
         int i = 0;
-        while (path[i] && i < 254) { p->cwd_path[i] = path[i]; i++; }
+        while (kpath[i] && i < 254) { p->cwd_path[i] = kpath[i]; i++; }
         p->cwd_path[i] = '\0';
     } else {
         // Relative: append to existing cwd_path.
@@ -331,7 +433,7 @@ static int64_t sys_chdir(const char *path) {
         while (p->cwd_path[base]) base++;
         if (base > 1) { p->cwd_path[base] = '/'; base++; } // avoid double /
         int i = 0;
-        while (path[i] && base + i < 254) { p->cwd_path[base + i] = path[i]; i++; }
+        while (kpath[i] && base + i < 254) { p->cwd_path[base + i] = kpath[i]; i++; }
         p->cwd_path[base + i] = '\0';
     }
     return 0;
@@ -341,7 +443,7 @@ static int64_t sys_chdir(const char *path) {
 // sys_getcwd
 // ---------------------------------------------------------------------------
 static int64_t sys_getcwd(char *buf, uint64_t n) {
-    if (!uptr_ok(buf)) return -EFAULT;
+    if (n > 0 && !buf) return -EFAULT;
     struct pcb *p = current_proc();
     if (!p) return -EBADF;
 
@@ -351,7 +453,7 @@ static int64_t sys_getcwd(char *buf, uint64_t n) {
     len++; // include null terminator
 
     if ((uint64_t)len > n) return -ERANGE;
-    for (int i = 0; i < len; i++) buf[i] = cwd[i];
+    if (copyout(buf, cwd, (unsigned long)len) < 0) return -EFAULT;
     return len - 1;
 }
 
@@ -387,18 +489,29 @@ static unsigned long setup_user_stack(void *kstack, char *const *argv_user) {
     // Count args and copy strings to bottom of stack page.
     int argc = 0;
     char *strp = base;
-    unsigned long uaddrs[32];
+    unsigned long uaddrs[ARGV_MAX_LOCAL];
 
-    for (int i = 0; i < 32; i++) {
-        if (!argv_user[i]) break;
-        const char *s = argv_user[i];
-        if (!uptr_ok(s)) break;
+    for (int i = 0; i < ARGV_MAX_LOCAL; i++) {
+        uint64_t uarg = 0;
+        if (copyin(&uarg,
+                   (const char *)argv_user + i * sizeof(uint64_t),
+                   sizeof(uint64_t)) < 0)
+            return 0;
+        if (uarg == 0) break;
+
         int len = 0;
-        while (s[len]) len++;
-        len++; // include NUL
+        char c = 0;
+        do {
+            if (copyin(&c, (const char *)(uintptr_t)(uarg + (uint64_t)len), 1) < 0)
+                return 0;
+            len++;
+        } while (c && len < 256);
+        if (c != 0) return 0;
+
         if (strp + len > top - (long)sizeof(uint64_t) * (argc + 4))
             break; // out of space
-        for (int j = 0; j < len; j++) strp[j] = s[j];
+        if (copyin(strp, (const void *)(uintptr_t)uarg, (unsigned long)len) < 0)
+            return 0;
         // Compute the user VA for this string
         uaddrs[argc] = (USER_STACK_TOP - 4096) + (unsigned long)(strp - base);
         strp += len;
@@ -429,13 +542,9 @@ static int64_t do_exec(const char *path, char *const *argv_user,
                        uint64_t *trapframe) {
     struct pcb *p = current_proc();
     if (!p || !p->is_user) return -1;
-    if (!uptr_ok(path)) return -EFAULT;
-
-    // Copy path to kernel buffer before we switch page tables.
-    char kpath[128];
-    int pi = 0;
-    while (path[pi] && pi < 126) { kpath[pi] = path[pi]; pi++; }
-    kpath[pi] = 0;
+    char kpath[PATH_MAX_LOCAL];
+    int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc_path < 0) return rc_path;
 
     // Resolve through VFS.
     struct inode *ip;
@@ -456,15 +565,16 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     struct vma *vlist = 0;
     uint64_t brk = 0;
     unsigned long entry;
-    if (load_user_elf(new_pt, img, img_sz, &entry, &vlist, &brk) < 0) {
+    int load_rc = load_user_elf(new_pt, img, img_sz, &entry, &vlist, &brk);
+    if (load_rc < 0) {
         free_user_pgtable(new_pt);
-        return -1;
+        return load_rc;
     }
     void *kstack = map_stack(new_pt);
     if (!kstack) {
         vma_list_free(&vlist);
         free_user_pgtable(new_pt);
-        return -1;
+        return -ENOMEM;
     }
 
     // Build user stack (copies argv strings from OLD address space before switch)
@@ -529,7 +639,6 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     p->in_sighandler   = 0;
     p->delivering_segv = 0;
 
-    printk("exec: '%s' loaded, entry=0x%lx sp=0x%lx\n", kpath, entry, new_sp);
     return 0;
 }
 
@@ -545,10 +654,37 @@ static int64_t sys_sbrk(int64_t incr) {
 
     if (incr > 0) {
         if (new_end > HEAP_MAX) return -ENOMEM;
+        uint64_t old_pages = (old_end - p->heap_vma->start) / PAGE_SIZE;
+        uint64_t new_pages = (new_end - p->heap_vma->start) / PAGE_SIZE;
+        uint64_t add_pages = (new_pages > old_pages) ? (new_pages - old_pages) : 0;
+        if (proc_vma_total_pages(p) + add_pages > (uint64_t)p->rlim_npages)
+            return -ENOMEM;
+
+        uint64_t alloc_start = page_round_up(old_end);
+        uint64_t alloc_end   = page_round_up(new_end);
+        uint64_t va;
+        for (va = alloc_start; va < alloc_end; va += PAGE_SIZE) {
+            pte_t *pte = get_pte(p->pagetable, va, 0);
+            if (pte && (*pte & PTE_V))
+                continue;
+
+            void *pg = page_alloc();
+            if (!pg) {
+                if (alloc_start < va)
+                    uvmunmap_range(p->pagetable, alloc_start, va);
+                return -ENOMEM;
+            }
+            vmem_map(p->pagetable, va, virt_to_phys((unsigned long)pg),
+                     PAGE_SIZE, PTE_R | PTE_W | PTE_U);
+        }
+        flush_tlb();
         p->heap_vma->end = new_end;
     } else if (incr < 0) {
         if (new_end < p->heap_vma->start) return -EINVAL;
-        uvmunmap_range(p->pagetable, new_end, old_end);
+        uint64_t unmap_start = page_round_up(new_end);
+        uint64_t unmap_end   = page_round_up(old_end);
+        if (unmap_start < unmap_end)
+            uvmunmap_range(p->pagetable, unmap_start, unmap_end);
         p->heap_vma->end = new_end;
     }
 
@@ -571,6 +707,9 @@ static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
     if (!(flags & MAP_ANON) || fd != -1 || off != 0) return -EINVAL;
 
     len = page_round_up(len);
+    if (proc_vma_count(p) >= p->rlim_nvma) return -ENOMEM;
+    if (proc_vma_total_pages(p) + (len / PAGE_SIZE) > (uint64_t)p->rlim_npages)
+        return -ENOMEM;
 
     uint64_t search = MMAP_END - len;
     while (search >= MMAP_START) {
@@ -624,16 +763,26 @@ static int64_t sys_munmap(uint64_t addr, uint64_t len) {
 // sys_pipe
 // ---------------------------------------------------------------------------
 static int64_t sys_pipe(int *fds) {
-    if (!uptr_ok(fds)) return -EFAULT;
+    if (!fds) return -EFAULT;
+    struct pcb *p = current_proc();
+    if (!p) return -EBADF;
+    if (proc_open_fd_count(p) + 2 > proc_fd_limit(p))
+        return -EMFILE;
+
     struct file *rf = 0, *wf = 0;
     if (pipe_alloc(&rf, &wf) < 0) return -ENOMEM;
-    struct pcb *p = current_proc();
     int fd0 = alloc_fd(p, rf);
     if (fd0 < 0) { fileclose(rf); fileclose(wf); return -EMFILE; }
     int fd1 = alloc_fd(p, wf);
     if (fd1 < 0) { p->ofile[fd0] = 0; fileclose(rf); fileclose(wf); return -EMFILE; }
-    fds[0] = fd0;
-    fds[1] = fd1;
+    int out[2] = {fd0, fd1};
+    if (copyout(fds, out, sizeof(out)) < 0) {
+        p->ofile[fd0] = 0;
+        p->ofile[fd1] = 0;
+        fileclose(rf);
+        fileclose(wf);
+        return -EFAULT;
+    }
     return 0;
 }
 
@@ -672,11 +821,13 @@ static int64_t sys_sleep(uint64_t ms) {
 // sys_clock_gettime
 // ---------------------------------------------------------------------------
 static int64_t sys_clock_gettime(int clockid, struct timespec *ts) {
-    if (!uptr_ok(ts)) return -EFAULT;
+    if (!ts) return -EFAULT;
     if (clockid != CLOCK_REALTIME && clockid != CLOCK_MONOTONIC) return -EINVAL;
+    struct timespec kts;
     uint64_t ticks = timer_ticks();
-    ts->tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
-    ts->tv_nsec = (int64_t)((ticks % TICKS_PER_SEC) * (1000000000UL / TICKS_PER_SEC));
+    kts.tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
+    kts.tv_nsec = (int64_t)((ticks % TICKS_PER_SEC) * (1000000000UL / TICKS_PER_SEC));
+    if (copyout(ts, &kts, sizeof(kts)) < 0) return -EFAULT;
     return 0;
 }
 
@@ -685,10 +836,12 @@ static int64_t sys_clock_gettime(int clockid, struct timespec *ts) {
 // ---------------------------------------------------------------------------
 static int64_t sys_gettimeofday(struct timeval *tv, void *tz) {
     (void)tz;
-    if (!uptr_ok(tv)) return -EFAULT;
+    if (!tv) return -EFAULT;
+    struct timeval ktv;
     uint64_t ticks = timer_ticks();
-    tv->tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
-    tv->tv_usec = (int64_t)((ticks % TICKS_PER_SEC) * (1000000UL / TICKS_PER_SEC));
+    ktv.tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
+    ktv.tv_usec = (int64_t)((ticks % TICKS_PER_SEC) * (1000000UL / TICKS_PER_SEC));
+    if (copyout(tv, &ktv, sizeof(ktv)) < 0) return -EFAULT;
     return 0;
 }
 
@@ -696,16 +849,17 @@ static int64_t sys_gettimeofday(struct timeval *tv, void *tz) {
 // sys_nanosleep — basic version; -EINTR added in Phase 8b once signals land
 // ---------------------------------------------------------------------------
 static int64_t sys_nanosleep(const struct timespec *req, struct timespec *rem) {
-    if (!uptr_ok(req)) return -EFAULT;
-    if (req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000LL)
+    struct timespec kreq;
+    if (copyin(&kreq, req, sizeof(kreq)) < 0) return -EFAULT;
+    if (kreq.tv_sec < 0 || kreq.tv_nsec < 0 || kreq.tv_nsec >= 1000000000LL)
         return -EINVAL;
 
     struct pcb *p = current_proc();
     if (!p) return -EINVAL;
 
-    uint64_t total_ticks = (uint64_t)req->tv_sec * (uint64_t)TICKS_PER_SEC
-                         + ((uint64_t)req->tv_nsec * (uint64_t)TICKS_PER_SEC) / 1000000000ULL;
-    if (total_ticks == 0 && req->tv_nsec > 0) total_ticks = 1;
+    uint64_t total_ticks = (uint64_t)kreq.tv_sec * (uint64_t)TICKS_PER_SEC
+                         + ((uint64_t)kreq.tv_nsec * (uint64_t)TICKS_PER_SEC) / 1000000000ULL;
+    if (total_ticks == 0 && kreq.tv_nsec > 0) total_ticks = 1;
 
     uint64_t start = timer_ticks();
     uint64_t wake  = start + total_ticks;
@@ -716,9 +870,14 @@ static int64_t sys_nanosleep(const struct timespec *req, struct timespec *rem) {
         if (sig_has_actionable(p)) {
             uint64_t now = timer_ticks();
             uint64_t rem_ticks = (now >= wake) ? 0 : (wake - now);
-            if (rem && uptr_ok(rem)) {
-                rem->tv_sec  = (int64_t)(rem_ticks / TICKS_PER_SEC);
-                rem->tv_nsec = (int64_t)((rem_ticks % TICKS_PER_SEC) * (1000000000ULL / TICKS_PER_SEC));
+            if (rem) {
+                struct timespec krem;
+                krem.tv_sec  = (int64_t)(rem_ticks / TICKS_PER_SEC);
+                krem.tv_nsec = (int64_t)((rem_ticks % TICKS_PER_SEC) * (1000000000ULL / TICKS_PER_SEC));
+                if (copyout(rem, &krem, sizeof(krem)) < 0) {
+                    p->wake_tick = 0;
+                    return -EFAULT;
+                }
             }
             p->wake_tick = 0;
             return -EINTR;
@@ -726,9 +885,9 @@ static int64_t sys_nanosleep(const struct timespec *req, struct timespec *rem) {
     }
 
     p->wake_tick = 0;
-    if (rem && uptr_ok(rem)) {
-        rem->tv_sec  = 0;
-        rem->tv_nsec = 0;
+    if (rem) {
+        struct timespec z = {0, 0};
+        if (copyout(rem, &z, sizeof(z)) < 0) return -EFAULT;
     }
     return 0;
 }
@@ -750,6 +909,10 @@ static int64_t sys_ioctl(int fd, int cmd, unsigned long arg) {
     struct pcb *p = current_proc();
     if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
     return fileioctl(p->ofile[fd], cmd, arg);
+}
+
+static int64_t sys_meminfo(void) {
+    return (int64_t)pmem_free_count();
 }
 
 // ---------------------------------------------------------------------------
@@ -792,8 +955,13 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_wait: {
             int *ustatus = (int *)(uintptr_t)trapframe[TF_A0];
-            if (ustatus && !uptr_ok(ustatus)) return -1;
-            return (int64_t)proc_wait_current(ustatus);
+            int kstatus = 0;
+            int r = proc_wait_current(ustatus ? &kstatus : 0);
+            if (r > 0 && ustatus) {
+                if (copyout(ustatus, &kstatus, sizeof(kstatus)) < 0)
+                    return -EFAULT;
+            }
+            return (int64_t)r;
         }
 
         case SYS_getppid:
@@ -897,6 +1065,9 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
             return sys_ioctl((int)(int64_t)trapframe[TF_A0],
                              (int)(int64_t)trapframe[TF_A1],
                              (unsigned long)trapframe[TF_A2]);
+
+        case SYS_meminfo:
+            return sys_meminfo();
 
         default:
             printk("syscall: unknown number %lu from pid %d\n",

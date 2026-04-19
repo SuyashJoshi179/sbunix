@@ -51,6 +51,14 @@ void *page_alloc(void) {
     if (!freelist) return 0;
     struct free_page *p = freelist;
     freelist = p->next;
+
+    unsigned long pa = virt_to_phys((unsigned long)p);
+    /* Invariant: freelist nodes are page-aligned RAM pages only. */
+    if ((((unsigned long)p) & (PAGE_SIZE - 1)) != 0)
+        panic("page_alloc: unaligned freelist entry");
+    if (pa < KERN_BASE || pa >= PHYMEM_END)
+        panic("page_alloc: freelist entry out of range");
+
     memset(p, 0, PAGE_SIZE);
     if (page_refs_ready)
         page_ref_set(virt_to_phys((unsigned long)p), 1);
@@ -58,8 +66,14 @@ void *page_alloc(void) {
 }
 
 void page_free(void *page) {
+    /* Invariant: only page-aligned RAM pages can re-enter freelist. */
+    if ((((unsigned long)page) & (PAGE_SIZE - 1)) != 0)
+        panic("page_free: unaligned page");
+    unsigned long pa = virt_to_phys((unsigned long)page);
+    if (pa < KERN_BASE || pa >= PHYMEM_END)
+        panic("page_free: page out of range");
+
     if (page_refs_ready) {
-        unsigned long pa = virt_to_phys((unsigned long)page);
         unsigned char ref = page_ref_get(pa);
         if (ref != 1 && ref != 0)
             panic("page_free: refcount != 1");

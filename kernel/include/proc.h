@@ -76,6 +76,11 @@ struct pcb {
     uint8_t        in_sighandler;   // 1 while a user signal handler is running
     uint8_t        delivering_segv; // guard against recursive SIGSEGV default-kill
 
+    // Phase 9c: per-process hard resource limits.
+    int            rlim_nofile;     // max open fds visible to this process
+    int            rlim_nvma;       // max VMA nodes
+    int            rlim_npages;     // max total virtual mapped pages across VMAs
+
     struct pcb    *next;            // intrusive linked list
 };
 

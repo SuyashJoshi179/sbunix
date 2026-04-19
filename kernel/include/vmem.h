@@ -84,3 +84,8 @@ void      free_user_pgtable(pgtable_t pt);
 void     *map_stack(pgtable_t pt);     // maps one page at USER_STACK_TOP - PAGE_SIZE; returns kpage
 pgtable_t uvmcow_share(pgtable_t parent);  // COW share user address space for fork()
 void      uvmunmap_range(pgtable_t pt, unsigned long va_start, unsigned long va_end);
+
+// Safe user access helpers for current process user pointers.
+// Return 0 on success, -EFAULT on invalid/unmapped user memory.
+int       copyin(void *kdst, const void *usrc, unsigned long n);
+int       copyout(void *udst, const void *ksrc, unsigned long n);
