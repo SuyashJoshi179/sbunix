@@ -140,7 +140,6 @@ struct pcb *alloc_proc(void) {
     p->rlim_nofile = RLIM_NOFILE_DEFAULT;
     p->rlim_nvma   = RLIM_NVMA_DEFAULT;
     p->rlim_npages = RLIM_NPAGES_DEFAULT;
-
     // context is zeroed by page_alloc; set sp and ra
     p->context.sp = (uint64_t)p->kstack_page + KSTACK_SIZE;
     p->context.ra = (uint64_t)forkret;

@@ -639,6 +639,7 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     p->in_sighandler   = 0;
     p->delivering_segv = 0;
 
+    printk("exec: '%s' loaded, entry=0x%lx sp=0x%lx\n", kpath, entry, new_sp);
     return 0;
 }
 
@@ -914,7 +915,6 @@ static int64_t sys_ioctl(int fd, int cmd, unsigned long arg) {
 static int64_t sys_meminfo(void) {
     return (int64_t)pmem_free_count();
 }
-
 // ---------------------------------------------------------------------------
 // syscall_dispatch
 // ---------------------------------------------------------------------------
@@ -1068,7 +1068,6 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_meminfo:
             return sys_meminfo();
-
         default:
             printk("syscall: unknown number %lu from pid %d\n",
                    sysnum,

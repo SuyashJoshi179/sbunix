@@ -80,7 +80,6 @@ struct pcb {
     int            rlim_nofile;     // max open fds visible to this process
     int            rlim_nvma;       // max VMA nodes
     int            rlim_npages;     // max total virtual mapped pages across VMAs
-
     struct pcb    *next;            // intrusive linked list
 };
 

@@ -216,6 +216,7 @@ int64_t sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
         case SIG_BLOCK:   p->sig_blocked |= s;  break;
         case SIG_UNBLOCK: p->sig_blocked &= ~s; break;
         case SIG_SETMASK: p->sig_blocked  = s;  break;
+        default: return -EINVAL;
         }
     }
     return 0;
