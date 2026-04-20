@@ -27,6 +27,7 @@ void fork_child_return(void);
 static struct pcb    *procs   = 0;   // head of all-processes list
 static struct pcb    *current = 0;   // currently running process
 static int            next_pid = 1;
+static int            init_pid = 0;  // pid of the user init, set in sched_init
 static struct context sched_context;
 
 #define RLIM_NOFILE_DEFAULT 16
@@ -350,15 +351,18 @@ void proc_exit_current(int status) {
 
     // Safe unlocked on single-hart: only scheduler-context code mutates
     // the process list, and proc_exit_current runs in scheduler context.
+    // Reparent to the actual init pid: selftests consume low pids before
+    // init is spawned, so init is not guaranteed to be pid 1.
+    int reparent_to = init_pid ? init_pid : 1;
     int reparented_any = 0;
     for (struct pcb *it = procs; it; it = it->next) {
         if (it->parent_pid == p->pid) {
-            it->parent_pid = 1;
+            it->parent_pid = reparent_to;
             reparented_any = 1;
         }
     }
     if (reparented_any)
-        proc_wakeup(1);
+        proc_wakeup(reparent_to);
 
     // Notify parent: send SIGCHLD, then wake it if sleeping in wait
     send_signal_by_pid(p->parent_pid, SIGCHLD);
@@ -504,6 +508,7 @@ void proc_sleep_ms(uint64_t ms) {
 void sched_init(void) {
     struct pcb *init = proc_spawn("bin/init");
     if (!init) panic("sched_init: failed to spawn init");
+    init_pid = init->pid;
 
     printk("scheduler: starting\n");
     scheduler_run();
