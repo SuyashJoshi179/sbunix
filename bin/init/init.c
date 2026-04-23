@@ -61,6 +61,12 @@ int main(void) {
         "/bin/leak_test",
         "/bin/reap_stress_test",
         "/bin/resource_churn_test",
+        /* Phase 7b: lazy allocation + demand paging */
+        "/bin/lazy_sbrk_test",
+        "/bin/zerofill_test",
+        "/bin/demand_walk_test",
+        "/bin/stack_overflow_test",
+        "/bin/usertests",
     };
     int ntests = (int)(sizeof(tests) / sizeof(tests[0]));
 

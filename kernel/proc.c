@@ -222,6 +222,14 @@ int proc_fork_current(void) {
     // Copy the complete trap frame (288 bytes = 36 × uint64_t)
     memmove(child_tf, parent_tf, 288);
 
+    // Sanity: parent trapframe must be returning to user. Catch corruption
+    // at the source rather than letting the child sret to a kernel PC.
+    if (parent_tf[TF_SEPC] >= USER_STACK_TOP || parent_tf[1] == 0 ||
+        parent_tf[1] >= USER_STACK_TOP) {
+        printk("[BUG fork] parent pid=%d has bad tf: sepc=0x%lx sp=0x%lx\n",
+               parent->pid, parent_tf[TF_SEPC], parent_tf[1]);
+    }
+
     // fork() returns 0 in the child
     child_tf[TF_A0] = 0;
 
