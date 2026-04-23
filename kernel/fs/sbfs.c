@@ -42,6 +42,9 @@ static int  sbfs_op_lookup(struct inode *, const char *, struct inode **);
 static int  sbfs_op_getdents(struct inode *, uint64_t, void *, uint64_t, uint64_t *);
 static int  sbfs_op_truncate(struct inode *);
 static void sbfs_op_release(struct inode *);
+static int  sbfs_op_create(struct inode *, const char *, struct inode **);
+static int  sbfs_op_mkdir (struct inode *, const char *);
+static int  sbfs_op_unlink(struct inode *, const char *);
 
 /* Internal helpers used before their definition. */
 static void sbfs_itrunc(struct sbfs_inode *si);
@@ -54,6 +57,9 @@ static const struct inode_ops sbfs_iops = {
     .getdents = sbfs_op_getdents,
     .truncate = sbfs_op_truncate,
     .release  = sbfs_op_release,
+    .create   = sbfs_op_create,
+    .mkdir    = sbfs_op_mkdir,
+    .unlink   = sbfs_op_unlink,
 };
 
 /* -----------------------------------------------------------------------
@@ -590,6 +596,32 @@ static int sbfs_op_getdents(struct inode *dir, uint64_t off, void *buf,
 
     *out_next = off;
     return written;
+}
+
+static int sbfs_op_create(struct inode *parent, const char *name,
+                          struct inode **out) {
+    begin_op();
+    struct inode *ip = sbfs_create(parent, name, 1 /* regular file */);
+    end_op();
+    if (!ip) return -ENOSPC;
+    *out = ip;
+    return 0;
+}
+
+static int sbfs_op_mkdir(struct inode *parent, const char *name) {
+    begin_op();
+    struct inode *ip = sbfs_create(parent, name, 2 /* directory */);
+    end_op();
+    if (!ip) return -ENOSPC;
+    inode_put(ip);
+    return 0;
+}
+
+static int sbfs_op_unlink(struct inode *parent, const char *name) {
+    begin_op();
+    int rc = sbfs_unlink(parent, name);
+    end_op();
+    return rc;
 }
 
 /* -----------------------------------------------------------------------

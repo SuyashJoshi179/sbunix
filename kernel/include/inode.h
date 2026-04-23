@@ -18,6 +18,12 @@ struct inode_ops {
     /* Called when refcnt drops to 0; may write back dirty state.
      * NULL for static-pool filesystems (tarfs, devfs). */
     void (*release) (struct inode *);
+    /* Mutating directory ops.  NULL on read-only filesystems → caller
+     * should treat NULL as -EROFS.  Implementations are responsible for
+     * their own begin_op/end_op (callers must NOT wrap). */
+    int  (*create)  (struct inode *parent, const char *name, struct inode **out);
+    int  (*mkdir)   (struct inode *parent, const char *name);
+    int  (*unlink)  (struct inode *parent, const char *name);
 };
 
 #define I_REG  1

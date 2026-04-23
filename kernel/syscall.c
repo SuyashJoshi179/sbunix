@@ -209,8 +209,9 @@ static int64_t sys_open(const char *path, int flags) {
     int rc = namei(kpath, &ip);
 
     if (rc == -ENOENT && (flags & 0100 /* O_CREAT */)) {
-        // Create the file.  Walk to the parent directory, then sbfs_create.
-        char parent_path[256];
+        // Create the file.  Walk to the parent directory, then dispatch
+        // through the parent fs's create op (NULL → read-only fs → EROFS).
+        char parent_path[PATH_MAX_LOCAL];
         const char *leaf = 0;
         if (path_split(kpath, parent_path, &leaf) < 0) return -EINVAL;
         if (!leaf || !leaf[0]) return -EINVAL;
@@ -218,17 +219,14 @@ static int64_t sys_open(const char *path, int flags) {
         struct inode *parent = 0;
         if (namei(parent_path, &parent) < 0) return -ENOENT;
         if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
-        // sbfs_create only works on sbfs inodes
-        if (!parent->ops || parent->ops->write == 0) {
+        if (!parent->ops || !parent->ops->create) {
             inode_put(parent);
             return -EROFS;
         }
 
-        begin_op();
-        ip = sbfs_create(parent, leaf, 1 /* regular file */);
+        int crc = parent->ops->create(parent, leaf, &ip);
         inode_put(parent);
-        if (!ip) { end_op(); return -ENOSPC; }
-        end_op();
+        if (crc < 0) return crc;
     } else if (rc < 0) {
         return rc;
     }
@@ -255,14 +253,14 @@ static int64_t sys_open(const char *path, int flags) {
 }
 
 // ---------------------------------------------------------------------------
-// sys_mkdir — create a directory on sbfs
+// sys_mkdir — dispatch through parent fs's mkdir op
 // ---------------------------------------------------------------------------
 static int64_t sys_mkdir(const char *path) {
     char kpath[PATH_MAX_LOCAL];
     int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc_path < 0) return rc_path;
 
-    char parent_path[256];
+    char parent_path[PATH_MAX_LOCAL];
     const char *leaf = 0;
     if (path_split(kpath, parent_path, &leaf) < 0) return -EINVAL;
     if (!leaf || !leaf[0]) return -EINVAL;
@@ -270,34 +268,32 @@ static int64_t sys_mkdir(const char *path) {
     struct inode *parent = 0;
     if (namei(parent_path, &parent) < 0) return -ENOENT;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
-    if (!parent->ops || !parent->ops->write) { inode_put(parent); return -EROFS; }
+    if (!parent->ops || !parent->ops->mkdir) { inode_put(parent); return -EROFS; }
 
     // Check name doesn't already exist
-    struct inode *existing = 0;
-    if (parent->ops->lookup(parent, leaf, &existing) == 0) {
-        inode_put(existing);
-        inode_put(parent);
-        return -EEXIST;
+    if (parent->ops->lookup) {
+        struct inode *existing = 0;
+        if (parent->ops->lookup(parent, leaf, &existing) == 0) {
+            inode_put(existing);
+            inode_put(parent);
+            return -EEXIST;
+        }
     }
 
-    begin_op();
-    struct inode *ip = sbfs_create(parent, leaf, 2 /* directory */);
+    int rc = parent->ops->mkdir(parent, leaf);
     inode_put(parent);
-    if (!ip) { end_op(); return -ENOSPC; }
-    inode_put(ip);
-    end_op();
-    return 0;
+    return rc;
 }
 
 // ---------------------------------------------------------------------------
-// sys_unlink — remove a file (not a non-empty directory) from sbfs
+// sys_unlink — dispatch through parent fs's unlink op
 // ---------------------------------------------------------------------------
 static int64_t sys_unlink(const char *path) {
     char kpath[PATH_MAX_LOCAL];
     int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc_path < 0) return rc_path;
 
-    char parent_path[256];
+    char parent_path[PATH_MAX_LOCAL];
     const char *leaf = 0;
     if (path_split(kpath, parent_path, &leaf) < 0) return -EINVAL;
     if (!leaf || !leaf[0]) return -EINVAL;
@@ -305,11 +301,9 @@ static int64_t sys_unlink(const char *path) {
     struct inode *parent = 0;
     if (namei(parent_path, &parent) < 0) return -ENOENT;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
-    if (!parent->ops || !parent->ops->write) { inode_put(parent); return -EROFS; }
+    if (!parent->ops || !parent->ops->unlink) { inode_put(parent); return -EROFS; }
 
-    begin_op();
-    int rc = sbfs_unlink(parent, leaf);
-    end_op();
+    int rc = parent->ops->unlink(parent, leaf);
     inode_put(parent);
     return rc;
 }
