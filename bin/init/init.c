@@ -66,6 +66,7 @@ int main(void) {
         "/bin/zerofill_test",
         "/bin/demand_walk_test",
         "/bin/stack_overflow_test",
+        "/bin/usertests",
     };
     int ntests = (int)(sizeof(tests) / sizeof(tests[0]));
 
