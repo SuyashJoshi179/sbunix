@@ -9,8 +9,28 @@
 #include <drivers/plic.h>
 #include <drivers/uart.h>
 #include <drivers/virtio.h>
+#include <vmem.h>
 
 #define SIE_SEIE  (1 << 9)   /* S-mode external interrupt enable */
+
+/* Catch corrupted return-to-user PC before sret. User text+stack live below
+ * USER_STACK_TOP (0x40000000). Anything at/above is a kernel bug. */
+static void check_user_return(uint64_t *tf, const char *tag) {
+    uint64_t pc = tf[TF_SEPC];
+    if (pc >= USER_STACK_TOP) {
+        struct pcb *p = current_proc();
+        printk("[BUG %s] pid=%d returning to user with bad sepc=0x%lx — killing\n",
+               tag, p ? p->pid : -1, pc);
+        proc_exit_current(139);
+    }
+    uint64_t sp = tf[1];
+    if (sp == 0 || sp >= USER_STACK_TOP) {
+        struct pcb *p = current_proc();
+        printk("[BUG %s] pid=%d returning to user with bad sp=0x%lx sepc=0x%lx — killing\n",
+               tag, p ? p->pid : -1, sp, pc);
+        proc_exit_current(139);
+    }
+}
 
 void trap_init(void) {
     extern void trap_vector(void);
@@ -44,9 +64,14 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
     uint64_t cause_code   = scause & 0xFF;
 
     if (is_interrupt) {
+        int irq_from_user = (trapframe[TF_SSTATUS] & SSTATUS_SPP) == 0;
         switch (cause_code) {
             case 5:   /* supervisor timer interrupt */
                 timer_handler();
+                if (irq_from_user) {
+                    check_signals(trapframe);
+                    check_user_return(trapframe, "timer-ret");
+                }
                 return;
             case 9:   /* supervisor external interrupt (PLIC) */
             {
@@ -57,6 +82,10 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
                     virtio_disk_intr();
                 }
                 if (irq) plic_complete(irq);
+                if (irq_from_user) {
+                    check_signals(trapframe);
+                    check_user_return(trapframe, "extirq-ret");
+                }
                 return;
             }
             default:
@@ -76,6 +105,7 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
         int64_t ret = syscall_dispatch(trapframe[TF_A7], trapframe);
         trapframe[TF_A0] = (uint64_t)ret;
         check_signals(trapframe);
+        check_user_return(trapframe, "ecall-ret");
         return;
     }
 
@@ -85,6 +115,7 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
         if (cause_code == 12 || cause_code == 13 || cause_code == 15) {
             if (user_page_fault(cause_code, stval, trapframe) == 0) {
                 check_signals(trapframe);
+                check_user_return(trapframe, "pf-ret");
                 return;
             }
         }

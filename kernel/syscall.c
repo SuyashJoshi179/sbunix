@@ -655,37 +655,24 @@ static int64_t sys_sbrk(int64_t incr) {
 
     if (incr > 0) {
         if (new_end > HEAP_MAX) return -ENOMEM;
+
+        // Enforce per-process mapped-page cap against the VMA address range;
+        // actual physical pages come on demand via user_page_fault.
         uint64_t old_pages = (old_end - p->heap_vma->start) / PAGE_SIZE;
         uint64_t new_pages = (new_end - p->heap_vma->start) / PAGE_SIZE;
         uint64_t add_pages = (new_pages > old_pages) ? (new_pages - old_pages) : 0;
         if (proc_vma_total_pages(p) + add_pages > (uint64_t)p->rlim_npages)
             return -ENOMEM;
 
-        uint64_t alloc_start = page_round_up(old_end);
-        uint64_t alloc_end   = page_round_up(new_end);
-        uint64_t va;
-        for (va = alloc_start; va < alloc_end; va += PAGE_SIZE) {
-            pte_t *pte = get_pte(p->pagetable, va, 0);
-            if (pte && (*pte & PTE_V))
-                continue;
-
-            void *pg = page_alloc();
-            if (!pg) {
-                if (alloc_start < va)
-                    uvmunmap_range(p->pagetable, alloc_start, va);
-                return -ENOMEM;
-            }
-            vmem_map(p->pagetable, va, virt_to_phys((unsigned long)pg),
-                     PAGE_SIZE, PTE_R | PTE_W | PTE_U);
-        }
-        flush_tlb();
         p->heap_vma->end = new_end;
     } else if (incr < 0) {
         if (new_end < p->heap_vma->start) return -EINVAL;
         uint64_t unmap_start = page_round_up(new_end);
         uint64_t unmap_end   = page_round_up(old_end);
-        if (unmap_start < unmap_end)
+        if (unmap_start < unmap_end) {
             uvmunmap_range(p->pagetable, unmap_start, unmap_end);
+            flush_tlb();
+        }
         p->heap_vma->end = new_end;
     }
 
