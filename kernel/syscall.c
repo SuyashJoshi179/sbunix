@@ -21,7 +21,6 @@
 #include <vmem.h>
 #include <log.h>
 #include <drivers/uart.h>
-#include <drivers/rtc.h>
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -169,56 +168,21 @@ static int64_t sys_read(int fd, void *buf, uint64_t len) {
 }
 
 // ---------------------------------------------------------------------------
-// path_split — split a path into parent dir path + leaf name.
-//
-// Strips trailing '/' (POSIX: "/foo/" is equivalent to "/foo"), so `path`
-// must be writable. Handles both absolute and relative paths:
-//   "/foo/bar"  -> parent="/foo",  leaf="bar"
-//   "/foo"      -> parent="/",     leaf="foo"
-//   "/foo/"     -> parent="/",     leaf="foo"
-//   "foo/bar"   -> parent="foo",   leaf="bar"
-//   "foo"       -> parent=".",     leaf="foo"
-//
-// Returns 0 on success, -EINVAL if path has no leaf component
-// (e.g. "", "/", "////").
 // path_split — split an absolute path into parent dir path + leaf name.
 // parent_buf must hold at least the length of path.
-// Strips trailing '/' (POSIX: "/foo/" is equivalent to "/foo"), so `path`
-// must be writable. Returns 0 on success, -EINVAL if path has no leaf
-// component (e.g. "" or "/" or "////").
+// Returns 0 on success, -EINVAL if path has no parent component.
 // ---------------------------------------------------------------------------
-static int path_split(char *path, char *parent_buf, const char **leaf_out) {
+static int path_split(const char *path, char *parent_buf, const char **leaf_out) {
     int len = 0;
     while (path[len]) len++;
-    if (len == 0) return -EINVAL;
+    if (len == 0 || path[0] != '/') return -EINVAL;
 
-    // Strip trailing slashes, but never reduce "/" itself to "".
-    while (len > 1 && path[len - 1] == '/') {
-        path[--len] = '\0';
-    }
-    // After stripping, "/" alone has no leaf.
-    if (len == 1 && path[0] == '/') return -EINVAL;
-
-    // Strip trailing slashes, but never reduce "/" itself to "".
-    while (len > 1 && path[len - 1] == '/') {
-        path[--len] = '\0';
-    }
-    // After stripping, "/" alone has no leaf.
-    if (len == 1) return -EINVAL;
-
-    // Find last '/'.
+    // Find last '/' (excluding a trailing slash).
     int last_slash = -1;
     for (int i = len - 1; i >= 0; i--) {
         if (path[i] == '/') { last_slash = i; break; }
     }
-
-    if (last_slash < 0) {
-        // Relative path with no slash: parent is cwd ".".
-        parent_buf[0] = '.';
-        parent_buf[1] = '\0';
-        *leaf_out = path;
-        return 0;
-    }
+    if (last_slash < 0) return -EINVAL;
 
     // parent = path[0..last_slash) — or "/" if last_slash == 0
     int plen = last_slash == 0 ? 1 : last_slash;
@@ -226,7 +190,6 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     parent_buf[plen] = '\0';
 
     *leaf_out = &path[last_slash + 1];
-    if (!(*leaf_out)[0]) return -EINVAL;
     return 0;
 }
 
@@ -305,11 +268,10 @@ static int64_t sys_mkdir(const char *path) {
     struct inode *parent = 0;
     if (namei(parent_path, &parent) < 0) return -ENOENT;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
+    if (!parent->ops || !parent->ops->mkdir) { inode_put(parent); return -EROFS; }
 
-    // Check name doesn't already exist (EEXIST takes precedence over EROFS so
-    // `mkdir -p` works correctly when an intermediate dir is a mount point
-    // sitting on a read-only parent fs).
-    if (parent->ops && parent->ops->lookup) {
+    // Check name doesn't already exist
+    if (parent->ops->lookup) {
         struct inode *existing = 0;
         if (parent->ops->lookup(parent, leaf, &existing) == 0) {
             inode_put(existing);
@@ -317,8 +279,6 @@ static int64_t sys_mkdir(const char *path) {
             return -EEXIST;
         }
     }
-
-    if (!parent->ops || !parent->ops->mkdir) { inode_put(parent); return -EROFS; }
 
     int rc = parent->ops->mkdir(parent, leaf);
     inode_put(parent);
@@ -454,60 +414,22 @@ static int64_t sys_chdir(const char *path) {
     if (p->cwd) inode_put(p->cwd);
     p->cwd = ip;
 
-    // Update cwd_path string with proper normalization. Walk each
-    // component of the combined path and handle "." / "..":
-    //   "."   — no-op
-    //   ".."  — pop trailing component (but never past "/")
-    //   other — append "/component"
-    char norm[256];
-    int nl = 0;
-    if (kpath[0] != '/') {
-        // Seed with current cwd_path.
-        while (p->cwd_path[nl] && nl < 255) { norm[nl] = p->cwd_path[nl]; nl++; }
+    // Update cwd_path string.
+    // Normalize: for simplicity just store the requested path if absolute,
+    // otherwise recompute from parent path + "/" + component.
+    if (kpath[0] == '/') {
+        int i = 0;
+        while (kpath[i] && i < 254) { p->cwd_path[i] = kpath[i]; i++; }
+        p->cwd_path[i] = '\0';
+    } else {
+        // Relative: append to existing cwd_path.
+        int base = 0;
+        while (p->cwd_path[base]) base++;
+        if (base > 1) { p->cwd_path[base] = '/'; base++; } // avoid double /
+        int i = 0;
+        while (kpath[i] && base + i < 254) { p->cwd_path[base + i] = kpath[i]; i++; }
+        p->cwd_path[base + i] = '\0';
     }
-    norm[nl] = '\0';
-
-    int i = 0;
-    while (kpath[i]) {
-        while (kpath[i] == '/') i++;
-        if (!kpath[i]) break;
-        int start = i;
-        while (kpath[i] && kpath[i] != '/') i++;
-        int complen = i - start;
-
-        if (complen == 1 && kpath[start] == '.') {
-            continue;   // "."
-        }
-        if (complen == 2 && kpath[start] == '.' && kpath[start+1] == '.') {
-            // Pop last component of norm.
-            if (nl > 1) {
-                nl--;
-                while (nl > 0 && norm[nl] != '/') nl--;
-                if (nl == 0) nl = 1;   // keep leading "/"
-            } else if (nl == 0) {
-                // no leading slash yet — drop nothing (at root already)
-                nl = 1;
-                norm[0] = '/';
-            }
-            norm[nl] = '\0';
-            continue;
-        }
-        // Normal component — append "/comp".
-        if (nl == 0 || norm[nl - 1] != '/') {
-            if (nl < 255) norm[nl++] = '/';
-        }
-        for (int k = 0; k < complen && nl < 255; k++)
-            norm[nl++] = kpath[start + k];
-        norm[nl] = '\0';
-    }
-
-    if (nl == 0) { norm[0] = '/'; norm[1] = '\0'; nl = 1; }
-
-    // Trim trailing slash except for root.
-    if (nl > 1 && norm[nl - 1] == '/') { norm[--nl] = '\0'; }
-
-    for (int k = 0; k <= nl && k < 255; k++) p->cwd_path[k] = norm[k];
-    p->cwd_path[255] = '\0';
     return 0;
 }
 
@@ -881,21 +803,11 @@ static int64_t sys_sleep(uint64_t ms) {
 // ---------------------------------------------------------------------------
 static int64_t sys_clock_gettime(int clockid, struct timespec *ts) {
     if (!ts) return -EFAULT;
+    if (clockid != CLOCK_REALTIME && clockid != CLOCK_MONOTONIC) return -EINVAL;
     struct timespec kts;
-    if (clockid == CLOCK_REALTIME) {
-        // Wall-clock time from the Goldfish RTC (nanoseconds since epoch).
-        uint64_t ns = rtc_read_ns();
-        kts.tv_sec  = (int64_t)(ns / 1000000000UL);
-        kts.tv_nsec = (int64_t)(ns % 1000000000UL);
-    } else if (clockid == CLOCK_MONOTONIC) {
-        // Monotonic uptime derived from the timer-tick counter.
-        uint64_t ticks = timer_ticks();
-        kts.tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
-        kts.tv_nsec = (int64_t)((ticks % TICKS_PER_SEC) *
-                                (1000000000UL / TICKS_PER_SEC));
-    } else {
-        return -EINVAL;
-    }
+    uint64_t ticks = timer_ticks();
+    kts.tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
+    kts.tv_nsec = (int64_t)((ticks % TICKS_PER_SEC) * (1000000000UL / TICKS_PER_SEC));
     if (copyout(ts, &kts, sizeof(kts)) < 0) return -EFAULT;
     return 0;
 }
@@ -906,11 +818,10 @@ static int64_t sys_clock_gettime(int clockid, struct timespec *ts) {
 static int64_t sys_gettimeofday(struct timeval *tv, void *tz) {
     (void)tz;
     if (!tv) return -EFAULT;
-    // Wall-clock time from the Goldfish RTC.
-    uint64_t ns = rtc_read_ns();
     struct timeval ktv;
-    ktv.tv_sec  = (int64_t)(ns / 1000000000UL);
-    ktv.tv_usec = (int64_t)((ns / 1000UL) % 1000000UL);
+    uint64_t ticks = timer_ticks();
+    ktv.tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
+    ktv.tv_usec = (int64_t)((ticks % TICKS_PER_SEC) * (1000000UL / TICKS_PER_SEC));
     if (copyout(tv, &ktv, sizeof(ktv)) < 0) return -EFAULT;
     return 0;
 }

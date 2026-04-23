@@ -72,8 +72,6 @@ int main(void) {
     try_unlink("/data/mkd_b");
     try_unlink("/data/mkd_c");
     try_unlink("/data/mkd_file");
-    try_unlink("/data/mkd_ts");
-    try_unlink("/data/mkd_ts2");
 
     /* ---- 1. Basic mkdir succeeds ---- */
     int rc = mkdir("/data/mkd_a", 0755);
@@ -177,33 +175,9 @@ int main(void) {
     rc = mkdir("/data/mkd_a", 0755);
     chk(rc == 0, "re-mkdir same path after unlink succeeds");
 
-    /* ---- 15. Trailing-slash handling (POSIX: "/foo/" == "/foo") ---- */
-    rc = mkdir("/data/mkd_ts/", 0755);
-    chk(rc == 0, "mkdir with trailing slash succeeds");
-
-    /* The resulting dir must be reachable at the no-slash path. */
-    fd = open("/data/mkd_ts", O_RDONLY);
-    chk(fd >= 0, "trailing-slash dir reachable at no-slash path");
-    if (fd >= 0) close(fd);
-
-    /* unlink with trailing slash should also work. */
-    rc = unlink("/data/mkd_ts/");
-    chk(rc == 0, "unlink with trailing slash succeeds");
-
-    /* Multiple trailing slashes should also be stripped. */
-    rc = mkdir("/data/mkd_ts2///", 0755);
-    chk(rc == 0, "mkdir with multiple trailing slashes succeeds");
-    try_unlink("/data/mkd_ts2");
-
-    /* "/" alone has no leaf — must fail cleanly, not panic. */
-    rc = mkdir("/", 0755);
-    chk(rc < 0, "mkdir / returns negative (no leaf)");
-
-    /* ---- 16. Final cleanup so re-runs across reboots stay clean ---- */
+    /* ---- 15. Final cleanup so re-runs across reboots stay clean ---- */
     try_unlink("/data/mkd_a");
     try_unlink("/data/mkd_file");
-    try_unlink("/data/mkd_ts");
-    try_unlink("/data/mkd_ts2");
 
     if (fail_cnt == 0)
         printf("mkdir_test: PASS (%d tests)\n", pass_cnt);
