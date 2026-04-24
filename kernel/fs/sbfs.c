@@ -29,8 +29,19 @@ static int sbfs_ready = 0;        /* set to 1 after successful mount   */
 /* -----------------------------------------------------------------------
  * IRQs-off "lock" — sufficient for single-hart
  * ----------------------------------------------------------------------- */
-static inline void fs_lock(void)   { write_sstatus(read_sstatus() & ~SSTATUS_SIE); }
-static inline void fs_unlock(void) { write_sstatus(read_sstatus() |  SSTATUS_SIE); }
+/* Save/restore SIE instead of unconditionally unmasking, so nested callers
+ * (or kernel code already running with interrupts off) don't get preempted. */
+static int fs_depth = 0;
+static uint64_t fs_saved_sie = 0;
+static inline void fs_lock(void) {
+    uint64_t s = read_sstatus();
+    write_sstatus(s & ~SSTATUS_SIE);
+    if (fs_depth++ == 0) fs_saved_sie = s & SSTATUS_SIE;
+}
+static inline void fs_unlock(void) {
+    if (--fs_depth == 0 && fs_saved_sie)
+        write_sstatus(read_sstatus() | SSTATUS_SIE);
+}
 
 /* -----------------------------------------------------------------------
  * inode_ops forward declarations

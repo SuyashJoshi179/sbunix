@@ -19,11 +19,19 @@
 static struct buf bcache[NBUF];
 static struct buf bhead;   /* sentinel head of the LRU doubly-linked list */
 
+/* Nestable IRQ-off critical sections. Save prior SIE state on lock, restore
+ * on unlock so we don't unmask interrupts inside an outer caller that had
+ * them disabled (e.g., trap context or another lock region). */
+static int cache_depth = 0;
+static uint64_t cache_saved_sie = 0;
 static inline void cache_lock(void) {
-    write_sstatus(read_sstatus() & ~SSTATUS_SIE);
+    uint64_t s = read_sstatus();
+    write_sstatus(s & ~SSTATUS_SIE);
+    if (cache_depth++ == 0) cache_saved_sie = s & SSTATUS_SIE;
 }
 static inline void cache_unlock(void) {
-    write_sstatus(read_sstatus() | SSTATUS_SIE);
+    if (--cache_depth == 0 && cache_saved_sie)
+        write_sstatus(read_sstatus() | SSTATUS_SIE);
 }
 
 /* -----------------------------------------------------------------------
