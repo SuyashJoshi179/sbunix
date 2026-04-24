@@ -26,6 +26,7 @@ int main(void) {
         "/bin/fd_limits_test",
         "/bin/path_test",
         "/bin/sbfs_basic_test",
+        "/bin/mkdir_test",
         "/bin/pipe_test",
         "/bin/sbrk_test",
         "/bin/malloc_test",
