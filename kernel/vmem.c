@@ -6,6 +6,7 @@
 #include <proc.h>
 #include <string.h>
 #include <vmem.h>
+#include <vma.h>
 
 extern char _text_end[];
 extern char _kernel_end[];
@@ -261,7 +262,13 @@ static int copy_user_range_checked(void *kptr, const void *uptr, unsigned long n
         pte_t *pte = get_pte(p->pagetable, cur_uva, false);
         if (!pte || !(*pte & PTE_V) || !(*pte & PTE_U)) return -EFAULT;
         if (write_user) {
-            if (!(*pte & PTE_W)) return -EFAULT;
+            if (!(*pte & PTE_W)) {
+                if (user_page_fault(15, cur_uva, 0) < 0)
+                    return -EFAULT;
+                pte = get_pte(p->pagetable, cur_uva, false);
+                if (!pte || !(*pte & PTE_V) || !(*pte & PTE_U) || !(*pte & PTE_W))
+                    return -EFAULT;
+            }
         } else {
             if (!(*pte & PTE_R)) return -EFAULT;
         }
