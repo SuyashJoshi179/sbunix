@@ -27,7 +27,7 @@ else ifeq ($(KLANG),zig)
   KERN_ALL := $(KERN_ASM) $(KERN_LIB)
 endif
 
-DISK_SIZE ?= 4
+DISK_SIZE ?= 16
 DISK_IMG  := build/disk.img
 
 -include Makefile.local
@@ -36,11 +36,11 @@ all: build/kernel.elf
 
 build/kernel/%.c.o: kernel/%.c
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -I$(<D)/include -Ikernel/include -c $< -o $@
+	$(CC) $(CFLAGS) -Ikernel/include -c $< -o $@
 
 build/kernel/%.S.o: kernel/%.S
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -I$(<D)/include -Ikernel/include -c $< -o $@
+	$(CC) $(CFLAGS) -Ikernel/include -c $< -o $@
 
 build/libc/%.c.o: libc/%.c
 	@mkdir -p $(@D)
@@ -96,8 +96,7 @@ build/tools/mkfs: tools/mkfs.c
 $(DISK_IMG): build/tools/mkfs
 	build/tools/mkfs $@
 
-qemu: build/kernel.elf build/tools/mkfs
-	build/tools/mkfs $(DISK_IMG)
+qemu: build/kernel.elf $(DISK_IMG)
 	qemu-system-riscv64 -machine virt -bios default -kernel $< \
 		-drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
 		-device virtio-blk-device,drive=hd0,bus=virtio-mmio-bus.0 \
