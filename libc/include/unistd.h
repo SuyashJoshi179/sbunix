@@ -1,7 +1,12 @@
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+
+#define STDIN_FILENO  0
+#define STDOUT_FILENO 1
+#define STDERR_FILENO 2
 
 long  write(int fd, const void *buf, long len);
 long  read(int fd, void *buf, long len);

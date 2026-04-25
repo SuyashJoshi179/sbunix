@@ -1,7 +1,6 @@
 #pragma once
 #include <stdint.h>
-
-typedef unsigned long size_t;
+#include <stddef.h>
 
 size_t  strlen(const char *s);
 int     strcmp(const char *a, const char *b);
