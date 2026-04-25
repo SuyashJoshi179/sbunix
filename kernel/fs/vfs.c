@@ -41,6 +41,10 @@ int mount_fs(const char *path, struct inode *root) {
         return rc;
     }
     mp->mount_child = root;
+    /* Keep mp alive: child root holds a borrowed pointer back to its
+     * mount point so ".." can cross the mount boundary upward. No extra
+     * ref is taken (the mount is permanent for the life of the kernel). */
+    root->mount_parent = mp;
     inode_put(mp);
     return 0;
 }
@@ -99,6 +103,17 @@ int namei(const char *path, struct inode **out) {
         if (cur->type != I_DIR) {
             inode_put(cur);
             return -ENOTDIR;
+        }
+
+        /* Crossing ".." out of a mount root: step up to the mount point
+         * inode in the host fs, then let the lookup below resolve its
+         * parent. Without this, sbfs_lookup(dir, "..") would just return
+         * the sbfs root again and cd .. would never leave the mount. */
+        if (start[0] == '.' && start[1] == '.' && (p - start) == 2 &&
+            cur->mount_parent) {
+            struct inode *mp = inode_get(cur->mount_parent);
+            inode_put(cur);
+            cur = mp;
         }
 
         struct inode *next = 0;

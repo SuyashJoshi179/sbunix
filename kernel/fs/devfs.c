@@ -222,6 +222,7 @@ void devfs_init(void) {
     devroot_inode.ops         = &devroot_ops;
     devroot_inode.fs_data     = 0;
     devroot_inode.mount_child = 0;
+    devroot_inode.mount_parent = 0;
 
     // Initialise the /dev/console inode.
     console_inode.type        = I_CHR;
@@ -235,6 +236,7 @@ void devfs_init(void) {
     console_inode.ops         = &console_ops;
     console_inode.fs_data     = 0;
     console_inode.mount_child = 0;
+    console_inode.mount_parent = 0;
 
     // Mount devfs at /dev (requires tarfs "/" to already be mounted).
     mount_fs("/dev", &devroot_inode);

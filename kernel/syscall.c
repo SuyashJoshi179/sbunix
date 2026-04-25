@@ -180,6 +180,11 @@ static int64_t sys_read(int fd, void *buf, uint64_t len) {
 //
 // Returns 0 on success, -EINVAL if path has no leaf component
 // (e.g. "", "/", "////").
+// path_split — split an absolute path into parent dir path + leaf name.
+// parent_buf must hold at least the length of path.
+// Strips trailing '/' (POSIX: "/foo/" is equivalent to "/foo"), so `path`
+// must be writable. Returns 0 on success, -EINVAL if path has no leaf
+// component (e.g. "" or "/" or "////").
 // ---------------------------------------------------------------------------
 static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     int len = 0;
@@ -192,6 +197,13 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     }
     // After stripping, "/" alone has no leaf.
     if (len == 1 && path[0] == '/') return -EINVAL;
+
+    // Strip trailing slashes, but never reduce "/" itself to "".
+    while (len > 1 && path[len - 1] == '/') {
+        path[--len] = '\0';
+    }
+    // After stripping, "/" alone has no leaf.
+    if (len == 1) return -EINVAL;
 
     // Find last '/'.
     int last_slash = -1;
@@ -441,22 +453,60 @@ static int64_t sys_chdir(const char *path) {
     if (p->cwd) inode_put(p->cwd);
     p->cwd = ip;
 
-    // Update cwd_path string.
-    // Normalize: for simplicity just store the requested path if absolute,
-    // otherwise recompute from parent path + "/" + component.
-    if (kpath[0] == '/') {
-        int i = 0;
-        while (kpath[i] && i < 254) { p->cwd_path[i] = kpath[i]; i++; }
-        p->cwd_path[i] = '\0';
-    } else {
-        // Relative: append to existing cwd_path.
-        int base = 0;
-        while (p->cwd_path[base]) base++;
-        if (base > 1) { p->cwd_path[base] = '/'; base++; } // avoid double /
-        int i = 0;
-        while (kpath[i] && base + i < 254) { p->cwd_path[base + i] = kpath[i]; i++; }
-        p->cwd_path[base + i] = '\0';
+    // Update cwd_path string with proper normalization. Walk each
+    // component of the combined path and handle "." / "..":
+    //   "."   — no-op
+    //   ".."  — pop trailing component (but never past "/")
+    //   other — append "/component"
+    char norm[256];
+    int nl = 0;
+    if (kpath[0] != '/') {
+        // Seed with current cwd_path.
+        while (p->cwd_path[nl] && nl < 255) { norm[nl] = p->cwd_path[nl]; nl++; }
     }
+    norm[nl] = '\0';
+
+    int i = 0;
+    while (kpath[i]) {
+        while (kpath[i] == '/') i++;
+        if (!kpath[i]) break;
+        int start = i;
+        while (kpath[i] && kpath[i] != '/') i++;
+        int complen = i - start;
+
+        if (complen == 1 && kpath[start] == '.') {
+            continue;   // "."
+        }
+        if (complen == 2 && kpath[start] == '.' && kpath[start+1] == '.') {
+            // Pop last component of norm.
+            if (nl > 1) {
+                nl--;
+                while (nl > 0 && norm[nl] != '/') nl--;
+                if (nl == 0) nl = 1;   // keep leading "/"
+            } else if (nl == 0) {
+                // no leading slash yet — drop nothing (at root already)
+                nl = 1;
+                norm[0] = '/';
+            }
+            norm[nl] = '\0';
+            continue;
+        }
+        // Normal component — append "/comp".
+        if (nl == 0 || norm[nl - 1] != '/') {
+            if (nl < 255) norm[nl++] = '/';
+        }
+        for (int k = 0; k < complen && nl < 255; k++)
+            norm[nl++] = kpath[start + k];
+        norm[nl] = '\0';
+    }
+
+    if (nl == 0) { norm[0] = '/'; norm[1] = '\0'; nl = 1; }
+
+    // Trim trailing slash except for root.
+    if (nl > 1 && norm[nl - 1] == '/') { norm[--nl] = '\0'; }
+
+    for (int k = 0; k <= nl && k < 255; k++) p->cwd_path[k] = norm[k];
+    p->cwd_path[255] = '\0';
     return 0;
 }
 
