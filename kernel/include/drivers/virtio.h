@@ -117,4 +117,5 @@ struct virtio_blk_req {
  * ----------------------------------------------------------------------- */
 void virtio_disk_init(void);
 void virtio_disk_rw(uint32_t blockno, void *data, int write);
+int  virtio_disk_ready(void);
 void virtio_disk_intr(void);  /* called from trap handler on IRQ 1 */

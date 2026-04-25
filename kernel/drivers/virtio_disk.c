@@ -49,6 +49,12 @@ static char q_buf[Q_BUF_SIZE] __attribute__((aligned(Q_PAGE_SIZE)));
 static struct virtio_blk_req req_hdr  __attribute__((aligned(16)));
 static volatile uint8_t      req_stat __attribute__((aligned(1)));
 
+/* Set true once init succeeds; rw silently no-ops when false. Lets the
+ * kernel boot to a shell on platforms that expose virtio over a
+ * different transport (e.g. PCI), instead of spinning forever. */
+static int disk_ready = 0;
+int virtio_disk_ready(void) { return disk_ready; }
+
 /* Driver's local copy of the last seen used->idx */
 static uint16_t last_used_idx = 0;
 
@@ -145,6 +151,7 @@ void virtio_disk_init(void) {
         printk("virtio_disk: init OK (ver=%d, qmax=%d, queue_pa=0x%lx)\n",
                ver, qmax, pa);
     }
+    disk_ready = 1;
 }
 
 /* -----------------------------------------------------------------------
@@ -155,6 +162,8 @@ void virtio_disk_init(void) {
  * write   : 0 = device→memory (read), 1 = memory→device (write)
  * ----------------------------------------------------------------------- */
 void virtio_disk_rw(uint32_t blockno, void *data, int write) {
+    if (!disk_ready) return;
+
     /* Disable interrupts for the duration. */
     uint64_t saved_sstatus = read_sstatus();
     write_sstatus(saved_sstatus & ~SSTATUS_SIE);
