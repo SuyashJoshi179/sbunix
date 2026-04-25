@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <signal.h>
+#include <string.h>
 
 void _Exit(int status) { exit(status); }
 
@@ -88,3 +89,37 @@ void srand(unsigned seed) { _rand_state = seed; }
 char *getenv(const char *name) { (void)name; return 0; }
 
 int atexit(void (*func)(void)) { (void)func; return 0; }
+
+/* Insertion sort — fine for small N; user code should not feed huge arrays. */
+void qsort(void *base, size_t nmemb, size_t size,
+           int (*cmp)(const void *, const void *)) {
+    if (!base || nmemb < 2 || size == 0 || !cmp) return;
+    char *a = base;
+    char *tmp = (char *)malloc(size);
+    if (!tmp) return;
+    for (size_t i = 1; i < nmemb; i++) {
+        memcpy(tmp, a + i * size, size);
+        size_t j = i;
+        while (j > 0 && cmp(a + (j - 1) * size, tmp) > 0) {
+            memcpy(a + j * size, a + (j - 1) * size, size);
+            j--;
+        }
+        memcpy(a + j * size, tmp, size);
+    }
+    free(tmp);
+}
+
+void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,
+              int (*cmp)(const void *, const void *)) {
+    if (!key || !base || size == 0 || !cmp) return 0;
+    size_t lo = 0, hi = nmemb;
+    const char *a = base;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        int c = cmp(key, a + mid * size);
+        if (c == 0) return (void *)(a + mid * size);
+        if (c < 0) hi = mid;
+        else       lo = mid + 1;
+    }
+    return 0;
+}

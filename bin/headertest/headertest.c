@@ -4,6 +4,11 @@
 #include <string.h>
 #include <unistd.h>
 
+static int int_cmp(const void *a, const void *b) {
+    int x = *(const int *)a, y = *(const int *)b;
+    return (x > y) - (x < y);
+}
+
 static int fail_count = 0;
 
 #define CHECK(expr) do {                                              \
@@ -133,6 +138,47 @@ int main(void) {
 
     /* fopen on nonexistent path returns NULL */
     CHECK(fopen("/data/does_not_exist_xyz", "r") == NULL);
+
+    /* qsort/bsearch real-world: write numbers to file, read back, sort, search */
+    {
+        const char *npath = "/data/nums.txt";
+        FILE *fp = fopen(npath, "w");
+        CHECK(fp != NULL);
+        if (fp) {
+            int seed[] = { 42, 7, 99, 13, 4, 88, 1, 56, 23, 71 };
+            for (size_t i = 0; i < sizeof(seed)/sizeof(seed[0]); i++)
+                fprintf(fp, "%d\n", seed[i]);
+            fclose(fp);
+        }
+
+        fp = fopen(npath, "r");
+        CHECK(fp != NULL);
+        int nums[16];
+        size_t count = 0;
+        if (fp) {
+            char ln[32];
+            while (fgets(ln, sizeof(ln), fp) && count < 16)
+                nums[count++] = atoi(ln);
+            fclose(fp);
+        }
+        CHECK(count == 10);
+
+        qsort(nums, count, sizeof(int), int_cmp);
+        for (size_t i = 1; i < count; i++)
+            CHECK(nums[i - 1] <= nums[i]);
+        CHECK(nums[0] == 1);
+        CHECK(nums[count - 1] == 99);
+
+        int key = 56;
+        int *hit = bsearch(&key, nums, count, sizeof(int), int_cmp);
+        CHECK(hit != NULL);
+        CHECK(hit && *hit == 56);
+
+        int miss = 1000;
+        CHECK(bsearch(&miss, nums, count, sizeof(int), int_cmp) == NULL);
+
+        remove(npath);
+    }
 
     if (fail_count == 0) {
         puts("headertest: PASS");
