@@ -7,14 +7,17 @@
  * ----------------------------------------------------------------------- */
 #define SBFS_MAGIC       0x53425631u   /* "SBV1"                         */
 #define SBFS_BSIZE       512           /* bytes per block                 */
-#define SBFS_NDIRECT     12            /* direct block pointers per inode */
+#define SBFS_NDIRECT     12            /* total addr slots per inode (disk format) */
+#define SBFS_NDIR        10            /* direct block slots (addrs[0..9])  */
+#define SBFS_NINDIR      2             /* indirect block slots (addrs[10..11]) */
+#define SBFS_NBLK_PER_INDIR  (SBFS_BSIZE / 4)  /* 128 block addrs per indirect block */
 #define SBFS_NINODES     256
 #define SBFS_LOGSIZE     16
 #define SBFS_DIRSIZ      14            /* max name length in a dirent     */
 #define SBFS_ROOTINUM    1             /* inode number of the root dir    */
 
-/* Maximum file size: NDIRECT * BSIZE = 12 * 512 = 6 KiB */
-#define SBFS_MAX_FILE_SIZE  (SBFS_NDIRECT * SBFS_BSIZE)
+/* Max file size: 10 direct + 2*128 indirect = 266 blocks = 136 KiB */
+#define SBFS_MAX_FILE_SIZE  ((SBFS_NDIR + SBFS_NINDIR * SBFS_NBLK_PER_INDIR) * SBFS_BSIZE)
 
 /* -----------------------------------------------------------------------
  * On-disk superblock (stored in block 1)

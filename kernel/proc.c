@@ -372,6 +372,14 @@ void proc_exit_current(int status) {
     if (reparented_any)
         proc_wakeup(reparent_to);
 
+    // Close all open file descriptors so pipes/devices see EOF.
+    for (int fd = 0; fd < NOFILE; fd++) {
+        if (p->ofile[fd]) {
+            fileclose(p->ofile[fd]);
+            p->ofile[fd] = 0;
+        }
+    }
+
     // Notify parent: send SIGCHLD, then wake it if sleeping in wait
     send_signal_by_pid(p->parent_pid, SIGCHLD);
     proc_wakeup(p->parent_pid);

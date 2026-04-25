@@ -29,8 +29,19 @@ static int sbfs_ready = 0;        /* set to 1 after successful mount   */
 /* -----------------------------------------------------------------------
  * IRQs-off "lock" — sufficient for single-hart
  * ----------------------------------------------------------------------- */
-static inline void fs_lock(void)   { write_sstatus(read_sstatus() & ~SSTATUS_SIE); }
-static inline void fs_unlock(void) { write_sstatus(read_sstatus() |  SSTATUS_SIE); }
+/* Save/restore SIE instead of unconditionally unmasking, so nested callers
+ * (or kernel code already running with interrupts off) don't get preempted. */
+static int fs_depth = 0;
+static uint64_t fs_saved_sie = 0;
+static inline void fs_lock(void) {
+    uint64_t s = read_sstatus();
+    write_sstatus(s & ~SSTATUS_SIE);
+    if (fs_depth++ == 0) fs_saved_sie = s & SSTATUS_SIE;
+}
+static inline void fs_unlock(void) {
+    if (--fs_depth == 0 && fs_saved_sie)
+        write_sstatus(read_sstatus() | SSTATUS_SIE);
+}
 
 /* -----------------------------------------------------------------------
  * inode_ops forward declarations
@@ -159,6 +170,7 @@ struct inode *sbfs_iget(uint32_t inum) {
             icache[i].vnode.ops     = &sbfs_iops;
             icache[i].vnode.fs_data = &icache[i];
             icache[i].vnode.mount_child = 0;
+            icache[i].vnode.mount_parent = 0;
             fs_unlock();
             sbfs_ilock(&icache[i]);
             return &icache[i].vnode;
@@ -232,10 +244,24 @@ int sbfs_readi(struct inode *ip, uint64_t off, void *dst, uint64_t n) {
     while (total < n) {
         uint32_t bn   = (off + total) / SBFS_BSIZE;
         uint32_t boff = (off + total) % SBFS_BSIZE;
-        if (bn >= SBFS_NDIRECT) break;   /* no indirect blocks */
-        if (si->d.addrs[bn] == 0) break; /* sparse — not supported, treat as EOF */
 
-        struct buf *bp = bread(si->d.addrs[bn]);
+        uint32_t data_block;
+        if (bn < SBFS_NDIR) {
+            data_block = si->d.addrs[bn];
+        } else {
+            uint32_t rel = bn - SBFS_NDIR;
+            uint32_t ii  = rel / SBFS_NBLK_PER_INDIR;
+            uint32_t io  = rel % SBFS_NBLK_PER_INDIR;
+            if (ii >= SBFS_NINDIR) break;
+            uint32_t indir = si->d.addrs[SBFS_NDIR + ii];
+            if (indir == 0) break;
+            struct buf *ibp = bread(indir);
+            data_block = ((uint32_t *)ibp->data)[io];
+            brelse(ibp);
+        }
+
+        if (data_block == 0) break;
+        struct buf *bp = bread(data_block);
         uint64_t chunk = SBFS_BSIZE - boff;
         if (chunk > n - total) chunk = n - total;
         memcpy(out + total, bp->data + boff, chunk);
@@ -268,16 +294,42 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
     while (total < n) {
         uint32_t bn   = (off + total) / SBFS_BSIZE;
         uint32_t boff = (off + total) % SBFS_BSIZE;
-        if (bn >= SBFS_NDIRECT) break;
 
-        if (si->d.addrs[bn] == 0) {
-            uint32_t new_block = balloc();
-            if (new_block == 0) { enospc = 1; break; }
-            si->d.addrs[bn] = new_block;
-            si->dirty = 1;
+        uint32_t data_block;
+        if (bn < SBFS_NDIR) {
+            if (si->d.addrs[bn] == 0) {
+                uint32_t nb = balloc();
+                if (!nb) { enospc = 1; break; }
+                si->d.addrs[bn] = nb;
+                si->dirty = 1;
+            }
+            data_block = si->d.addrs[bn];
+        } else {
+            uint32_t rel = bn - SBFS_NDIR;
+            uint32_t ii  = rel / SBFS_NBLK_PER_INDIR;
+            uint32_t io  = rel % SBFS_NBLK_PER_INDIR;
+            if (ii >= SBFS_NINDIR) break;
+
+            if (si->d.addrs[SBFS_NDIR + ii] == 0) {
+                uint32_t ib = balloc();
+                if (!ib) { enospc = 1; break; }
+                si->d.addrs[SBFS_NDIR + ii] = ib;
+                si->dirty = 1;
+            }
+
+            struct buf *ibp = bread(si->d.addrs[SBFS_NDIR + ii]);
+            uint32_t *ia = (uint32_t *)ibp->data;
+            if (ia[io] == 0) {
+                uint32_t nb = balloc();
+                if (!nb) { brelse(ibp); enospc = 1; break; }
+                ia[io] = nb;
+                log_write(ibp);
+            }
+            data_block = ia[io];
+            brelse(ibp);
         }
 
-        struct buf *bp = bread(si->d.addrs[bn]);
+        struct buf *bp = bread(data_block);
         uint64_t chunk = SBFS_BSIZE - boff;
         if (chunk > n - total) chunk = n - total;
         memcpy(bp->data + boff, in + total, chunk);
@@ -306,10 +358,22 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
  * (must be inside a transaction)
  * ----------------------------------------------------------------------- */
 static void sbfs_itrunc(struct sbfs_inode *si) {
-    for (int bn = 0; bn < SBFS_NDIRECT; bn++) {
+    for (int bn = 0; bn < SBFS_NDIR; bn++) {
         if (si->d.addrs[bn]) {
             bfree(si->d.addrs[bn]);
             si->d.addrs[bn] = 0;
+        }
+    }
+    for (int ii = 0; ii < SBFS_NINDIR; ii++) {
+        if (si->d.addrs[SBFS_NDIR + ii]) {
+            struct buf *ibp = bread(si->d.addrs[SBFS_NDIR + ii]);
+            uint32_t *ia = (uint32_t *)ibp->data;
+            for (int i = 0; i < SBFS_NBLK_PER_INDIR; i++) {
+                if (ia[i]) bfree(ia[i]);
+            }
+            brelse(ibp);
+            bfree(si->d.addrs[SBFS_NDIR + ii]);
+            si->d.addrs[SBFS_NDIR + ii] = 0;
         }
     }
     si->d.size  = 0;
