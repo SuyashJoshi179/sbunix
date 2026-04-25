@@ -54,6 +54,5 @@ int    fileno(FILE *stream);
 
 void   perror(const char *s);
 int    remove(const char *path);
-int    rename(const char *oldpath, const char *newpath);
 
 #endif

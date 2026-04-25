@@ -1,15 +1,22 @@
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <string.h>
+
+#define _FILE_EOF   0x1
+#define _FILE_ERR   0x2
+#define _FILE_OWNED 0x4   /* fd was opened by fopen, fclose closes it */
 
 struct _FILE {
     int fd;
+    int flags;
 };
 
-static struct _FILE _stdin  = { 0 };
-static struct _FILE _stdout = { 1 };
-static struct _FILE _stderr = { 2 };
+static struct _FILE _stdin  = { 0, 0 };
+static struct _FILE _stdout = { 1, 0 };
+static struct _FILE _stderr = { 2, 0 };
 
 FILE *stdin  = &_stdin;
 FILE *stdout = &_stdout;
@@ -165,18 +172,120 @@ int putc(int c, FILE *stream)   { return fputc(c, stream); }
 int putchar(int c)              { return fputc(c, stdout); }
 
 int fgetc(FILE *stream) {
-    int fd = stream ? stream->fd : 0;
+    if (!stream) return EOF;
     char ch;
-    if (read(fd, &ch, 1) != 1) return EOF;
-    return (unsigned char)ch;
+    long r = read(stream->fd, &ch, 1);
+    if (r == 1) return (unsigned char)ch;
+    stream->flags |= (r == 0) ? _FILE_EOF : _FILE_ERR;
+    return EOF;
 }
 int getc(FILE *stream)  { return fgetc(stream); }
 int getchar(void)       { return fgetc(stdin); }
 
+char *fgets(char *buf, int n, FILE *stream) {
+    if (!buf || n <= 0 || !stream) return NULL;
+    int i = 0;
+    while (i < n - 1) {
+        int c = fgetc(stream);
+        if (c == EOF) {
+            if (i == 0) return NULL;
+            break;
+        }
+        buf[i++] = (char)c;
+        if (c == '\n') break;
+    }
+    buf[i] = '\0';
+    return buf;
+}
+
 int fflush(FILE *stream) { (void)stream; return 0; }
 int fileno(FILE *stream) { return stream ? stream->fd : -1; }
+int feof(FILE *stream)   { return stream ? (stream->flags & _FILE_EOF) != 0 : 0; }
+int ferror(FILE *stream) { return stream ? (stream->flags & _FILE_ERR) != 0 : 0; }
+void clearerr(FILE *stream) { if (stream) stream->flags &= ~(_FILE_EOF | _FILE_ERR); }
 
 void perror(const char *s) {
     if (s && *s) { fputs(s, stderr); fputs(": ", stderr); }
     fputs("error\n", stderr);
+}
+
+FILE *fopen(const char *path, const char *mode) {
+    if (!path || !mode) return NULL;
+    int flags = 0;
+    int has_plus = 0;
+    for (const char *p = mode; *p; p++) if (*p == '+') has_plus = 1;
+    switch (mode[0]) {
+    case 'r': flags = has_plus ? O_RDWR : O_RDONLY; break;
+    case 'w': flags = (has_plus ? O_RDWR : O_WRONLY) | O_CREAT | O_TRUNC; break;
+    case 'a': flags = (has_plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND; break;
+    default: return NULL;
+    }
+    int fd = open(path, flags);
+    if (fd < 0) return NULL;
+    FILE *f = malloc(sizeof(FILE));
+    if (!f) { close(fd); return NULL; }
+    f->fd = fd;
+    f->flags = _FILE_OWNED;
+    return f;
+}
+
+int fclose(FILE *stream) {
+    if (!stream) return EOF;
+    int r = 0;
+    if (stream->flags & _FILE_OWNED) {
+        if (close(stream->fd) < 0) r = EOF;
+        free(stream);
+    }
+    return r;
+}
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if (!ptr || !stream || size == 0 || nmemb == 0) return 0;
+    size_t total = size * nmemb;
+    size_t got = 0;
+    char *p = ptr;
+    while (got < total) {
+        long r = read(stream->fd, p + got, (long)(total - got));
+        if (r < 0) { stream->flags |= _FILE_ERR; break; }
+        if (r == 0) { stream->flags |= _FILE_EOF; break; }
+        got += (size_t)r;
+    }
+    return got / size;
+}
+
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if (!ptr || !stream || size == 0 || nmemb == 0) return 0;
+    size_t total = size * nmemb;
+    size_t put = 0;
+    const char *p = ptr;
+    while (put < total) {
+        long r = write(stream->fd, p + put, (long)(total - put));
+        if (r < 0) { stream->flags |= _FILE_ERR; break; }
+        if (r == 0) break;
+        put += (size_t)r;
+    }
+    return put / size;
+}
+
+int fseek(FILE *stream, long off, int whence) {
+    if (!stream) return -1;
+    long r = lseek(stream->fd, off, whence);
+    if (r < 0) { stream->flags |= _FILE_ERR; return -1; }
+    stream->flags &= ~_FILE_EOF;
+    return 0;
+}
+
+long ftell(FILE *stream) {
+    if (!stream) return -1;
+    return lseek(stream->fd, 0, SEEK_CUR);
+}
+
+void rewind(FILE *stream) {
+    if (!stream) return;
+    lseek(stream->fd, 0, SEEK_SET);
+    stream->flags &= ~(_FILE_EOF | _FILE_ERR);
+}
+
+int remove(const char *path) {
+    return unlink(path);
 }

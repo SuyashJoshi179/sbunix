@@ -48,6 +48,92 @@ int main(void) {
     /* puts / fputs */
     fputs("headertest: fputs ok\n", stdout);
 
+    /* file I/O: log-and-replay scenario */
+    const char *path = "/data/htest.txt";
+
+    FILE *fw = fopen(path, "w");
+    CHECK(fw != NULL);
+    if (fw) {
+        const char *line1 = "alpha 100\n";
+        size_t w = fwrite(line1, 1, strlen(line1), fw);
+        CHECK(w == strlen(line1));
+        int rc = fprintf(fw, "%s %d\n", "bravo", 200);
+        CHECK(rc == 10);
+        CHECK(fclose(fw) == 0);
+    }
+
+    /* re-open with "w" must truncate */
+    fw = fopen(path, "w");
+    CHECK(fw != NULL);
+    if (fw) {
+        fputs("alpha 100\nbravo 200\n", fw);
+        fclose(fw);
+    }
+
+    /* read back with fread + fseek/ftell/rewind */
+    FILE *fr = fopen(path, "r");
+    CHECK(fr != NULL);
+    if (fr) {
+        char rbuf[64] = {0};
+        size_t r = fread(rbuf, 1, sizeof(rbuf) - 1, fr);
+        CHECK(r > 0);
+        CHECK(strcmp(rbuf, "alpha 100\nbravo 200\n") == 0);
+
+        /* feof should be set since we read past end */
+        CHECK(feof(fr));
+        clearerr(fr);
+        CHECK(!feof(fr));
+
+        /* seek to byte 6 ("100\nbravo 200\n") */
+        CHECK(fseek(fr, 6, SEEK_SET) == 0);
+        CHECK(ftell(fr) == 6);
+        char rbuf2[16] = {0};
+        size_t r2 = fread(rbuf2, 1, 3, fr);
+        CHECK(r2 == 3);
+        CHECK(strncmp(rbuf2, "100", 3) == 0);
+
+        rewind(fr);
+        CHECK(ftell(fr) == 0);
+
+        /* fgets line by line */
+        char line[64];
+        char *got = fgets(line, sizeof(line), fr);
+        CHECK(got != NULL);
+        CHECK(strcmp(line, "alpha 100\n") == 0);
+        got = fgets(line, sizeof(line), fr);
+        CHECK(got != NULL);
+        CHECK(strcmp(line, "bravo 200\n") == 0);
+        got = fgets(line, sizeof(line), fr);
+        CHECK(got == NULL);
+        CHECK(feof(fr));
+
+        CHECK(fclose(fr) == 0);
+    }
+
+    /* append mode */
+    FILE *fa = fopen(path, "a");
+    CHECK(fa != NULL);
+    if (fa) {
+        fputs("charlie 300\n", fa);
+        fclose(fa);
+    }
+    fr = fopen(path, "r");
+    CHECK(fr != NULL);
+    if (fr) {
+        char rbuf[128] = {0};
+        fread(rbuf, 1, sizeof(rbuf) - 1, fr);
+        CHECK(strcmp(rbuf, "alpha 100\nbravo 200\ncharlie 300\n") == 0);
+        fclose(fr);
+    }
+
+    /* remove cleans up */
+    CHECK(remove(path) == 0);
+    fr = fopen(path, "r");
+    CHECK(fr == NULL);
+
+    /* fopen on nonexistent path returns NULL */
+    CHECK(fopen("/data/does_not_exist_xyz", "r") == NULL);
+
     if (fail_count == 0) {
         puts("headertest: PASS");
         return 0;
