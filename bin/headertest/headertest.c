@@ -139,6 +139,44 @@ int main(void) {
     /* fopen on nonexistent path returns NULL */
     CHECK(fopen("/data/does_not_exist_xyz", "r") == NULL);
 
+    /* rename: write src, rename to dst, verify old gone + dst content intact */
+    {
+        const char *src = "/data/ren_a.txt";
+        const char *dst = "/data/ren_b.txt";
+        FILE *fp = fopen(src, "w");
+        CHECK(fp != NULL);
+        if (fp) { fputs("renamed payload\n", fp); fclose(fp); }
+
+        CHECK(rename(src, dst) == 0);
+        CHECK(fopen(src, "r") == NULL);
+
+        fp = fopen(dst, "r");
+        CHECK(fp != NULL);
+        if (fp) {
+            char rbuf[64] = {0};
+            fread(rbuf, 1, sizeof(rbuf) - 1, fp);
+            CHECK(strcmp(rbuf, "renamed payload\n") == 0);
+            fclose(fp);
+        }
+
+        /* rename onto existing target overwrites */
+        fp = fopen(src, "w"); fputs("AAAA", fp); fclose(fp);
+        CHECK(rename(src, dst) == 0);
+        fp = fopen(dst, "r");
+        CHECK(fp != NULL);
+        if (fp) {
+            char rbuf[16] = {0};
+            fread(rbuf, 1, sizeof(rbuf) - 1, fp);
+            CHECK(strcmp(rbuf, "AAAA") == 0);
+            fclose(fp);
+        }
+
+        /* rename of nonexistent source fails */
+        CHECK(rename("/data/no_such.x", dst) == -1);
+
+        remove(dst);
+    }
+
     /* qsort/bsearch real-world: write numbers to file, read back, sort, search */
     {
         const char *npath = "/data/nums.txt";

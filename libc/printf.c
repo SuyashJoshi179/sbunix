@@ -289,3 +289,33 @@ void rewind(FILE *stream) {
 int remove(const char *path) {
     return unlink(path);
 }
+
+/* Userspace rename: no SYS_rename in kernel. Copy oldpath → newpath, then
+ * unlink oldpath. Not atomic. If newpath exists it is overwritten. On any
+ * failure leaves both files in their pre-call state where possible. */
+int rename(const char *oldpath, const char *newpath) {
+    if (!oldpath || !newpath) return -1;
+
+    int sfd = open(oldpath, O_RDONLY);
+    if (sfd < 0) return -1;
+
+    int dfd = open(newpath, O_WRONLY | O_CREAT | O_TRUNC);
+    if (dfd < 0) { close(sfd); return -1; }
+
+    char buf[512];
+    long r;
+    while ((r = read(sfd, buf, sizeof(buf))) > 0) {
+        long off = 0;
+        while (off < r) {
+            long w = write(dfd, buf + off, r - off);
+            if (w <= 0) { close(sfd); close(dfd); unlink(newpath); return -1; }
+            off += w;
+        }
+    }
+    close(sfd);
+    close(dfd);
+    if (r < 0) { unlink(newpath); return -1; }
+
+    if (unlink(oldpath) < 0) return -1;
+    return 0;
+}
