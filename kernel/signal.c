@@ -244,8 +244,11 @@ int64_t sys_sigreturn(uint64_t *trapframe) {
     safe_sstatus |=  (uint64_t)SSTATUS_SPIE;
     fr.saved_trapframe[TF_SSTATUS] = safe_sstatus;
 
-    /* Sanitize sepc: must be in user VA range. */
-    if (fr.saved_trapframe[TF_SEPC] >= KVMEM_OFFSET)
+    /* Sanitize sepc: must be in user VA range (below USER_STACK_TOP).
+     * Previous check (>= KVMEM_OFFSET) missed bare kernel PAs like
+     * 0x80200000-range addresses, which fall below KVMEM_OFFSET but
+     * are still kernel text and must never be used as a return PC. */
+    if (fr.saved_trapframe[TF_SEPC] >= USER_STACK_TOP)
         proc_exit_current(128 + SIGSEGV);
 
     memcpy(trapframe, fr.saved_trapframe, 288);

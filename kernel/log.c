@@ -19,6 +19,7 @@
 #include <bio.h>
 #include <printk.h>
 #include <string.h>
+#include <proc.h>
 
 /* -----------------------------------------------------------------------
  * On-disk log header layout
@@ -103,8 +104,12 @@ void recover_from_log(void) {
  * begin_op — start a transaction
  * ----------------------------------------------------------------------- */
 void begin_op(void) {
-    if (log.outstanding)
-        panic("log: nested begin_op");
+    /* Serialize transactions: if another proc holds the log, sleep until
+     * it calls end_op. Single-hart kernel yields inside bread (disk I/O)
+     * so two procs can race here; use the log.outstanding flag as a
+     * sleep channel. */
+    while (log.outstanding)
+        proc_sleep_chan(&log.outstanding);
     log.outstanding = 1;
     log.nblocks     = 0;
     for (int i = 0; i < LOG_HDR_MAX; i++)
@@ -179,4 +184,5 @@ void end_op(void) {
     }
 
     log.outstanding = 0;
+    proc_wakeup_chan(&log.outstanding);
 }

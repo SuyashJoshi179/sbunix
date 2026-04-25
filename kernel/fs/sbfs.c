@@ -525,9 +525,15 @@ static int sbfs_op_truncate(struct inode *ip) {
 static int sbfs_op_stat(struct inode *ip, struct stat *st) {
     struct sbfs_inode *si = (struct sbfs_inode *)ip;
     sbfs_ilock(si);
+    st->st_dev   = 3;
     st->st_ino   = si->inum;
     st->st_nlink = si->d.nlink;
+    st->st_uid   = 0;
+    st->st_gid   = 0;
     st->st_size  = si->d.size;
+    st->st_atime = 0;
+    st->st_mtime = 0;
+    st->st_ctime = 0;
     if (si->d.type == 1) {
         st->st_mode = 0100644;   /* regular file */
     } else if (si->d.type == 2) {

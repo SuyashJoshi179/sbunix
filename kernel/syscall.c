@@ -368,6 +368,7 @@ static int64_t sys_fstat(int fd, struct stat *st) {
     struct pcb *p = current_proc();
     if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
     struct stat kst;
+    memset(&kst, 0, sizeof(kst));
     int rc = filestat(p->ofile[fd], &kst);
     if (rc < 0) return rc;
     if (copyout(st, &kst, (unsigned long)sizeof(kst)) < 0) return -EFAULT;
