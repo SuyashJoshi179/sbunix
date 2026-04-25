@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make clean *)",
+      "Bash(make)",
+      "Bash(make build/rootfs/bin/mkdir build/rootfs/bin/mkdir_test)",
+      "Bash(qemu-system-riscv64 --version)",
+      "Bash(make build/kernel.elf build/tools/mkfs)",
+      "Bash(build/tools/mkfs build/disk.img)",
+      "Bash(make build/kernel.elf)",
+      "Bash(timeout 120 qemu-system-riscv64 -machine virt -bios default -kernel build/kernel.elf -drive file=build/disk.img,format=raw,if=none,id=hd0 -device virtio-blk-device,drive=hd0,bus=virtio-mmio-bus.0 -nographic)",
+      "Bash(timeout 60 make qemu)",
+      "Bash(git stash *)",
+      "Bash(timeout 90 make qemu)",
+      "Bash(timeout 180 make qemu)"
+    ]
+  }
+}

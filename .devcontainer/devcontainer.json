@@ -12,7 +12,8 @@
             "extensions": [
                 "ms-vscode.cpptools",
                 "ms-vscode.cpptools-extension-pack",
-                "dan-c-underwood.riscv-asm"
+                "dan-c-underwood.riscv-asm",
+				"anthropic.claude-code"
             ],
             "settings": {
                 "terminal.integrated.defaultProfile.linux": "zsh",
@@ -30,6 +31,9 @@
         "--security-opt",
         "seccomp=unconfined",
         "--privileged"
+    ],
+	"mounts": [
+        "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached"
     ],
     "postCreateCommand": "sudo apt-get update && sudo apt-get install -y gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf gdb-multiarch qemu-system-misc build-essential make"
 }
