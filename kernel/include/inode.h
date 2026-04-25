@@ -41,6 +41,10 @@ struct inode {
     const struct inode_ops *ops;
     void             *fs_data;
     struct inode     *mount_child;
+    /* Non-null on a mount-root inode: points at the inode in the host fs
+     * that was covered by this mount. Used so that namei can resolve ".."
+     * out of a mount root back into the host filesystem. */
+    struct inode     *mount_parent;
 };
 
 /* dirent64 record as written by getdents64 -- matches Linux struct dirent64. */

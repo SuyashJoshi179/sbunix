@@ -170,6 +170,7 @@ struct inode *sbfs_iget(uint32_t inum) {
             icache[i].vnode.ops     = &sbfs_iops;
             icache[i].vnode.fs_data = &icache[i];
             icache[i].vnode.mount_child = 0;
+            icache[i].vnode.mount_parent = 0;
             fs_unlock();
             sbfs_ilock(&icache[i]);
             return &icache[i].vnode;

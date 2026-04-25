@@ -108,6 +108,7 @@ static struct inode *tarfs_alloc_inode(int type, uint32_t mode,
     ip->ops         = &tarfs_ops;
     ip->fs_data     = d;
     ip->mount_child = 0;
+    ip->mount_parent = 0;
 
     d->data      = data;
     d->file_size = size;
