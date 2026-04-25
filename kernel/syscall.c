@@ -170,14 +170,23 @@ static int64_t sys_read(int fd, void *buf, uint64_t len) {
 // ---------------------------------------------------------------------------
 // path_split — split an absolute path into parent dir path + leaf name.
 // parent_buf must hold at least the length of path.
-// Returns 0 on success, -EINVAL if path has no parent component.
+// Strips trailing '/' (POSIX: "/foo/" is equivalent to "/foo"), so `path`
+// must be writable. Returns 0 on success, -EINVAL if path has no leaf
+// component (e.g. "" or "/" or "////").
 // ---------------------------------------------------------------------------
-static int path_split(const char *path, char *parent_buf, const char **leaf_out) {
+static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     int len = 0;
     while (path[len]) len++;
     if (len == 0 || path[0] != '/') return -EINVAL;
 
-    // Find last '/' (excluding a trailing slash).
+    // Strip trailing slashes, but never reduce "/" itself to "".
+    while (len > 1 && path[len - 1] == '/') {
+        path[--len] = '\0';
+    }
+    // After stripping, "/" alone has no leaf.
+    if (len == 1) return -EINVAL;
+
+    // Find last '/'.
     int last_slash = -1;
     for (int i = len - 1; i >= 0; i--) {
         if (path[i] == '/') { last_slash = i; break; }
