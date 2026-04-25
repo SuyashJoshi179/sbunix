@@ -18,6 +18,7 @@
 #include <log.h>
 #include <bio.h>
 #include <printk.h>
+#include <proc.h>
 #include <string.h>
 #include <riscv.h>
 

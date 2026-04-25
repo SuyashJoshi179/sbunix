@@ -168,6 +168,18 @@ static int64_t sys_read(int fd, void *buf, uint64_t len) {
 }
 
 // ---------------------------------------------------------------------------
+// path_split — split a path into parent dir path + leaf name.
+//
+// Strips trailing '/' (POSIX: "/foo/" is equivalent to "/foo"), so `path`
+// must be writable. Handles both absolute and relative paths:
+//   "/foo/bar"  -> parent="/foo",  leaf="bar"
+//   "/foo"      -> parent="/",     leaf="foo"
+//   "/foo/"     -> parent="/",     leaf="foo"
+//   "foo/bar"   -> parent="foo",   leaf="bar"
+//   "foo"       -> parent=".",     leaf="foo"
+//
+// Returns 0 on success, -EINVAL if path has no leaf component
+// (e.g. "", "/", "////").
 // path_split — split an absolute path into parent dir path + leaf name.
 // parent_buf must hold at least the length of path.
 // Strips trailing '/' (POSIX: "/foo/" is equivalent to "/foo"), so `path`
@@ -177,7 +189,14 @@ static int64_t sys_read(int fd, void *buf, uint64_t len) {
 static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     int len = 0;
     while (path[len]) len++;
-    if (len == 0 || path[0] != '/') return -EINVAL;
+    if (len == 0) return -EINVAL;
+
+    // Strip trailing slashes, but never reduce "/" itself to "".
+    while (len > 1 && path[len - 1] == '/') {
+        path[--len] = '\0';
+    }
+    // After stripping, "/" alone has no leaf.
+    if (len == 1 && path[0] == '/') return -EINVAL;
 
     // Strip trailing slashes, but never reduce "/" itself to "".
     while (len > 1 && path[len - 1] == '/') {
@@ -191,7 +210,14 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     for (int i = len - 1; i >= 0; i--) {
         if (path[i] == '/') { last_slash = i; break; }
     }
-    if (last_slash < 0) return -EINVAL;
+
+    if (last_slash < 0) {
+        // Relative path with no slash: parent is cwd ".".
+        parent_buf[0] = '.';
+        parent_buf[1] = '\0';
+        *leaf_out = path;
+        return 0;
+    }
 
     // parent = path[0..last_slash) — or "/" if last_slash == 0
     int plen = last_slash == 0 ? 1 : last_slash;
@@ -199,6 +225,7 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     parent_buf[plen] = '\0';
 
     *leaf_out = &path[last_slash + 1];
+    if (!(*leaf_out)[0]) return -EINVAL;
     return 0;
 }
 
@@ -277,10 +304,11 @@ static int64_t sys_mkdir(const char *path) {
     struct inode *parent = 0;
     if (namei(parent_path, &parent) < 0) return -ENOENT;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
-    if (!parent->ops || !parent->ops->mkdir) { inode_put(parent); return -EROFS; }
 
-    // Check name doesn't already exist
-    if (parent->ops->lookup) {
+    // Check name doesn't already exist (EEXIST takes precedence over EROFS so
+    // `mkdir -p` works correctly when an intermediate dir is a mount point
+    // sitting on a read-only parent fs).
+    if (parent->ops && parent->ops->lookup) {
         struct inode *existing = 0;
         if (parent->ops->lookup(parent, leaf, &existing) == 0) {
             inode_put(existing);
@@ -288,6 +316,8 @@ static int64_t sys_mkdir(const char *path) {
             return -EEXIST;
         }
     }
+
+    if (!parent->ops || !parent->ops->mkdir) { inode_put(parent); return -EROFS; }
 
     int rc = parent->ops->mkdir(parent, leaf);
     inode_put(parent);
