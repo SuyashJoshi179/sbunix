@@ -19,6 +19,7 @@
 #include <bio.h>
 #include <printk.h>
 #include <string.h>
+#include <riscv.h>
 
 /* -----------------------------------------------------------------------
  * On-disk log header layout
@@ -41,6 +42,8 @@ static struct {
     uint32_t blocks[LOG_HDR_MAX]; /* real block numbers              */
     /* Cached dirty data (parallel to blocks[]) — we hold bread refs */
     struct buf *bufs[LOG_HDR_MAX];
+    /* Saved SIE bit across the transaction so we can restore on end_op. */
+    uint64_t saved_sie;
 } log;
 
 /* -----------------------------------------------------------------------
@@ -103,8 +106,15 @@ void recover_from_log(void) {
  * begin_op — start a transaction
  * ----------------------------------------------------------------------- */
 void begin_op(void) {
+    /* Serialize log transactions on this single-CPU kernel by disabling
+     * S-mode interrupts for the duration. Timer preemption mid-transaction
+     * would let another process call begin_op and trip the "nested begin_op"
+     * panic, and would also race on the in-memory log state and virtio poll. */
+    uint64_t s = read_sstatus();
+    write_sstatus(s & ~SSTATUS_SIE);
     if (log.outstanding)
         panic("log: nested begin_op");
+    log.saved_sie   = s & SSTATUS_SIE;
     log.outstanding = 1;
     log.nblocks     = 0;
     for (int i = 0; i < LOG_HDR_MAX; i++)
@@ -179,4 +189,6 @@ void end_op(void) {
     }
 
     log.outstanding = 0;
+    if (log.saved_sie)
+        write_sstatus(read_sstatus() | SSTATUS_SIE);
 }

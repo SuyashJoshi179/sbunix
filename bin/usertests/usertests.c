@@ -382,10 +382,8 @@ static void duptest(void) {
 static void fourfiles(void) {
     const char *names[] = {"/data/f0", "/data/f1", "/data/f2", "/data/f3"};
     for (int i = 0; i < 4; i++) unlink(names[i]);
-    int kids[4];
     for (int pi = 0; pi < 4; pi++) {
-        int pid = fork();
-        if (pid == 0) {
+        if (fork() == 0) {
             int fd = open(names[pi], O_RDWR | O_CREAT);
             if (fd < 0) exit(1);
             memset(buf, '0' + pi, 500);
@@ -395,12 +393,12 @@ static void fourfiles(void) {
             close(fd);
             exit(0);
         }
-        kids[pi] = pid;
     }
     int all_ok = 1;
     for (int i = 0; i < 4; i++) {
-        int st = wait_status(kids[i]);
-        if (st != 0) all_ok = 0;
+        int st = -1;
+        int got = wait(&st);
+        if (got < 0 || st != 0) all_ok = 0;
     }
     chk(all_ok, "fourfiles: 4 procs each wrote 5000 bytes");
 

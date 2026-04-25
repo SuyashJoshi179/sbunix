@@ -73,6 +73,13 @@ trap_vector:
     mv   a3, sp             # pass trapframe pointer
     call trap_handler
 
+    # Disable interrupts before restoring sepc: the trap_handler path may
+    # have left sstatus.SIE=1 (bio/sbfs unlock helpers unconditionally set it),
+    # and a nested trap between `csrw sepc` and `sret` would clobber sepc with
+    # the nested interrupted PC, causing the outer sret to jump to a kernel
+    # address in U-mode. Clearing SIE closes that window.
+    csrci sstatus, 2       # clear sstatus.SIE (bit 1)
+
     # Restore sepc and sstatus CSRs from the saved frame.
     ld t0, 248(sp)
     csrw sepc, t0
