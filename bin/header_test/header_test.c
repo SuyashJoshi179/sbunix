@@ -38,7 +38,7 @@ int main(void) {
     CHECK(strlen(small) == 7);
 
     /* fprintf to stdout/stderr */
-    fprintf(stdout, "headertest: stdout fprintf ok\n");
+    fprintf(stdout, "header_test: stdout fprintf ok\n");
 
     /* atoi / strtol */
     CHECK(atoi("  -123abc") == -123);
@@ -51,7 +51,7 @@ int main(void) {
     CHECK(abs(-7) == 7);
 
     /* puts / fputs */
-    fputs("headertest: fputs ok\n", stdout);
+    fputs("header_test: fputs ok\n", stdout);
 
     /* file I/O: log-and-replay scenario */
     const char *path = "/data/htest.txt";
@@ -219,9 +219,9 @@ int main(void) {
     }
 
     if (fail_count == 0) {
-        puts("headertest: PASS");
+        puts("header_test: PASS");
         return 0;
     }
-    fprintf(stderr, "headertest: FAIL (%d errors)\n", fail_count);
+    fprintf(stderr, "header_test: FAIL (%d errors)\n", fail_count);
     return 1;
 }

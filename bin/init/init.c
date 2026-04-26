@@ -67,7 +67,7 @@ int main(void) {
         "/bin/zerofill_test",
         "/bin/demand_walk_test",
         "/bin/stack_overflow_test",
-        "/bin/headertest",
+        "/bin/header_test",
         "/bin/headers_compile_gate",
         "/bin/usertests",
     };
