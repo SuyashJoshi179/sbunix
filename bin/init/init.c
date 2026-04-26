@@ -69,6 +69,7 @@ int main(void) {
         "/bin/stack_overflow_test",
         "/bin/header_test",
         "/bin/headers_compile_gate",
+        "/bin/rofs_test",
         "/bin/usertests",
     };
     int ntests = (int)(sizeof(tests) / sizeof(tests[0]));

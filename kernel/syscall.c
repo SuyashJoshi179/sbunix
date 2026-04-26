@@ -267,6 +267,16 @@ static int64_t sys_open(const char *path, int flags) {
         return rc;
     }
 
+    int want_write = ((flags & 3) == 1 || (flags & 3) == 2);
+    /* Reject writable opens on read-only filesystems at open() time, not
+     * later at write() time. A regular file whose fs lacks a truncate op
+     * (i.e. tarfs) cannot service writes, so opening it for write is an
+     * EROFS condition per POSIX. */
+    if (want_write && ip->type == I_REG && !ip->ops->truncate) {
+        inode_put(ip);
+        return -EROFS;
+    }
+
     struct file *f = filealloc();
     if (!f) { inode_put(ip); return -EMFILE; }
 
@@ -274,7 +284,7 @@ static int64_t sys_open(const char *path, int flags) {
     f->ip       = ip;
     f->off      = 0;
     f->readable = ((flags & 3) == 0 || (flags & 3) == 2) ? 1 : 0;
-    f->writable = ((flags & 3) == 1 || (flags & 3) == 2) ? 1 : 0;
+    f->writable = want_write ? 1 : 0;
     if (ip->type == I_CHR) { f->readable = 1; f->writable = 1; }
     // O_APPEND: start writes at end
     if (flags & 02000) f->off = ip->size;
