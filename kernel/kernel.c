@@ -15,6 +15,7 @@
 #include <termios.h>
 #include <drivers/uart.h>
 #include <drivers/plic.h>
+#include <drivers/pci.h>
 #include <drivers/virtio.h>
 
 // devfs_init declared here to avoid a new header for one function.
@@ -40,8 +41,9 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
     devfs_init();
     termios_init();
 
-    // Phase 5: initialise buffer cache and VirtIO block device.
+    // Phase 5/10: buffer cache and VirtIO-PCI block device.
     binit();
+    pci_init();
     virtio_disk_init();
 
     // Mount sbfs at /data.

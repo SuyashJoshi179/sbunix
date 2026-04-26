@@ -75,11 +75,15 @@ static pgtable_t vmem_create(void) {
     #define PLIC_MAPSZ 0x400000UL
     vmem_map(pgtable, KVMEM_OFFSET + PLIC_PHYS, PLIC_PHYS, PLIC_MAPSZ, PTE_R | PTE_W);
 
-    // VirtIO MMIO: first slot at 0x10001000 (4 KB).
-    // QEMU virt board maps virtio-mmio-bus.0 here; IRQ 1 on the PLIC.
-    #define VIRTIO_PHYS 0x10001000UL
-    #define VIRTIO_SIZE 0x1000UL
-    vmem_map(pgtable, KVMEM_OFFSET + VIRTIO_PHYS, VIRTIO_PHYS, VIRTIO_SIZE, PTE_R | PTE_W);
+    // PCIe ECAM (256 MB) and 32-bit MMIO BAR window (1 GB) on QEMU virt.
+    // ECAM:  bus 0..255 × dev 0..31 × fn 0..7 × 4 KB config space.
+    // BAR window: virtio-pci modern BAR4 lives here; INTx routed to PLIC 32..35.
+    #define ECAM_PHYS     0x30000000UL
+    #define ECAM_SIZE     0x10000000UL
+    #define PCI_MMIO_PHYS 0x40000000UL
+    #define PCI_MMIO_SIZE 0x40000000UL
+    vmem_map(pgtable, KVMEM_OFFSET + ECAM_PHYS, ECAM_PHYS, ECAM_SIZE, PTE_R | PTE_W);
+    vmem_map(pgtable, KVMEM_OFFSET + PCI_MMIO_PHYS, PCI_MMIO_PHYS, PCI_MMIO_SIZE, PTE_R | PTE_W);
 
     // Kernel text + mixed page: identity + high half, R|W|X
     // Using R|W|X because the last code page also contains .data variables

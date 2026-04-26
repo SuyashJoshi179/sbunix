@@ -78,7 +78,7 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
                 int irq = plic_claim();
                 if (irq == 10 /* UART_IRQ */) {
                     uart_rx_isr();
-                } else if (irq == 1 /* VIRTIO_IRQ */) {
+                } else if (irq >= 32 && irq <= 35 /* PCI INTA..INTD */) {
                     virtio_disk_intr();
                 }
                 if (irq) plic_complete(irq);
