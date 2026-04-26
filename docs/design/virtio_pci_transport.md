@@ -1,4 +1,9 @@
-# Phase 10 — VirtIO over PCI (single PR)
+# VirtIO over PCI — Transport Migration
+
+**Status:** Shipped on `feature/virtio-pci`.
+**Note:** Not a roadmap phase — this is a driver migration done so the
+local Makefile can match the grader's QEMU invocation byte-for-byte.
+The roadmap's "Phase 10" slot is reserved for BusyBox bring-up.
 
 ## Motivation
 
@@ -210,6 +215,27 @@ After kernel works:
   skipped without crashing.
 * **Cache coherency.** RV64 with `Zicsr_Zifencei` already gives us
   `__sync_synchronize`; same fences as the MMIO path apply.
+
+## Deviations from plan (discovered while shipping)
+
+* **BAR allocator added.** QEMU `virt` does not pre-program PCI BARs —
+  raw BAR4 read returned `lo=0xC, hi=0x0` (type bits only, base
+  unassigned), so `bar_resolve` produced NULL and init failed with
+  "missing virtio caps". Fix: `pci_init` now walks every device, sizes
+  each BAR, and assigns addresses from a linear bump allocator inside
+  `PCI_BAR_WINDOW_BASE..+SIZE`. MEM/IO decode is disabled while
+  reprogramming.
+* **`virtio_pci_common_cfg` is NOT packed.** Initial version used
+  `__attribute__((packed))` (matching the wire layout doc), which let
+  the compiler lower 16/32-bit field accesses to byte loads.
+  Virtio-pci registers reject byte-width access — `queue_size` read as
+  0 even though a raw 16-bit MMIO read at the same offset returned
+  256. Fix: drop `packed`; fields are naturally aligned anyway. Inline
+  comment in `virtio.h` records this.
+* **`pci_read_bar` sizing is opt-in.** The write-1s/read-back probe is
+  destructive if the caller doesn't want size info; `pci_read_bar`
+  skips the dance when `out_size == NULL` so virtio_disk's
+  `bar_resolve` is read-only.
 
 ## Out of scope
 
