@@ -75,6 +75,11 @@ static pgtable_t vmem_create(void) {
     #define PLIC_MAPSZ 0x400000UL
     vmem_map(pgtable, KVMEM_OFFSET + PLIC_PHYS, PLIC_PHYS, PLIC_MAPSZ, PTE_R | PTE_W);
 
+    // Goldfish RTC: 4 KiB MMIO page at 0x101000 (high-half only).
+    #define GOLDFISH_RTC_PHYS 0x101000UL
+    vmem_map(pgtable, KVMEM_OFFSET + GOLDFISH_RTC_PHYS, GOLDFISH_RTC_PHYS,
+             PAGE_SIZE, PTE_R | PTE_W);
+
     // PCIe ECAM (256 MB) and 32-bit MMIO BAR window (1 GB) on QEMU virt.
     // ECAM:  bus 0..255 × dev 0..31 × fn 0..7 × 4 KB config space.
     // BAR window: virtio-pci modern BAR4 lives here; INTx routed to PLIC 32..35.

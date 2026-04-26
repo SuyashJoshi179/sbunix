@@ -17,6 +17,7 @@
 #include <drivers/plic.h>
 #include <drivers/pci.h>
 #include <drivers/virtio.h>
+#include <drivers/rtc.h>
 
 // devfs_init declared here to avoid a new header for one function.
 void devfs_init(void);
@@ -32,6 +33,9 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
 
     // Build tarfs inode tree and mount at "/".
     tarfs_init();
+
+    // Goldfish RTC: read once to anchor wall-clock time.
+    rtc_init();
 
     // Set up PLIC and enable UART + VirtIO interrupts.
     plic_init();
