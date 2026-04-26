@@ -167,10 +167,10 @@ four PCI INTx lines can fire.
 ```
 
 `virtio_disk_intr` reads ISR status register (clears interrupt) and
-wakes the polling loop (no behaviour change vs MMIO).
-
-If MSI-X cannot be disabled or `INTERRUPT_LINE = 0xff`, polling alone
-handles completion — PR still works, just without IRQ-driven wakeups.
+wakes the polling loop. **`virtio_disk_rw` polls the used ring
+regardless** — IRQ is a wakeup hint only, not a correctness
+requirement. Same behaviour as MMIO path. If MSI-X cannot be disabled
+or `INTERRUPT_LINE = 0xff`, completion still works via polling.
 
 ### 5. Adopt master Makefile
 
@@ -189,10 +189,10 @@ After kernel works:
 | `kernel/drivers/pci.c`                  | new — ECAM walker, BAR sizing, caps  |
 | `kernel/include/drivers/pci.h`          | new                                  |
 | `kernel/drivers/virtio_disk.c`          | rewritten for virtio-pci modern      |
-| `kernel/include/drivers/virtio.h`       | drop MMIO regs; keep ring structs    |
+| `kernel/include/drivers/virtio.h`       | swap MMIO offsets for virtio-pci structs; keep ring structs |
 | `kernel/drivers/plic.c`                 | enable IRQs 32..35 (drop IRQ 1)      |
 | `kernel/trap.c`                         | dispatch IRQs 32..35                 |
-| `kernel/kernel.c`                       | call `pci_init` (or none) before `virtio_disk_init` |
+| `kernel/kernel.c`                       | call `pci_init` before `virtio_disk_init`           |
 | `Makefile`                              | replaced by master copy              |
 
 ## Risks / open questions

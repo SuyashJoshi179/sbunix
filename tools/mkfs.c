@@ -130,10 +130,12 @@ static void write_inode(uint32_t inum, const struct sb_dinode *d) {
  * main
  * ----------------------------------------------------------------------- */
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr, "usage: mkfs <image>\n");
+    if (argc < 2 || argc > 3) {
+        fprintf(stderr, "usage: mkfs <image> [size_mb]\n");
         return 1;
     }
+    /* size_mb (argv[2]) is accepted for compatibility with the master
+     * Makefile but ignored: sbfs v1 has a fixed on-disk layout. */
 
     img = fopen(argv[1], "w+b");
     if (!img) {
