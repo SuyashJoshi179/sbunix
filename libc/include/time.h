@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
 #include <sys/types.h>
 
 /* Must match kernel/include/time.h */
