@@ -23,7 +23,7 @@ int nanosleep(const struct timespec *req, struct timespec *rem) {
 
 time_t time(time_t *tloc) {
     struct timespec ts;
-    if (clock_gettime(1 /* CLOCK_MONOTONIC */, &ts) < 0) return (time_t)-1;
+    if (clock_gettime(0 /* CLOCK_REALTIME */, &ts) < 0) return (time_t)-1;
     if (tloc) *tloc = (time_t)ts.tv_sec;
     return (time_t)ts.tv_sec;
 }
