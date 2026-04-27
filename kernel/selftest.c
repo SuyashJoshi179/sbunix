@@ -187,25 +187,42 @@ static void test_leak_spawn_free(void) {
 
     unsigned long before = pmem_free_count();
     int ok = 1;
+    unsigned long worst_dip = 0;
+    long          worst_delta = 0;
 
     for (int i = 0; i < 1000; i++) {
+        unsigned long pre = pmem_free_count();
         struct pcb *p = proc_spawn("bin/init");
         if (!p) {
             ok = 0;
-            printk("[SELFTEST] leak: spawn failed at iter=%d\n", i);
+            printk("[SELFTEST] leak: spawn failed at iter=%d (free=%lu)\n",
+                   i, pmem_free_count());
             break;
         }
-        // Tear down the address space and proc manually (mirrors what
-        // free_proc now does, exercising the full allocation/free path
-        // without needing the scheduler running).
+        unsigned long mid = pmem_free_count();
+        if (pre - mid > worst_dip) worst_dip = pre - mid;
         free_proc(p);
+        unsigned long post = pmem_free_count();
+        long delta = (long)post - (long)pre;
+        if (delta != worst_delta) {
+            printk("[SELFTEST] leak iter=%d pre=%lu mid=%lu post=%lu delta=%ld\n",
+                   i, pre, mid, post, delta);
+            worst_delta = delta;
+        }
         /* Invariant: with no scheduler activity, process list must be empty. */
         if (proc_list_head() != 0) {
             printk("[SELFTEST] proc list not empty after free (iter=%d head=%p)\n",
                    i, proc_list_head());
             panic("selftest: proc list corruption");
         }
+        /* Sample-rate freelist sanity walk. Catches a stray bad link before it
+         * faults inside pmem_free_count. */
+        if ((i % 100) == 99 && pmem_freelist_check() < 0) {
+            printk("[SELFTEST] leak: freelist corrupt after iter=%d\n", i);
+            panic("selftest: freelist corruption");
+        }
     }
+    printk("[SELFTEST] leak: worst in-flight dip = %lu pages\n", worst_dip);
 
     st_check(ok, "leak: spawn/free loop completed 1000x");
 

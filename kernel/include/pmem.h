@@ -13,3 +13,4 @@ void          pmem_rebase(unsigned long offset);
 void         *page_alloc(void);
 void          page_free(void *page);
 unsigned long pmem_free_count(void);
+int           pmem_freelist_check(void);

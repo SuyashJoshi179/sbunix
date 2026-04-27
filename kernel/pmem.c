@@ -92,3 +92,29 @@ unsigned long pmem_free_count(void) {
         n++;
     return n;
 }
+
+/* Walk the freelist and validate every link.
+ * Returns 0 if every node is page-aligned and within [KERN_BASE, PHYMEM_END);
+ * returns -1 on the first bad link (and logs prev/curr so the offending free
+ * site can be identified). Used by selftests as a localizing assertion when a
+ * future regression manifests as a load fault inside pmem_free_count. */
+int pmem_freelist_check(void) {
+    struct free_page *prev = 0;
+    unsigned long n = 0;
+    for (struct free_page *p = freelist; p; prev = p, p = p->next) {
+        unsigned long va = (unsigned long)p;
+        if (va & (PAGE_SIZE - 1)) {
+            printk("pmem_freelist_check: bad link #%lu prev=%p p=%p (unaligned)\n",
+                   n, prev, p);
+            return -1;
+        }
+        unsigned long pa = virt_to_phys(va);
+        if (pa < KERN_BASE || pa >= PHYMEM_END) {
+            printk("pmem_freelist_check: bad link #%lu prev=%p p=%p pa=%lx\n",
+                   n, prev, p, pa);
+            return -1;
+        }
+        n++;
+    }
+    return 0;
+}
