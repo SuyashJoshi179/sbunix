@@ -190,8 +190,8 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     while (len > 1 && path[len - 1] == '/') {
         path[--len] = '\0';
     }
-    // After stripping, absolute "/" alone has no leaf.
-    if (len == 1 && path[0] == '/') return -EINVAL;
+    // After stripping, "/" alone has no leaf.
+    if (len == 1) return -EINVAL;
 
     // Find last '/'.
     int last_slash = -1;
