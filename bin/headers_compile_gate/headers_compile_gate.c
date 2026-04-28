@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -17,6 +18,14 @@
 #include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <ctype.h>
+#include <setjmp.h>
+#include <assert.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <inttypes.h>
+#include <math.h>
 
 /* --- typedefs must exist --- */
 static size_t      g_size;
@@ -52,6 +61,8 @@ static const int   g_macros[] = {
     EPERM, ENOENT, ESRCH, EINTR, EBADF, ECHILD, ENOMEM, EFAULT,
     ENOTDIR, EISDIR, EINVAL, ENFILE, EMFILE, ENOTTY, ENOSPC, ESPIPE,
     EROFS, EPIPE, ENAMETOOLONG, ENOSYS, EEXIST, EFBIG, ENOTSUP,
+    EAGAIN, EWOULDBLOCK, ERANGE, EDOM, EILSEQ, ENOEXEC, EBUSY,
+    ENXIO, EXDEV, ENODEV, ELOOP, E2BIG, ENOTEMPTY, EACCES,
     SIGHUP, SIGINT, SIGQUIT, SIGILL, SIGTRAP, SIGABRT, SIGBUS, SIGFPE,
     SIGKILL, SIGUSR1, SIGSEGV, SIGUSR2, SIGPIPE, SIGALRM, SIGTERM,
     SIGCHLD, SIGCONT, SIGSTOP, NSIG,
@@ -60,9 +71,18 @@ static const int   g_macros[] = {
     DT_UNKNOWN, DT_CHR, DT_DIR, DT_REG,
     S_IFMT, S_IFIFO, S_IFREG, S_IFDIR, S_IFCHR,
     STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO,
+    F_OK, R_OK, W_OK, X_OK,
+    WNOHANG, WUNTRACED,
+    _IOFBF, _IOLBF, _IONBF, L_tmpnam, FILENAME_MAX, FOPEN_MAX, TMP_MAX,
     INT8_MIN, INT8_MAX, UINT8_MAX,
     INT16_MIN, INT16_MAX, UINT16_MAX,
     INT32_MIN, INT32_MAX,
+    CHAR_BIT, SCHAR_MIN, SCHAR_MAX, UCHAR_MAX,
+    SHRT_MIN, SHRT_MAX, USHRT_MAX,
+    INT_MIN, INT_MAX,
+    PATH_MAX, NAME_MAX, ARG_MAX, OPEN_MAX, PIPE_BUF,
+    MB_LEN_MAX, MB_CUR_MAX,
+    FP_NAN, FP_INFINITE, FP_ZERO, FP_SUBNORMAL, FP_NORMAL,
 };
 
 /* INT*_C / UINT*_C / SIZE_MAX touch */
@@ -95,6 +115,27 @@ static void touch_structs(void) {
     struct sigaction  sa  = {0}; (void)sa.sa_handler; (void)sa.sa_mask; (void)sa.sa_flags;
     struct termios    tio = {0}; (void)tio.c_iflag; (void)tio.c_oflag; (void)tio.c_cflag; (void)tio.c_lflag; (void)tio.c_cc;
     struct winsize    ws  = {0}; (void)ws.ws_row; (void)ws.ws_col;
+    div_t             dv  = {0}; (void)dv.quot; (void)dv.rem;
+    ldiv_t            ld  = {0}; (void)ld.quot; (void)ld.rem;
+    lldiv_t           lld = {0}; (void)lld.quot; (void)lld.rem;
+    imaxdiv_t         id  = {0}; (void)id.quot; (void)id.rem;
+    jmp_buf           jb  = {0}; (void)jb[0];
+    sigjmp_buf        sjb = {0}; (void)sjb[0];
+
+    /* W* macros must compile against an int status. */
+    int s = 0;
+    (void)WIFEXITED(s); (void)WEXITSTATUS(s);
+    (void)WIFSIGNALED(s); (void)WTERMSIG(s);
+    (void)WCOREDUMP(s); (void)WIFSTOPPED(s); (void)WSTOPSIG(s);
+
+    /* bool from stdbool.h. */
+    bool b = true; b = false; (void)b;
+
+    /* Format-string macros from inttypes.h. */
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%" PRId64 " %" PRIu64 " %" PRIx64,
+             (int64_t)1, (uint64_t)2, (uint64_t)0xff);
+    (void)buf;
 }
 
 /* --- function decls must exist (take address; skipped at runtime) --- */
@@ -119,9 +160,31 @@ static const vp_t g_fns[] = {
     (vp_t)rand, (vp_t)srand, (vp_t)getenv,
     (vp_t)qsort, (vp_t)bsearch,
     /* string */
-    (vp_t)strlen, (vp_t)strcmp, (vp_t)strncmp,
+    (vp_t)strlen, (vp_t)strnlen, (vp_t)strcmp, (vp_t)strncmp,
     (vp_t)strcpy, (vp_t)strncpy, (vp_t)strchr, (vp_t)strrchr,
+    (vp_t)strcat, (vp_t)strncat,
+    (vp_t)strstr, (vp_t)strpbrk, (vp_t)strspn, (vp_t)strcspn,
+    (vp_t)strtok, (vp_t)strtok_r,
+    (vp_t)strdup, (vp_t)strndup, (vp_t)strerror,
     (vp_t)memset, (vp_t)memcpy, (vp_t)memmove,
+    (vp_t)memcmp, (vp_t)memchr,
+    /* strings */
+    (vp_t)bzero, (vp_t)bcmp, (vp_t)bcopy,
+    (vp_t)ffs, (vp_t)ffsl, (vp_t)ffsll,
+    (vp_t)strcasecmp, (vp_t)strncasecmp,
+    /* ctype */
+    (vp_t)isalnum, (vp_t)isalpha, (vp_t)isascii, (vp_t)isblank,
+    (vp_t)iscntrl, (vp_t)isdigit, (vp_t)isgraph, (vp_t)islower,
+    (vp_t)isprint, (vp_t)ispunct, (vp_t)isspace, (vp_t)isupper,
+    (vp_t)isxdigit,
+    (vp_t)toascii, (vp_t)tolower, (vp_t)toupper,
+    /* setjmp */
+    (vp_t)setjmp, (vp_t)longjmp,
+    (vp_t)sigsetjmp, (vp_t)siglongjmp,
+    /* errno */
+    (vp_t)__errno_location,
+    /* assert */
+    (vp_t)__assert_fail,
     /* unistd */
     (vp_t)read, (vp_t)write, (vp_t)open, (vp_t)close,
     (vp_t)getpid, (vp_t)getppid, (vp_t)fork, (vp_t)wait,
@@ -131,6 +194,20 @@ static const vp_t g_fns[] = {
     (vp_t)pipe, (vp_t)execv, (vp_t)sbrk, (vp_t)meminfo,
     (vp_t)getuid, (vp_t)geteuid, (vp_t)getgid, (vp_t)getegid,
     (vp_t)setuid, (vp_t)setgid,
+    (vp_t)_exit, (vp_t)isatty, (vp_t)access, (vp_t)readlink,
+    /* sys/wait */
+    (vp_t)waitpid,
+    /* stdio additions */
+    (vp_t)ungetc, (vp_t)setbuf, (vp_t)setvbuf, (vp_t)tmpnam,
+    /* stdlib additions */
+    (vp_t)atof, (vp_t)strtoll, (vp_t)strtoull,
+    (vp_t)strtod, (vp_t)strtof,
+    (vp_t)llabs, (vp_t)div, (vp_t)ldiv, (vp_t)lldiv,
+    (vp_t)setenv, (vp_t)unsetenv, (vp_t)putenv, (vp_t)system,
+    (vp_t)mblen, (vp_t)mbtowc, (vp_t)wctomb,
+    (vp_t)mbstowcs, (vp_t)wcstombs,
+    /* inttypes */
+    (vp_t)imaxabs, (vp_t)imaxdiv, (vp_t)strtoimax, (vp_t)strtoumax,
     /* time */
     (vp_t)clock_gettime, (vp_t)gettimeofday, (vp_t)nanosleep, (vp_t)time,
     /* signal */

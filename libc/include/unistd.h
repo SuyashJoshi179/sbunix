@@ -40,3 +40,13 @@ gid_t getgid(void);
 gid_t getegid(void);
 int   setuid(uid_t uid);
 int   setgid(gid_t gid);
+
+void  _exit(int status) __attribute__((noreturn));
+int   isatty(int fd);
+int   access(const char *path, int mode);
+long  readlink(const char *path, char *buf, long n);
+
+#define F_OK 0
+#define R_OK 4
+#define W_OK 2
+#define X_OK 1

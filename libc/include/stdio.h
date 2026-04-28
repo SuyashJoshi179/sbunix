@@ -56,4 +56,18 @@ void   perror(const char *s);
 int    remove(const char *path);
 int    rename(const char *oldpath, const char *newpath);
 
+int    ungetc(int c, FILE *stream);
+void   setbuf(FILE *stream, char *buf);
+int    setvbuf(FILE *stream, char *buf, int mode, size_t size);
+char  *tmpnam(char *s);
+
+#define _IOFBF 0
+#define _IOLBF 1
+#define _IONBF 2
+
+#define L_tmpnam 32
+#define FILENAME_MAX 4096
+#define FOPEN_MAX 16
+#define TMP_MAX 1
+
 #endif

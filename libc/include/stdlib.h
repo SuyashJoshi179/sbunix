@@ -21,20 +21,46 @@ void  free(void *ptr);
 int           atoi(const char *s);
 long          atol(const char *s);
 long long     atoll(const char *s);
+double        atof(const char *s);
 long          strtol(const char *s, char **endp, int base);
 unsigned long strtoul(const char *s, char **endp, int base);
+long long     strtoll(const char *s, char **endp, int base);
+unsigned long long strtoull(const char *s, char **endp, int base);
+double        strtod(const char *s, char **endp);
+float         strtof(const char *s, char **endp);
 
 int   abs(int x);
 long  labs(long x);
+long long llabs(long long x);
 
 int   rand(void);
 void  srand(unsigned seed);
 
 char *getenv(const char *name);
+int   setenv(const char *name, const char *value, int overwrite);
+int   unsetenv(const char *name);
+int   putenv(char *string);
+int   system(const char *cmd);
 
 void  qsort(void *base, size_t nmemb, size_t size,
             int (*cmp)(const void *, const void *));
 void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,
               int (*cmp)(const void *, const void *));
+
+typedef struct { int       quot, rem; } div_t;
+typedef struct { long      quot, rem; } ldiv_t;
+typedef struct { long long quot, rem; } lldiv_t;
+
+div_t   div(int num, int den);
+ldiv_t  ldiv(long num, long den);
+lldiv_t lldiv(long long num, long long den);
+
+int    mblen(const char *s, size_t n);
+int    mbtowc(int *pwc, const char *s, size_t n);
+int    wctomb(char *s, int wc);
+size_t mbstowcs(int *pwcs, const char *s, size_t n);
+size_t wcstombs(char *s, const int *pwcs, size_t n);
+
+#define MB_CUR_MAX 1
 
 #endif
