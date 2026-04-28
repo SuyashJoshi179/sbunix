@@ -46,7 +46,8 @@ void vmem_map(pgtable_t pgtable, unsigned long virt_addr, unsigned long phy_addr
     for (unsigned long addr = phy_addr; addr < addr_end; addr += PAGE_SIZE) {
         pte_t *pte = get_pte(pgtable, virt_addr, true);
         if (pte == 0) return;
-        *pte = phyaddr_to_pte(addr) | permissions | PTE_V;
+        unsigned long ad = (permissions & (PTE_R | PTE_W | PTE_X)) ? PTE_LEAF_AD : 0;
+        *pte = phyaddr_to_pte(addr) | permissions | PTE_V | ad;
         virt_addr += PAGE_SIZE;
     }
 }
@@ -215,7 +216,7 @@ pgtable_t uvmcow_share(pgtable_t parent_pt) {
                 unsigned long perm = pte & (PTE_R | PTE_W | PTE_X | PTE_U);
                 if (perm & PTE_W) {
                     perm &= ~PTE_W;
-                    l0[l0i] = phyaddr_to_pte(pa) | perm | PTE_V;
+                    l0[l0i] = phyaddr_to_pte(pa) | perm | PTE_V | PTE_LEAF_AD;
                 }
 
                 unsigned long vaddr = ((unsigned long)l2i << 30) |
@@ -228,7 +229,7 @@ pgtable_t uvmcow_share(pgtable_t parent_pt) {
                     flush_tlb();
                     return 0;
                 }
-                *child_pte = phyaddr_to_pte(pa) | perm | PTE_V;
+                *child_pte = phyaddr_to_pte(pa) | perm | PTE_V | PTE_LEAF_AD;
             }
         }
     }

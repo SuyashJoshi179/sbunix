@@ -11,6 +11,12 @@ typedef unsigned long *pgtable_t;
 #define PTE_W (1L << 2)
 #define PTE_X (1L << 3)
 #define PTE_U (1L << 4)
+#define PTE_A (1L << 6)
+#define PTE_D (1L << 7)
+
+/* Leaf PTE bits set unconditionally for any RWX mapping. Avoids soft
+ * A/D-update faults on Svade hardware (no Svadu). xv6-riscv style. */
+#define PTE_LEAF_AD (PTE_A | PTE_D)
 
 #define KVMEM_OFFSET 0xFFFFFFFF00000000UL
 

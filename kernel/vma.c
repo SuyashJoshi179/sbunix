@@ -139,7 +139,7 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
         struct vma *sv = find_stack_vma(p->vma_list);
         uint64_t min_start = USER_STACK_TOP - (MAX_STACK_PAGES * PAGE_SIZE);
         if (sv && stval < sv->start && fault_va >= min_start) {
-            uint64_t user_sp = trapframe[1];
+            uint64_t user_sp = trapframe ? trapframe[1] : sv->start;
             if (stval >= user_sp - PAGE_SIZE) {
                 sv->start = fault_va;
                 v = sv;
@@ -163,7 +163,7 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
         if (scause == 15 && !(*pte & PTE_W) && (v->flags & VMA_FLAG_COW)) {
             unsigned long old_pa = pte_to_phyaddr(*pte);
             if (page_ref_get(old_pa) == 1) {
-                *pte |= PTE_W;
+                *pte |= PTE_W | PTE_D;
                 flush_tlb();
                 return 0;
             }
@@ -173,7 +173,7 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
             unsigned long new_pa = virt_to_phys((unsigned long)new_page);
             unsigned long perm = PTE_U | PTE_V | PTE_R | PTE_W;
             if (v->prot & VMA_PROT_X) perm |= PTE_X;
-            *pte = phyaddr_to_pte(new_pa) | perm;
+            *pte = phyaddr_to_pte(new_pa) | perm | PTE_LEAF_AD;
             page_put(old_pa);
             flush_tlb();
             return 0;
