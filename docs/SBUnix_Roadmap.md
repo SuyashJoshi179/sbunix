@@ -26,11 +26,27 @@ will be written at the start of each phase, not up-front.
 | ELF loader for static user binaries | Done |
 | Syscalls: `exit, write, getpid, exec, fork, wait` | Done |
 | libc (ours, grown in-tree): `printf`, `exit`, syscall wrappers | Done |
+| libc Phase 7.5 prep: `setjmp`/`longjmp`, `ctype.h`, `assert.h`, `limits.h`, `stdbool.h`, `inttypes.h`, `strings.h`, `math.h` (decls), `sys/wait.h`, `errno` lvalue, full `string.h` (memcmp/strcat/strdup/strstr/…) | Done |
 | User binaries: `init`, `echo`, `fork_test`, `pid_test`, `write_test`, `addrspace_test`, `multi_fork_test` | Done |
-| `make thirdparty` hook for future BusyBox (empty directory, contract only) | Staked out |
+| `make thirdparty` hook with dispatcher + MicroPython port placeholder | Staked out |
 | QEMU machine already attaches `virtio-blk`, `virtio-gpu`, `virtio-net` | Hardware waiting for drivers |
 
 ---
+
+### Documented deviations from POSIX
+
+- **Wait status packing.** The kernel writes a one-byte status: `0..127`
+  for normal exit codes, `128 + signum` for signal-killed children.
+  POSIX would pack these as `(code << 8)` vs. `(signum & 0x7f)`. The
+  `WIFEXITED`/`WEXITSTATUS`/`WIFSIGNALED`/`WTERMSIG` macros in
+  `libc/include/sys/wait.h` decode the SBUnix convention directly. Code
+  that round-trips status via, say, MicroPython's `os.WIFEXITED` will
+  see the SBUnix interpretation, not Linux's.
+- **errno is a libc lvalue, not a syscall side effect.** `__errno_location()`
+  and the `errno` macro exist; libc syscall wrappers do *not* assign to
+  it. They return negative-errno directly (e.g. `read` returns `-EBADF`,
+  not `-1`). Code that wants POSIX-style `if (rc == -1) perror(...)` must
+  either translate at the call site or wrap.
 
 ## 1. Guiding Principles
 

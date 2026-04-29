@@ -7,6 +7,11 @@ int main(void) {
     printf("init: starting\n");
 
     char *tests[] = {
+        /* libc surface tests — kept first so a libc regression fails
+         * fast, before any of the longer-running kernel tests. */
+        "/bin/wait_test",
+        "/bin/setjmp_test",
+        "/bin/ctype_test",
         "/bin/fork_test",
         "/bin/pid_test",
         "/bin/addrspace_test",

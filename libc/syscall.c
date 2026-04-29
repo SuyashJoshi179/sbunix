@@ -1,7 +1,10 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <stdint.h>
+#include <termios.h>
+#include <errno.h>
 
 // Generic ecall helpers (register-allocated per RISC-V calling convention).
 static long ecall1(long num, long a0) {
@@ -149,4 +152,33 @@ int ioctl(int fd, int cmd, void *arg) {
 }
 long meminfo(void) {
     return ecall1(111, 0);
+}
+
+int isatty(int fd) {
+    struct termios t;
+    int r = ioctl(fd, TCGETS, &t);
+    return r == 0;
+}
+
+int access(const char *path, int mode) {
+    (void)path; (void)mode;
+    return -ENOSYS;
+}
+
+long readlink(const char *path, char *buf, long n) {
+    (void)path; (void)buf; (void)n;
+    return -EINVAL;
+}
+
+/* No SYS_waitpid in the kernel. Block on wait() and surface what we get;
+ * options is ignored (WNOHANG is not supported — document this). pid==-1
+ * matches wait()'s "any child"; any other pid is best-effort: we wait
+ * once and verify the returned pid matches, otherwise return -ECHILD
+ * because we can't push the unrelated child back onto the queue. */
+int waitpid(int pid, int *status, int options) {
+    (void)options;
+    int got = wait(status);
+    if (pid == -1 || pid == 0) return got;
+    if (got == pid || got < 0) return got;
+    return -ECHILD;
 }

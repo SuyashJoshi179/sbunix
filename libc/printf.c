@@ -293,6 +293,25 @@ int remove(const char *path) {
 /* Userspace rename: no SYS_rename in kernel. Copy oldpath → newpath, then
  * unlink oldpath. Not atomic. If newpath exists it is overwritten. On any
  * failure leaves both files in their pre-call state where possible. */
+int ungetc(int c, FILE *stream) {
+    (void)stream;
+    return c;
+}
+
+void setbuf(FILE *stream, char *buf) {
+    (void)stream; (void)buf;
+}
+
+int setvbuf(FILE *stream, char *buf, int mode, size_t size) {
+    (void)stream; (void)buf; (void)mode; (void)size;
+    return 0;
+}
+
+char *tmpnam(char *s) {
+    (void)s;
+    return NULL;
+}
+
 int rename(const char *oldpath, const char *newpath) {
     if (!oldpath || !newpath) return -1;
 
