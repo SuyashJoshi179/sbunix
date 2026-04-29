@@ -14,12 +14,16 @@ char **environ = _environ_empty;
 
 #define ARGV_STACK_MAX 64
 
+/* execl/execlp/execle declare their varargs as `const char *`. va_arg
+ * type must match what the caller actually passed, so pull `const char *`
+ * and cast to char* only when storing into the argv array (which is
+ * declared char *const argv[] for the underlying execv). */
 static int build_argv(char *out[], int cap, const char *arg0, va_list ap) {
     int n = 0;
     out[n++] = (char *)arg0;
     while (n < cap) {
-        char *p = va_arg(ap, char *);
-        out[n++] = p;
+        const char *p = va_arg(ap, const char *);
+        out[n++] = (char *)p;
         if (!p) return n;
     }
     return -1;
@@ -44,7 +48,7 @@ int execle(const char *path, const char *arg0, ...) {
     va_list ap; va_start(ap, arg0);
     int n = build_argv(argv, ARGV_STACK_MAX, arg0, ap);
     /* swallow the trailing envp arg even though we ignore it */
-    if (n >= 0) (void)va_arg(ap, char **);
+    if (n >= 0) (void)va_arg(ap, char *const *);
     va_end(ap);
     if (n < 0) { errno = E2BIG; return -1; }
     return execv(path, argv);
@@ -68,15 +72,21 @@ int execvp(const char *file, char *const argv[]) {
     if (strchr(file, '/')) return execv(file, argv);
     char buf[256];
     size_t flen = strlen(file);
+    /* POSIX: if every candidate fails with ENOENT-class errors, return
+     * ENOENT; if any candidate fails with EACCES/ENOEXEC/etc., surface
+     * the most informative failure rather than masking it as ENOENT. */
+    int saved = ENOENT;
     for (int i = 0; exec_path_dirs[i]; i++) {
         size_t dlen = strlen(exec_path_dirs[i]);
         if (dlen + 1 + flen + 1 > sizeof(buf)) continue;
         memcpy(buf, exec_path_dirs[i], dlen);
         buf[dlen] = '/';
         memcpy(buf + dlen + 1, file, flen + 1);
+        errno = 0;
         try_exec(buf, argv);
+        if (errno && errno != ENOENT && errno != ENOTDIR) saved = errno;
     }
-    errno = ENOENT;
+    errno = saved;
     return -1;
 }
 

@@ -19,10 +19,10 @@ static void warn_opt(const char *prog, const char *msg, char c) {
 
 int getopt(int argc, char *const argv[], const char *opts) {
     optarg = 0;
-    if (optind >= argc) return -1;
+    if (optind >= argc)                              { subind = 1; return -1; }
     const char *arg = argv[optind];
-    if (!arg || arg[0] != '-' || arg[1] == '\0') return -1;
-    if (arg[1] == '-' && arg[2] == '\0') { optind++; return -1; }
+    if (!arg || arg[0] != '-' || arg[1] == '\0')    { subind = 1; return -1; }
+    if (arg[1] == '-' && arg[2] == '\0')             { subind = 1; optind++; return -1; }
 
     char c = arg[subind];
     const char *p = strchr(opts, c);

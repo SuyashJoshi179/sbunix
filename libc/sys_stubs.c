@@ -35,8 +35,30 @@ int creat(const char *path, mode_t mode) {
 }
 
 int openat(int dirfd, const char *path, int flags, ...) {
-    (void)dirfd;  /* SBUnix has no openat — only AT_FDCWD makes sense */
+    /* No real openat in the kernel. Accept only AT_FDCWD; reject any
+     * other dirfd rather than silently opening the wrong path. */
+    if (dirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
+    (void)flags;
     return open(path, flags);
+}
+
+/* Duplicate fd to the lowest free descriptor >= minfd. Loops dup() and
+ * closes intermediates so we honor the F_DUPFD/F_DUPFD_CLOEXEC contract
+ * even though the kernel has no fcntl-aware allocator. */
+static int dup_to_minfd(int fd, int minfd) {
+    if (minfd < 0) { errno = EINVAL; return -1; }
+    int held[16];
+    int nheld = 0;
+    int out = -1;
+    while (nheld < (int)(sizeof(held)/sizeof(held[0]))) {
+        int n = dup(fd);
+        if (n < 0) { out = -1; break; }
+        if (n >= minfd) { out = n; break; }
+        held[nheld++] = n;
+    }
+    if (out < 0 && nheld == (int)(sizeof(held)/sizeof(held[0]))) errno = EMFILE;
+    for (int i = 0; i < nheld; i++) close(held[i]);
+    return out;
 }
 
 /* fcntl: SBUnix has no F_GETLK/F_SETLK or per-fd flag storage. We service
@@ -46,9 +68,11 @@ int fcntl(int fd, int cmd, ...) {
     int r = -1;
     switch (cmd) {
     case F_DUPFD:
-    case F_DUPFD_CLOEXEC:
-        r = dup(fd);
+    case F_DUPFD_CLOEXEC: {
+        int minfd = va_arg(ap, int);
+        r = dup_to_minfd(fd, minfd);
         break;
+    }
     case F_GETFD:
     case F_GETFL:
         r = 0;
