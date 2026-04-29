@@ -27,17 +27,18 @@ static void check(int cond, const char *name) {
 }
 
 /* Indirect call through a volatile function pointer defeats the compiler's
- * infinite-recursion detection and prevents tail-call optimization from
- * collapsing frames. */
+ * infinite-recursion detection. Post-call sink write (sink = burn[0])
+ * defeats tail-call optimization so each frame actually consumes stack. */
 static void unbounded_recurse(int depth);
 static void (* volatile recurse_ptr)(int) = unbounded_recurse;
+static volatile char sink;
 
 static void unbounded_recurse(int depth) {
     volatile char burn[4096];
     burn[0] = (char)depth;
     burn[4095] = (char)depth;
-    (void)burn;
     recurse_ptr(depth + 1);
+    sink = burn[0];
 }
 
 static volatile int bounded_mark = 0;

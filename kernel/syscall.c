@@ -711,7 +711,6 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     p->in_sighandler   = 0;
     p->delivering_segv = 0;
 
-    printk("exec: '%s' loaded, entry=0x%lx sp=0x%lx\n", kpath, entry, new_sp);
     return 0;
 }
 
