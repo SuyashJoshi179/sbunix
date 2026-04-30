@@ -56,7 +56,17 @@ int mount_fs(const char *path, struct inode *root) {
  * On failure: returns negative errno, *out is unchanged.
  * Caller must call inode_put(*out) when done.
  * ---------------------------------------------------------------- */
+static int namei_flags(const char *path, struct inode **out, int nofollow);
+
 int namei(const char *path, struct inode **out) {
+    return namei_flags(path, out, 0);
+}
+
+int lnamei(const char *path, struct inode **out) {
+    return namei_flags(path, out, 1);
+}
+
+static int namei_flags(const char *path, struct inode **out, int nofollow) {
     if (!path || !path[0]) return -ENOENT;
 
     int pathlen = 0;
