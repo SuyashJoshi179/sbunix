@@ -418,6 +418,43 @@ DEFINE_STATIC_FILE(meminfo, file_meminfo_read);
 DEFINE_STATIC_FILE(version, file_version_read);
 DEFINE_STATIC_FILE(cpuinfo, file_cpuinfo_read);
 
+static int self_readlink(struct inode *ip, char *buf, uint64_t n) {
+    (void)ip;
+    struct pcb *p = current_proc();
+    if (!p) return -EIO;
+
+    char tmp[32];
+    int nout = 0;
+    static const char prefix[] = "/proc/";
+    for (int i = 0; i < (int)sizeof(prefix) - 1 && nout < (int)sizeof(tmp); i++) {
+        tmp[nout++] = prefix[i];
+    }
+    nout += u64_to_dec(tmp + nout, (int)sizeof(tmp) - nout, (uint64_t)p->pid);
+
+    int copy = nout;
+    if ((uint64_t)copy > n) copy = (int)n;
+    for (int i = 0; i < copy; i++) buf[i] = tmp[i];
+    return copy;
+}
+
+static int self_stat(struct inode *ip, struct stat *st) {
+    st->st_dev   = 3;
+    st->st_ino   = (uint64_t)(uintptr_t)ip;
+    st->st_mode  = ip->mode;
+    st->st_nlink = 1;
+    st->st_uid = st->st_gid = 0;
+    st->st_size = 0;
+    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    return 0;
+}
+
+static const struct inode_ops self_ops = {
+    .stat     = self_stat,
+    .readlink = self_readlink,
+};
+
+static struct inode self_inode;
+
 static int proc_root_read(struct inode *ip, uint64_t off, void *buf,
                            uint64_t n) {
     (void)ip; (void)off; (void)buf; (void)n;
@@ -444,6 +481,11 @@ static int proc_root_lookup(struct inode *dir, const char *name,
     if (name[0] == '.' && name[1] == '\0') { *out = inode_get(dir); return 0; }
     if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
         *out = inode_get(dir); return 0;
+    }
+    if (name[0] == 's' && name[1] == 'e' && name[2] == 'l' &&
+        name[3] == 'f' && name[4] == '\0') {
+        *out = inode_get(&self_inode);
+        return 0;
     }
     static const struct { const char *name; struct inode *ip; } statics[] = {
         { "uptime",  &uptime_inode  },
@@ -479,8 +521,9 @@ static int proc_root_getdents(struct inode *dir, uint64_t off, void *buf,
         { "meminfo", &meminfo_inode, DT_REG },
         { "version", &version_inode, DT_REG },
         { "cpuinfo", &cpuinfo_inode, DT_REG },
+        { "self",    &self_inode,    DT_UNKNOWN },
     };
-    int nstat = 4;
+    int nstat = 5;
 
     if (off < (uint64_t)nstat) {
         int i = (int)off;
@@ -539,6 +582,19 @@ static const struct inode_ops proc_root_ops = {
 };
 
 void procfs_init(void) {
+    self_inode.type        = I_LNK;
+    self_inode.mode        = S_IFLNK | 0777;
+    self_inode.uid         = 0;
+    self_inode.gid         = 0;
+    self_inode.size        = 0;
+    self_inode.mtime       = 0;
+    self_inode.nlink       = 1;
+    self_inode.refcnt      = 1;
+    self_inode.ops         = &self_ops;
+    self_inode.fs_data     = 0;
+    self_inode.mount_child = 0;
+    self_inode.mount_parent = 0;
+
     proc_root_inode.type        = I_DIR;
     proc_root_inode.mode        = S_IFDIR | 0555;
     proc_root_inode.uid         = 0;
