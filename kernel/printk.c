@@ -26,8 +26,8 @@ void printk(const char *fmt, ...) {
 				print_number(num, 10, true);	
 			}
 			else if (*temp == 'x') {
-				int num = va_arg(args, int);
-				print_number(num, 16, true);
+				unsigned int num = va_arg(args, unsigned int);
+				print_number(num, 16, false);
 			}
 			else if (*temp == 'l') {
 				temp++;
@@ -59,6 +59,7 @@ void printk(const char *fmt, ...) {
 			else if (*temp == 's') {
 				char* str = va_arg(args, char *);
 
+				if (!str) str = "(null)";
 				while (*str){
 					write_char(*str);
 					str++;

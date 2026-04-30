@@ -191,16 +191,8 @@ int main(int argc, char **argv) {
     write_inode(ROOTINUM, &root_ino);
 
     /* 4. Write the block bitmap. */
-    /* Blocks 0..DATA_START-1 (overhead) are always "allocated" so the
-     * allocator never hands them out as data blocks. Mark them used. */
-    for (int i = 0; i < (int)DATA_START; i++) {
-        /* These bits are in the "relative" space: they would be negative
-         * (i < DATA_START), so we don't actually need to mark them in the
-         * bitmap — the allocator counts from DATA_START.  The bitmap block
-         * only covers data blocks (indices 0..NDATABLOCKS-1 relative).
-         * Only mark the ones we actually allocated. */
-    }
-    /* bitmap[] was filled by balloc_data() for each allocated data block. */
+    /* bitmap[] was filled by balloc_data() for each allocated data block.
+     * The bitmap is relative to DATA_START, so only data blocks are tracked. */
     write_block(BMAP_BLOCK, bitmap);
 
     fclose(img);
