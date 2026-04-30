@@ -52,6 +52,12 @@ static int piddir_getdents(struct inode *dir, uint64_t off, void *buf,
                             uint64_t n, uint64_t *out_next);
 static int piddir_stat(struct inode *ip, struct stat *st);
 static void piddir_release(struct inode *ip);
+static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
+                             uint64_t n);
+static int piddir_file_stat(struct inode *ip, struct stat *st);
+static void piddir_file_release(struct inode *ip);
+
+static struct inode proc_root_inode;
 
 /* Tiny formatter for procfs files. Each producer fills `out` with up to
  * `cap` bytes and returns the byte count. The caller's read() then
@@ -126,6 +132,60 @@ static int prod_cpuinfo(char *out, int cap) {
     return n;
 }
 
+static int append_str(char *out, int cap, int n, const char *s) {
+    for (int i = 0; s[i] && n < cap; i++) out[n++] = s[i];
+    return n;
+}
+
+static int append_u64(char *out, int cap, int n, uint64_t v) {
+    if (n >= cap) return n;
+    int wrote = u64_to_dec(out + n, cap - n, v);
+    if (wrote > cap - n) wrote = cap - n;
+    return n + wrote;
+}
+
+static char state_letter(proc_state_t state) {
+    switch (state) {
+    case PROC_READY:    return 'R';
+    case PROC_RUNNING:  return 'R';
+    case PROC_SLEEPING: return 'S';
+    case PROC_ZOMBIE:   return 'Z';
+    case PROC_UNUSED:   return 'X';
+    default:            return '?';
+    }
+}
+
+static int prod_status(char *out, int cap, struct pcb *pcb) {
+    int n = 0;
+    n = append_str(out, cap, n, "Name:\tproc\nState:\t");
+    if (n < cap) out[n++] = state_letter(pcb->state);
+    n = append_str(out, cap, n, "\nPid:\t");
+    n = append_u64(out, cap, n, (uint64_t)pcb->pid);
+    n = append_str(out, cap, n, "\nPPid:\t");
+    n = append_u64(out, cap, n, (uint64_t)pcb->parent_pid);
+    n = append_str(out, cap, n, "\nUid:\t0\nGid:\t0\nVmSize:\t0 kB\n");
+    return n;
+}
+
+static int prod_cmdline(char *out, int cap, struct pcb *pcb) {
+    (void)pcb;
+    static const char s[] = "proc";
+    int n = 0;
+    for (int i = 0; i < (int)sizeof(s) && n < cap; i++) out[n++] = s[i];
+    return n;
+}
+
+static int prod_stat(char *out, int cap, struct pcb *pcb) {
+    int n = 0;
+    n = append_u64(out, cap, n, (uint64_t)pcb->pid);
+    n = append_str(out, cap, n, " (proc) ");
+    if (n < cap) out[n++] = state_letter(pcb->state);
+    if (n < cap) out[n++] = ' ';
+    n = append_u64(out, cap, n, (uint64_t)pcb->parent_pid);
+    n = append_str(out, cap, n, " 0 0 0 0 0\n");
+    return n;
+}
+
 static int file_uptime_read(struct inode *ip, uint64_t off, void *buf,
                              uint64_t n) {
     (void)ip; return produce_static(prod_uptime, off, buf, n);
@@ -173,6 +233,15 @@ static const struct inode_ops piddir_ops = {
     .release  = piddir_release,
 };
 
+static const struct inode_ops piddir_file_ops = {
+    .read     = piddir_file_read,
+    .write    = file_write_rofs,
+    .stat     = piddir_file_stat,
+    .lookup   = file_lookup_rofs,
+    .getdents = file_getdents_rofs,
+    .release  = piddir_file_release,
+};
+
 static int parse_pid(const char *s, int *out_pid) {
     if (!s || !s[0]) return -1;
     int v = 0;
@@ -208,6 +277,29 @@ static struct proc_node *piddir_make(int pid, struct pcb *pcb) {
     return pn;
 }
 
+static struct proc_node *piddir_file_make(int pid, uint64_t gen,
+                                           enum proc_kind kind) {
+    struct proc_node *pn = pool_alloc();
+    if (!pn) return 0;
+    pn->kind       = kind;
+    pn->pid        = pid;
+    pn->generation = gen;
+
+    pn->ino.type        = I_REG;
+    pn->ino.mode        = S_IFREG | 0444;
+    pn->ino.uid         = 0;
+    pn->ino.gid         = 0;
+    pn->ino.size        = 0;
+    pn->ino.mtime       = 0;
+    pn->ino.nlink       = 1;
+    pn->ino.refcnt      = 1;
+    pn->ino.ops         = &piddir_file_ops;
+    pn->ino.fs_data     = pn;
+    pn->ino.mount_child = 0;
+    pn->ino.mount_parent = 0;
+    return pn;
+}
+
 static int piddir_stat(struct inode *ip, struct stat *st) {
     return file_stat_generic(ip, st);
 }
@@ -224,15 +316,93 @@ static int piddir_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
 
 static int piddir_lookup(struct inode *dir, const char *name,
                          struct inode **out) {
-    (void)dir; (void)name; (void)out;
-    return -ENOENT;
+    struct proc_node *pn = (struct proc_node *)dir->fs_data;
+    if (name[0] == '.' && name[1] == '\0') {
+        *out = inode_get(dir);
+        return 0;
+    }
+    if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
+        *out = inode_get(&proc_root_inode);
+        return 0;
+    }
+
+    enum proc_kind kind = 0;
+    if (strcmp(name, "status") == 0) kind = PK_STATUS;
+    else if (strcmp(name, "cmdline") == 0) kind = PK_CMDLINE;
+    else if (strcmp(name, "stat") == 0) kind = PK_STAT;
+    else return -ENOENT;
+
+    struct proc_node *file = piddir_file_make(pn->pid, pn->generation, kind);
+    if (!file) return -ENOMEM;
+    *out = &file->ino;
+    return 0;
+}
+
+static int emit_dirent(void *buf, uint64_t n, uint64_t off, uint64_t ino,
+                        uint8_t dt, const char *name, uint64_t *out_next) {
+    int namelen = 0;
+    while (name[namelen]) namelen++;
+    namelen++;
+    int reclen = (DIRENT64_FIXED_LEN + namelen + 7) & ~7;
+    if ((uint64_t)reclen > n) {
+        if (out_next) *out_next = off;
+        return 0;
+    }
+
+    struct dirent64 *de = (struct dirent64 *)buf;
+    de->d_ino = ino;
+    de->d_off = off + 1;
+    de->d_reclen = (uint16_t)reclen;
+    de->d_type = dt;
+    for (int j = 0; j < namelen; j++) de->d_name[j] = name[j];
+
+    if (out_next) *out_next = off + 1;
+    return reclen;
 }
 
 static int piddir_getdents(struct inode *dir, uint64_t off, void *buf,
                             uint64_t n, uint64_t *out_next) {
-    (void)dir; (void)buf; (void)n;
-    if (out_next) *out_next = off;
-    return 0;
+    static const char *ents[] = { "status", "cmdline", "stat" };
+    if (off >= (uint64_t)(sizeof(ents) / sizeof(ents[0]))) {
+        if (out_next) *out_next = off;
+        return 0;
+    }
+
+    return emit_dirent(buf, n, off, (uint64_t)(uintptr_t)dir, DT_REG,
+                       ents[(int)off], out_next);
+}
+
+static int piddir_file_stat(struct inode *ip, struct stat *st) {
+    return file_stat_generic(ip, st);
+}
+
+static void piddir_file_release(struct inode *ip) {
+    struct proc_node *pn = (struct proc_node *)ip->fs_data;
+    if (pn) pool_free(pn);
+}
+
+static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
+                             uint64_t n) {
+    struct proc_node *pn = (struct proc_node *)ip->fs_data;
+    if (!pn) return -ESRCH;
+
+    struct pcb *pcb = proc_find_by_pid(pn->pid);
+    if (!pcb || pcb->generation != pn->generation) return -ESRCH;
+
+    char tmp[512];
+    int total;
+    switch (pn->kind) {
+    case PK_STATUS:  total = prod_status(tmp, (int)sizeof(tmp), pcb); break;
+    case PK_CMDLINE: total = prod_cmdline(tmp, (int)sizeof(tmp), pcb); break;
+    case PK_STAT:    total = prod_stat(tmp, (int)sizeof(tmp), pcb); break;
+    default:         return -ENOENT;
+    }
+    if (off >= (uint64_t)total) return 0;
+    int copy = total - (int)off;
+    if ((int)n < copy) copy = (int)n;
+    char *dst = (char *)buf;
+    for (int i = 0; i < copy; i++) dst[i] = tmp[(int)off + i];
+    return copy;
 }
 
 #define DEFINE_STATIC_FILE(NAME, READFN)                                       \
@@ -367,8 +537,6 @@ static const struct inode_ops proc_root_ops = {
     .lookup   = proc_root_lookup,
     .getdents = proc_root_getdents,
 };
-
-static struct inode proc_root_inode;
 
 void procfs_init(void) {
     proc_root_inode.type        = I_DIR;
