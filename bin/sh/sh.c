@@ -9,6 +9,8 @@
 #include <fcntl.h>
 #include <dirent.h>
 
+#include "glob_match.h"
+
 #define MAXLINE 256
 #define MAXTOK  128
 #define MAXARG  64
@@ -18,6 +20,7 @@ enum { T_WORD, T_PIPE, T_REDIR_IN, T_REDIR_OUT, T_REDIR_APPEND, T_AND, T_END };
 
 struct token {
     int  type;
+    int  quoted;  // word came from a quoted literal — suppresses globbing
     char *val;
 };
 
@@ -29,29 +32,7 @@ static int ntokens;
 static char glob_arena[8192];
 static int  glob_arena_pos;
 
-static int has_glob(const char *s) {
-    while (*s) { if (*s == '*') return 1; s++; }
-    return 0;
-}
-
-// Match a glob pattern containing '*' against name. '*' matches any
-// sequence of characters (including empty). No '/' handling here —
-// caller splits the pattern on the last '/'.
-static int glob_match(const char *pat, const char *name) {
-    if (*pat == 0) return *name == 0;
-    if (*pat == '*') {
-        while (*pat == '*') pat++;
-        if (*pat == 0) return 1;
-        while (*name) {
-            if (glob_match(pat, name)) return 1;
-            name++;
-        }
-        return 0;
-    }
-    if (*name == 0) return 0;
-    if (*pat != *name) return 0;
-    return glob_match(pat + 1, name + 1);
-}
+static int has_glob(const char *s) { return glob_has_meta(s); }
 
 // Insertion-sort matched names into argv slots [start, end) lexicographically.
 static void sort_range(char **argv, int start, int end) {
@@ -73,6 +54,7 @@ static int expand_one(const char *pat, struct token *out, int cap) {
     if (!has_glob(pat)) {
         out[0].type = T_WORD;
         out[0].val = (char *)pat;
+        out[0].quoted = 0;
         return 1;
     }
 
@@ -101,6 +83,7 @@ static int expand_one(const char *pat, struct token *out, int cap) {
     if (!has_glob(base)) {
         out[0].type = T_WORD;
         out[0].val = (char *)pat;
+        out[0].quoted = 0;
         return 1;
     }
 
@@ -108,6 +91,7 @@ static int expand_one(const char *pat, struct token *out, int cap) {
     if (fd < 0) {
         out[0].type = T_WORD;
         out[0].val = (char *)pat;
+        out[0].quoted = 0;
         return 1;
     }
 
@@ -129,7 +113,15 @@ static int expand_one(const char *pat, struct token *out, int cap) {
 
             size_t nlen = strlen(de->d_name);
             // Build "<dir-prefix><name>" in the arena.
-            if (glob_arena_pos + plen + nlen + 1 > sizeof(glob_arena)) continue;
+            if (glob_arena_pos + plen + nlen + 1 > sizeof(glob_arena)) {
+                static int arena_warned;
+                if (!arena_warned) {
+                    const char *m = "sh: glob: too many matches, truncating\n";
+                    write(2, m, strlen(m));
+                    arena_warned = 1;
+                }
+                continue;
+            }
             char *full = glob_arena + glob_arena_pos;
             if (plen) memcpy(full, pat, plen);
             memcpy(full + plen, de->d_name, nlen);
@@ -147,6 +139,7 @@ static int expand_one(const char *pat, struct token *out, int cap) {
     if (n_out == 0) {
         out[0].type = T_WORD;
         out[0].val = (char *)pat;
+        out[0].quoted = 0;
         return 1;
     }
 
@@ -154,6 +147,7 @@ static int expand_one(const char *pat, struct token *out, int cap) {
     for (int i = 0; i < nnames; i++) {
         out[i].type = T_WORD;
         out[i].val = names[i];
+        out[i].quoted = 0;
     }
     return n_out;
 }
@@ -164,7 +158,7 @@ static void expand_globs(void) {
     glob_arena_pos = 0;
     int nc = 0;
     for (int i = 0; i < ntokens && nc < MAXTOK - 1; i++) {
-        if (tokens[i].type != T_WORD) {
+        if (tokens[i].type != T_WORD || tokens[i].quoted) {
             expanded_tokens[nc++] = tokens[i];
             continue;
         }
@@ -215,6 +209,9 @@ static void tokenize(void) {
         while (is_space(*p)) p++;
         if (!*p) break;
 
+        tokens[ntokens].quoted = 0;
+        tokens[ntokens].val = 0;
+
         if (*p == '|') {
             tokens[ntokens].type = T_PIPE;
             tokens[ntokens].val = 0;
@@ -240,12 +237,14 @@ static void tokenize(void) {
         } else if (*p == '"') {
             p++;
             tokens[ntokens].type = T_WORD;
+            tokens[ntokens].quoted = 1;
             tokens[ntokens].val = p;
             while (*p && *p != '"') p++;
             if (*p == '"') *p++ = 0;
             ntokens++;
         } else {
             tokens[ntokens].type = T_WORD;
+            tokens[ntokens].quoted = 0;
             tokens[ntokens].val = p;
             while (*p && !is_space(*p) && *p != '|' && *p != '<' && *p != '>') p++;
             if (*p) { *p = 0; p++; }
