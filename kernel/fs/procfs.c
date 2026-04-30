@@ -504,7 +504,7 @@ static int proc_root_lookup(struct inode *dir, const char *name,
     int pid;
     if (parse_pid(name, &pid) == 0) {
         struct pcb *pcb = proc_find_by_pid(pid);
-        if (!pcb) return -ESRCH;
+        if (!pcb) return -ENOENT;
         struct proc_node *pn = piddir_make(pid, pcb);
         if (!pn) return -ENOMEM;
         *out = &pn->ino;
