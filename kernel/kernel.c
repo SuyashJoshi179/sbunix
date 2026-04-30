@@ -9,6 +9,7 @@
 #include <proc.h>
 #include <selftest.h>
 #include <tarfs.h>
+#include <procfs.h>
 #include <vfs.h>
 #include <bio.h>
 #include <sbfs.h>
@@ -43,6 +44,7 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
 
     // Mount synthetic /dev with /dev/console.
     devfs_init();
+    procfs_init();
     termios_init();
 
     // Phase 5/10: buffer cache and VirtIO-PCI block device.
