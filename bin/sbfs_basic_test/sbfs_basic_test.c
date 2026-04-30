@@ -30,6 +30,12 @@ int main(void) {
     char buf[64];
     long n;
 
+    /* Pre-clean from any prior run (sbfs persists across reboots). */
+    (void)unlink("/data/subdir/nested.txt");
+    (void)unlink("/data/subdir");
+    (void)unlink("/data/hello.txt");
+    (void)unlink("/data/trunc.txt");
+
     /* ---- 1. Create and write a file ---- */
     fd = open("/data/hello.txt", O_WRONLY | O_CREAT);
     chk(fd >= 0, "open O_CREAT /data/hello.txt");

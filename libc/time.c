@@ -1,4 +1,5 @@
 #include <time.h>
+#include <sys/times.h>
 #include <stdint.h>
 
 static long ecall2(long num, long a0, long a1) {
@@ -26,4 +27,29 @@ time_t time(time_t *tloc) {
     if (clock_gettime(0 /* CLOCK_REALTIME */, &ts) < 0) return (time_t)-1;
     if (tloc) *tloc = (time_t)ts.tv_sec;
     return (time_t)ts.tv_sec;
+}
+
+/*
+ * times(2) — process-times stub.
+ *
+ * SBUnix does not yet track per-process user/system CPU ticks (no PCB
+ * accounting), so all four tms_* fields are reported as 0. The return
+ * value is monotonic elapsed ticks since boot, which is enough for code
+ * that only cares about *differences* between two times() calls (the
+ * common idiom for "how many ticks did this loop take?").
+ *
+ * If real CPU accounting is needed later, add a SYS_times syscall
+ * backed by per-process tick counters incremented from the timer ISR.
+ */
+clock_t times(struct tms *buf) {
+    if (buf) {
+        buf->tms_utime  = 0;
+        buf->tms_stime  = 0;
+        buf->tms_cutime = 0;
+        buf->tms_cstime = 0;
+    }
+    struct timespec ts;
+    if (clock_gettime(1 /* CLOCK_MONOTONIC */, &ts) < 0) return (clock_t)-1;
+    return (clock_t)(ts.tv_sec * CLOCKS_PER_SEC
+                   + ts.tv_nsec * CLOCKS_PER_SEC / 1000000000L);
 }
