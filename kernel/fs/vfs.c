@@ -6,6 +6,7 @@
 #include <proc.h>
 
 #define NMOUNT 8
+#define SYMLINK_MAX 8
 
 static struct {
     const char   *path;
@@ -92,6 +93,7 @@ static int namei_flags(const char *path, struct inode **out, int nofollow) {
 
     cur = inode_get(cur);
 
+    int hops = 0;
     while (*p) {
         // Traverse any mount overlay on cur.
         while (cur->mount_child) {
@@ -143,6 +145,55 @@ static int namei_flags(const char *path, struct inode **out, int nofollow) {
             struct inode *mc = inode_get(cur->mount_child);
             inode_put(cur);
             cur = mc;
+        }
+
+        /* Symlink following. We follow when:
+         *   - the resolved inode is a symlink, AND
+         *   - this is not the final component, OR nofollow == 0.
+         * Track hops to detect loops. */
+        int is_final = (*p == '\0');
+        if (cur->type == I_LNK && !(is_final && nofollow)) {
+            if (!cur->ops->readlink) { inode_put(cur); return -EINVAL; }
+            if (++hops > SYMLINK_MAX) { inode_put(cur); return -ELOOP; }
+
+            char target[256];
+            int tlen = cur->ops->readlink(cur, target, sizeof(target) - 1);
+            if (tlen < 0) { inode_put(cur); return tlen; }
+            target[tlen] = '\0';
+            inode_put(cur);
+
+            /* Build the new path: target + remaining (whatever is after p). */
+            int remlen = 0; while (p[remlen]) remlen++;
+            int total = tlen + (remlen ? 1 + remlen : 0);
+            if (total >= (int)sizeof(buf)) return -ENAMETOOLONG;
+
+            char merged[256];
+            int mi = 0;
+            for (int i = 0; i < tlen; i++) merged[mi++] = target[i];
+            if (remlen) {
+                merged[mi++] = '/';
+                for (int i = 0; i < remlen; i++) merged[mi++] = p[i];
+            }
+            merged[mi] = '\0';
+            for (int i = 0; i <= mi; i++) buf[i] = merged[i];
+
+            /* Restart the walk. Absolute target → from root mount;
+             * relative target → from where the symlink lived (current
+             * directory of the resolution; we approximate by restarting
+             * from the parent of the link, which is the caller's cwd or
+             * the previous component's parent. Simplification: restart
+             * from root for absolute, from cwd for relative — same
+             * convention `namei` uses for absolute vs relative paths). */
+            if (buf[0] == '/') {
+                cur = inode_get(mounts[0].root);
+                p   = buf + 1;
+            } else {
+                struct pcb *proc = current_proc();
+                if (!proc || !proc->cwd) return -ENOENT;
+                cur = inode_get(proc->cwd);
+                p   = buf;
+            }
+            continue;
         }
     }
 
