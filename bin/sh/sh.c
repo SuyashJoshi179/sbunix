@@ -7,10 +7,11 @@
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
+#include <dirent.h>
 
 #define MAXLINE 256
-#define MAXTOK  32
-#define MAXARG  16
+#define MAXTOK  128
+#define MAXARG  64
 
 // Token types
 enum { T_WORD, T_PIPE, T_REDIR_IN, T_REDIR_OUT, T_REDIR_APPEND, T_AND, T_END };
@@ -23,6 +24,160 @@ struct token {
 static char linebuf[MAXLINE];
 static struct token tokens[MAXTOK];
 static int ntokens;
+
+// Arena for glob-expanded path strings; reset per command line.
+static char glob_arena[8192];
+static int  glob_arena_pos;
+
+static int has_glob(const char *s) {
+    while (*s) { if (*s == '*') return 1; s++; }
+    return 0;
+}
+
+// Match a glob pattern containing '*' against name. '*' matches any
+// sequence of characters (including empty). No '/' handling here —
+// caller splits the pattern on the last '/'.
+static int glob_match(const char *pat, const char *name) {
+    if (*pat == 0) return *name == 0;
+    if (*pat == '*') {
+        while (*pat == '*') pat++;
+        if (*pat == 0) return 1;
+        while (*name) {
+            if (glob_match(pat, name)) return 1;
+            name++;
+        }
+        return 0;
+    }
+    if (*name == 0) return 0;
+    if (*pat != *name) return 0;
+    return glob_match(pat + 1, name + 1);
+}
+
+// Insertion-sort matched names into argv slots [start, end) lexicographically.
+static void sort_range(char **argv, int start, int end) {
+    for (int i = start + 1; i < end; i++) {
+        char *cur = argv[i];
+        int j = i;
+        while (j > start && strcmp(argv[j - 1], cur) > 0) {
+            argv[j] = argv[j - 1];
+            j--;
+        }
+        argv[j] = cur;
+    }
+}
+
+// Expand a single token into one or more tokens of `out`. Returns the
+// number written. If no matches, falls back to writing the literal pattern.
+static int expand_one(const char *pat, struct token *out, int cap) {
+    if (cap <= 0) return 0;
+    if (!has_glob(pat)) {
+        out[0].type = T_WORD;
+        out[0].val = (char *)pat;
+        return 1;
+    }
+
+    const char *slash = strrchr(pat, '/');
+    char dirbuf[256];
+    const char *dir;
+    const char *base;
+    size_t plen;
+    if (slash) {
+        size_t dlen = slash - pat;
+        if (dlen == 0) { dirbuf[0] = '/'; dirbuf[1] = 0; }
+        else {
+            if (dlen > sizeof(dirbuf) - 1) dlen = sizeof(dirbuf) - 1;
+            memcpy(dirbuf, pat, dlen);
+            dirbuf[dlen] = 0;
+        }
+        dir = dirbuf;
+        base = slash + 1;
+        plen = (size_t)(slash - pat) + 1;
+    } else {
+        dir = ".";
+        base = pat;
+        plen = 0;
+    }
+
+    if (!has_glob(base)) {
+        out[0].type = T_WORD;
+        out[0].val = (char *)pat;
+        return 1;
+    }
+
+    int fd = open(dir, O_RDONLY);
+    if (fd < 0) {
+        out[0].type = T_WORD;
+        out[0].val = (char *)pat;
+        return 1;
+    }
+
+    int n_out = 0;
+    char buf[1024];
+    char *names[MAXARG];
+    int nnames = 0;
+    long n;
+    while ((n = getdents64(fd, buf, sizeof(buf))) > 0) {
+        long off = 0;
+        while (off < n) {
+            struct dirent64 *de = (struct dirent64 *)(buf + off);
+            off += de->d_reclen;
+            if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+                continue;
+            // Hidden files only match if pattern explicitly starts with '.'
+            if (de->d_name[0] == '.' && base[0] != '.') continue;
+            if (!glob_match(base, de->d_name)) continue;
+
+            size_t nlen = strlen(de->d_name);
+            // Build "<dir-prefix><name>" in the arena.
+            if (glob_arena_pos + plen + nlen + 1 > sizeof(glob_arena)) continue;
+            char *full = glob_arena + glob_arena_pos;
+            if (plen) memcpy(full, pat, plen);
+            memcpy(full + plen, de->d_name, nlen);
+            full[plen + nlen] = 0;
+            glob_arena_pos += plen + nlen + 1;
+
+            if (nnames < MAXARG && n_out < cap) {
+                names[nnames++] = full;
+                n_out++;
+            }
+        }
+    }
+    close(fd);
+
+    if (n_out == 0) {
+        out[0].type = T_WORD;
+        out[0].val = (char *)pat;
+        return 1;
+    }
+
+    sort_range(names, 0, nnames);
+    for (int i = 0; i < nnames; i++) {
+        out[i].type = T_WORD;
+        out[i].val = names[i];
+    }
+    return n_out;
+}
+
+static struct token expanded_tokens[MAXTOK];
+
+static void expand_globs(void) {
+    glob_arena_pos = 0;
+    int nc = 0;
+    for (int i = 0; i < ntokens && nc < MAXTOK - 1; i++) {
+        if (tokens[i].type != T_WORD) {
+            expanded_tokens[nc++] = tokens[i];
+            continue;
+        }
+        int written = expand_one(tokens[i].val,
+                                 &expanded_tokens[nc],
+                                 MAXTOK - 1 - nc);
+        nc += written;
+    }
+    expanded_tokens[nc].type = T_END;
+    expanded_tokens[nc].val = 0;
+    for (int i = 0; i <= nc; i++) tokens[i] = expanded_tokens[i];
+    ntokens = nc;
+}
 
 static volatile int shell_interrupted;
 
@@ -292,6 +447,7 @@ int main(int argc, char **argv) {
         }
 
         tokenize();
+        expand_globs();
         if (ntokens == 0) continue;
 
         // Builtins
