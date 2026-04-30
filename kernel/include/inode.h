@@ -18,6 +18,10 @@ struct inode_ops {
     /* Called when refcnt drops to 0; may write back dirty state.
      * NULL for static-pool filesystems (tarfs, devfs). */
     void (*release) (struct inode *);
+    /* Read the target of a symbolic link into `buf`. Returns the number
+     * of bytes written (no NUL terminator), or -errno. NULL for non-link
+     * filesystems; namei treats that as -EINVAL. */
+    int  (*readlink)(struct inode *ip, char *buf, uint64_t n);
     /* Mutating directory ops.  NULL on read-only filesystems → caller
      * should treat NULL as -EROFS.  Implementations are responsible for
      * their own begin_op/end_op (callers must NOT wrap). */
