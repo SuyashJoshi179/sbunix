@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 static int fails = 0;
 
@@ -77,7 +78,8 @@ int main(void) {
     int got = wait(&st);
     check(got == pid, "waited for overflow child");
     check(st != 0, "child died (non-zero status)");
-    check(st == 128 + SIGSEGV, "child died specifically with SIGSEGV");
+    check(WIFSIGNALED(st) && WTERMSIG(st) == SIGSEGV,
+          "child died specifically with SIGSEGV");
 
     printf("=== stack_overflow_test: %d failures ===\n", fails);
     return fails;
