@@ -229,6 +229,7 @@ static int devroot_getdents(struct inode *dir, uint64_t off, void *buf,
     if ((uint64_t)reclen > n) { if (out_next) *out_next = off; return 0; }
 
     struct dirent64 *de = (struct dirent64 *)buf;
+    for (int j = 0; j < reclen; j++) ((uint8_t *)de)[j] = 0;
     de->d_ino    = (uint64_t)(uintptr_t)ents[i].ino;
     de->d_off    = off + 1;
     de->d_reclen = (uint16_t)reclen;
