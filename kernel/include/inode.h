@@ -29,6 +29,7 @@ struct inode_ops {
 #define I_REG  1
 #define I_DIR  2
 #define I_CHR  3
+#define I_LNK  4
 
 struct inode {
     int               type;

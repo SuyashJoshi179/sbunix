@@ -26,3 +26,4 @@
 #define ENOTEMPTY    39
 #define EPIPE        32
 #define ENOTSUP      95
+#define ELOOP        40
