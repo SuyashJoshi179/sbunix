@@ -415,6 +415,61 @@ static int64_t sys_fstat(int fd, struct stat *st) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_readlink
+// ---------------------------------------------------------------------------
+static int64_t sys_readlink(const char *path, char *buf, uint64_t n) {
+    if (n > 0 && !buf) return -EFAULT;
+
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+
+    struct inode *ip;
+    rc = lnamei(kpath, &ip);
+    if (rc < 0) return rc;
+
+    if (ip->type != I_LNK || !ip->ops || !ip->ops->readlink) {
+        inode_put(ip);
+        return -EINVAL;
+    }
+
+    char kbuf[PATH_MAX_LOCAL];
+    uint64_t cap = n < sizeof(kbuf) ? n : sizeof(kbuf);
+    int got = ip->ops->readlink(ip, kbuf, cap);
+    inode_put(ip);
+    if (got < 0) return got;
+
+    if (got > 0 && copyout(buf, kbuf, (unsigned long)got) < 0) return -EFAULT;
+    return got;
+}
+
+// ---------------------------------------------------------------------------
+// sys_lstat
+// ---------------------------------------------------------------------------
+static int64_t sys_lstat(const char *path, struct stat *st) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+
+    struct inode *ip;
+    rc = lnamei(kpath, &ip);
+    if (rc < 0) return rc;
+
+    if (!ip->ops || !ip->ops->stat) {
+        inode_put(ip);
+        return -EINVAL;
+    }
+
+    struct stat kst;
+    rc = ip->ops->stat(ip, &kst);
+    inode_put(ip);
+    if (rc < 0) return rc;
+
+    if (copyout(st, &kst, (unsigned long)sizeof(kst)) < 0) return -EFAULT;
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // sys_getdents64
 // ---------------------------------------------------------------------------
 static int64_t sys_getdents64(int fd, void *buf, uint64_t n) {
@@ -1056,6 +1111,15 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_fstat:
             return sys_fstat((int)(int64_t)trapframe[TF_A0],
+                             (struct stat *)trapframe[TF_A1]);
+
+        case SYS_readlink:
+            return sys_readlink((const char *)trapframe[TF_A0],
+                                (char *)trapframe[TF_A1],
+                                trapframe[TF_A2]);
+
+        case SYS_lstat:
+            return sys_lstat((const char *)trapframe[TF_A0],
                              (struct stat *)trapframe[TF_A1]);
 
         case SYS_getdents64:
