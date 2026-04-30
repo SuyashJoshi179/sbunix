@@ -128,12 +128,20 @@ static int namei_flags(const char *path, struct inode **out, int nofollow) {
             cur = mp;
         }
 
+        /* Hold a ref to the parent (the directory we are looking up in)
+         * across the lookup. If the resolved child turns out to be a
+         * symlink with a relative target, we restart the walk from this
+         * parent — POSIX semantics: relative links are resolved relative
+         * to the directory containing the link, not the caller's cwd. */
+        struct inode *parent = inode_get(cur);
+
         struct inode *next = 0;
         int rc = cur->ops->lookup(cur, start, &next);
         *p = saved;
 
         if (rc < 0) {
             inode_put(cur);
+            inode_put(parent);
             return rc;
         }
 
@@ -153,19 +161,27 @@ static int namei_flags(const char *path, struct inode **out, int nofollow) {
          * Track hops to detect loops. */
         int is_final = (*p == '\0');
         if (cur->type == I_LNK && !(is_final && nofollow)) {
-            if (!cur->ops->readlink) { inode_put(cur); return -EINVAL; }
-            if (++hops > SYMLINK_MAX) { inode_put(cur); return -ELOOP; }
+            if (!cur->ops->readlink) {
+                inode_put(cur); inode_put(parent); return -EINVAL;
+            }
+            if (++hops > SYMLINK_MAX) {
+                inode_put(cur); inode_put(parent); return -ELOOP;
+            }
 
             char target[256];
             int tlen = cur->ops->readlink(cur, target, sizeof(target) - 1);
-            if (tlen < 0) { inode_put(cur); return tlen; }
+            if (tlen < 0) {
+                inode_put(cur); inode_put(parent); return tlen;
+            }
             target[tlen] = '\0';
             inode_put(cur);
 
             /* Build the new path: target + remaining (whatever is after p). */
             int remlen = 0; while (p[remlen]) remlen++;
             int total = tlen + (remlen ? 1 + remlen : 0);
-            if (total >= (int)sizeof(buf)) return -ENAMETOOLONG;
+            if (total >= (int)sizeof(buf)) {
+                inode_put(parent); return -ENAMETOOLONG;
+            }
 
             char merged[256];
             int mi = 0;
@@ -178,23 +194,21 @@ static int namei_flags(const char *path, struct inode **out, int nofollow) {
             for (int i = 0; i <= mi; i++) buf[i] = merged[i];
 
             /* Restart the walk. Absolute target → from root mount;
-             * relative target → from where the symlink lived (current
-             * directory of the resolution; we approximate by restarting
-             * from the parent of the link, which is the caller's cwd or
-             * the previous component's parent. Simplification: restart
-             * from root for absolute, from cwd for relative — same
-             * convention `namei` uses for absolute vs relative paths). */
+             * relative target → from the directory containing the
+             * symlink (parent), held above. */
             if (buf[0] == '/') {
+                inode_put(parent);
                 cur = inode_get(mounts[0].root);
                 p   = buf + 1;
             } else {
-                struct pcb *proc = current_proc();
-                if (!proc || !proc->cwd) return -ENOENT;
-                cur = inode_get(proc->cwd);
+                cur = parent;   /* transfer ref to cur */
                 p   = buf;
             }
             continue;
         }
+
+        /* Not a symlink (or final + nofollow): drop the parent ref. */
+        inode_put(parent);
     }
 
     // Final mount overlay.
