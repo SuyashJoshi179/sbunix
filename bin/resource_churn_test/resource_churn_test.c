@@ -54,8 +54,8 @@ int main(void) {
         if (rc < 0) break;
         fds[n++] = rc;
     }
-    if (rc != -EMFILE) {
-        printf("resource_churn_test: expected -EMFILE after churn, got %d\n", rc);
+    if (rc != -1 || errno != EMFILE) {
+        printf("resource_churn_test: expected EMFILE after churn, got rc=%d errno=%d\n", rc, errno);
         for (int i = 0; i < n; i++) close(fds[i]);
         return 1;
     }

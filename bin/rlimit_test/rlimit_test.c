@@ -28,10 +28,10 @@ int main(void) {
         if (r < 0) break;
         fds[nfds++] = r;
     }
-    check(r == -EMFILE, "NOFILE cap enforced with -EMFILE");
+    check(r == -1 && errno == EMFILE, "NOFILE cap enforced with -EMFILE");
 
     int dup2_rc = dup2(fds[0], 63);
-    check(dup2_rc == -EBADF, "dup2 newfd beyond limit returns -EBADF");
+    check(dup2_rc == -1 && errno == EBADF, "dup2 newfd beyond limit returns -EBADF");
 
     for (int i = 0; i < nfds; i++)
         close(fds[i]);
@@ -46,7 +46,7 @@ int main(void) {
         }
         maps[nmaps++] = p;
     }
-    check(r == -ENOMEM, "VMA cap enforced with -ENOMEM");
+    check(r == -1 && errno == ENOMEM, "VMA cap enforced with -ENOMEM");
 
     for (int i = 0; i < nmaps; i++)
         munmap(maps[i], PAGE_SZ);
@@ -61,7 +61,7 @@ int main(void) {
         ((volatile char *)p)[0] = (char)pages;
         pages++;
     }
-    check(r == -ENOMEM, "page cap enforced with -ENOMEM");
+    check(r == -1 && errno == ENOMEM, "page cap enforced with -ENOMEM");
 
     check(1, "process survives cap enforcement");
     printf("rlimit_test: %d passed, %d failed\n", pass, fail);

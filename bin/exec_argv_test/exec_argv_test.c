@@ -21,7 +21,7 @@ static int run_child_expect_status0(int (*fn)(void), const char *name) {
     while (1) {
         int got = wait(&st);
         if (got == pid) break;
-        if (got == -EINTR) continue;
+        if (got == -1 && errno == EINTR) continue;
         if (got < 0) return 0;
     }
     return st == 0;
@@ -40,7 +40,7 @@ static int case_valid_exec(void) {
     while (1) {
         int got = wait(&st);
         if (got == pid) break;
-        if (got == -EINTR) continue;
+        if (got == -1 && errno == EINTR) continue;
         if (got < 0) return 0;
     }
     return st == 0;

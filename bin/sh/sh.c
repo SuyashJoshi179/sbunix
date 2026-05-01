@@ -188,7 +188,7 @@ static void set_console_fg(int pid) {
 static int readline(void) {
     write(2, "sh> ", 4);
     long n = read(0, linebuf, MAXLINE - 1);
-    if (n == -EINTR) {
+    if (n == -1 && errno == EINTR) {
         linebuf[0] = 0;
         write(2, "\n", 1);
         return 0;

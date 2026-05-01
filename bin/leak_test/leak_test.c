@@ -26,7 +26,7 @@ static int spawn_once(void) {
     while (1) {
         int got = wait(&st);
         if (got == pid) break;
-        if (got == -EINTR) continue;
+        if (got == -1 && errno == EINTR) continue;
         if (got < 0) return got;
     }
     return st == 0 ? 0 : -1;
