@@ -26,6 +26,16 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include <math.h>
+#include <getopt.h>
+#include <libgen.h>
+#include <pwd.h>
+#include <grp.h>
+#include <syslog.h>
+#include <netdb.h>
+#include <mntent.h>
+#include <sys/utsname.h>
+#include <sys/resource.h>
+#include <sys/statfs.h>
 
 /* --- typedefs must exist --- */
 static size_t      g_size;
@@ -213,6 +223,44 @@ static const vp_t g_fns[] = {
     /* signal */
     (vp_t)kill, (vp_t)sigaction, (vp_t)signal, (vp_t)sigprocmask,
     (vp_t)raise, (vp_t)pause,
+    /* dirent */
+    (vp_t)opendir, (vp_t)readdir, (vp_t)closedir, (vp_t)rewinddir,
+    (vp_t)telldir, (vp_t)seekdir, (vp_t)dirfd, (vp_t)fdopendir,
+    /* getopt / libgen */
+    (vp_t)getopt, (vp_t)getopt_long,
+    (vp_t)basename, (vp_t)dirname,
+    /* pwd / grp */
+    (vp_t)getpwuid, (vp_t)getpwnam, (vp_t)getpwent,
+    (vp_t)setpwent, (vp_t)endpwent,
+    (vp_t)getgrgid, (vp_t)getgrnam, (vp_t)getgrent,
+    (vp_t)setgrent, (vp_t)endgrent, (vp_t)getgroups,
+    /* termios */
+    (vp_t)tcgetattr, (vp_t)tcsetattr, (vp_t)tcflush, (vp_t)tcdrain,
+    (vp_t)cfmakeraw, (vp_t)cfsetispeed, (vp_t)cfsetospeed,
+    (vp_t)tcgetpgrp, (vp_t)tcsetpgrp,
+    /* exec wrappers */
+    (vp_t)execve, (vp_t)execvp, (vp_t)execvpe,
+    (vp_t)execl, (vp_t)execlp, (vp_t)execle,
+    /* process groups */
+    (vp_t)getpgrp, (vp_t)getpgid, (vp_t)setpgid,
+    (vp_t)setsid, (vp_t)getsid, (vp_t)tcgetsid,
+    /* resource */
+    (vp_t)getrlimit, (vp_t)setrlimit, (vp_t)getrusage,
+    (vp_t)getpriority, (vp_t)setpriority,
+    /* misc */
+    (vp_t)uname, (vp_t)gethostname, (vp_t)sethostname,
+    (vp_t)sync, (vp_t)fsync, (vp_t)alarm, (vp_t)sleep,
+    (vp_t)sysconf, (vp_t)pathconf, (vp_t)fpathconf,
+    (vp_t)ttyname, (vp_t)ttyname_r,
+    (vp_t)chmod, (vp_t)fchmod, (vp_t)umask, (vp_t)stat, (vp_t)lstat,
+    (vp_t)link, (vp_t)symlink, (vp_t)rmdir,
+    (vp_t)chown, (vp_t)fchown, (vp_t)lchown,
+    (vp_t)fcntl, (vp_t)creat, (vp_t)openat,
+    /* syslog / netdb / mntent / statfs */
+    (vp_t)openlog, (vp_t)closelog, (vp_t)syslog, (vp_t)setlogmask,
+    (vp_t)gethostbyname, (vp_t)getaddrinfo, (vp_t)freeaddrinfo, (vp_t)gai_strerror,
+    (vp_t)setmntent, (vp_t)endmntent, (vp_t)getmntent, (vp_t)hasmntopt,
+    (vp_t)statfs, (vp_t)fstatfs, (vp_t)statvfs, (vp_t)fstatvfs,
 };
 
 /* va_list / va_start / va_arg / va_end / va_copy must work */

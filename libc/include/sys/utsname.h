@@ -9,6 +9,7 @@ struct utsname {
     char release[UTSNAME_LEN];   /* kernel release */
     char version[UTSNAME_LEN];   /* build identifier */
     char machine[UTSNAME_LEN];   /* "riscv64" */
+    char domainname[UTSNAME_LEN];
 };
 
 int uname(struct utsname *buf);
