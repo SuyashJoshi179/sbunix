@@ -19,6 +19,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define PAGE_SIZE 4096
@@ -159,7 +160,7 @@ static void exitwait_stress(void) {
         if (pid == 0) exit(i & 0x7F);
         int st = -1;
         int got = wait(&st);
-        if (got != pid || st != (i & 0x7F)) { ok = 0; break; }
+        if (got != pid || !WIFEXITED(st) || WEXITSTATUS(st) != (i & 0x7F)) { ok = 0; break; }
     }
     chk(ok, "50x fork/exit/wait, status preserved");
 }

@@ -33,7 +33,7 @@ int main(void) {
     check(munmap(r + PAGE_SZ, PAGE_SZ) == 0, "create middle unmapped hole");
 
     check(write(1, r + 100, 64) == 64, "write from valid mapped region");
-    check(write(1, r + PAGE_SZ - 8, 16) == -EFAULT,
+    check(write(1, r + PAGE_SZ - 8, 16) == -1 && errno == EFAULT,
           "write crossing mapped->unmapped boundary fails");
         check(write(1, r + 2 * PAGE_SZ + 100, 16) == 16,
           "write crossing mapped->mapped boundary succeeds");
@@ -42,17 +42,17 @@ int main(void) {
     check(pipe(p) == 0, "pipe setup");
     check(write(p[1], "0123456789abcdef", 16) == 16, "pipe seeded");
 
-    check(read(p[0], r + PAGE_SZ - 4, 12) == -EFAULT,
+    check(read(p[0], r + PAGE_SZ - 4, 12) == -1 && errno == EFAULT,
           "read crossing into unmapped page fails");
         check(write(p[1], "ABCDEFGH", 8) == 8,
             "pipe reseed after EFAULT read");
     check(read(p[0], r + 2 * PAGE_SZ + 12, 8) == 8,
           "read into valid high mapped page succeeds");
 
-        check(getcwd(r + PAGE_SZ - 1, 32) == -EFAULT,
+        check(getcwd(r + PAGE_SZ - 1, 32) == -1 && errno == EFAULT,
           "getcwd straddle into unmapped page fails");
 
-    check(open((const char *)(uintptr_t)KERNEL_BASE_VA, 0) == -EFAULT,
+    check(open((const char *)(uintptr_t)KERNEL_BASE_VA, 0) == -1 && errno == EFAULT,
           "kernel VA path rejected");
 
     close(p[0]);

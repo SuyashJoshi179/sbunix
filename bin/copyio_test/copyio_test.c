@@ -26,8 +26,8 @@ int main(void) {
 
     check(write(1, "copyio_test: begin\n", 19) > 0, "valid write pointer");
 
-    check(write(1, (const void *)0, 1) == -EFAULT, "NULL pointer rejected");
-    check(write(1, (const void *)(uintptr_t)KERNEL_BASE_VA, 1) == -EFAULT,
+    check(write(1, (const void *)0, 1) == -1 && errno == EFAULT, "NULL pointer rejected");
+    check(write(1, (const void *)(uintptr_t)KERNEL_BASE_VA, 1) == -1 && errno == EFAULT,
           "kernel-range pointer rejected");
 
     char *region = mmap(0, 2 * PAGE_SIZE_LOCAL,
@@ -48,19 +48,19 @@ int main(void) {
     char *unmapped = region + PAGE_SIZE_LOCAL;
     char *straddle = region + PAGE_SIZE_LOCAL - 8;
 
-    check(open(unmapped, 0) == -EFAULT, "unmapped path pointer rejected");
-    check(write(1, straddle, 16) == -EFAULT, "straddling write pointer rejected");
+    check(open(unmapped, 0) == -1 && errno == EFAULT, "unmapped path pointer rejected");
+    check(write(1, straddle, 16) == -1 && errno == EFAULT, "straddling write pointer rejected");
 
     check(pipe(p) == 0, "pipe setup succeeds");
     check(write(p[1], "0123456789", 10) == 10, "pipe write valid buffer");
     check(read(p[0], okbuf, 10) == 10, "pipe read valid pointer");
 
     check(write(p[1], "abcdefghijklmnop", 16) == 16, "pipe write for straddle read");
-    check(read(p[0], straddle, 16) == -EFAULT, "straddling read pointer rejected");
+    check(read(p[0], straddle, 16) == -1 && errno == EFAULT, "straddling read pointer rejected");
 
-    check(pipe((int *)(region + PAGE_SIZE_LOCAL - 4)) == -EFAULT,
+    check(pipe((int *)(region + PAGE_SIZE_LOCAL - 4)) == -1 && errno == EFAULT,
           "straddling pipe fds rejected");
-    check(getcwd(region + PAGE_SIZE_LOCAL - 1, 16) == -EFAULT,
+    check(getcwd(region + PAGE_SIZE_LOCAL - 1, 16) == -1 && errno == EFAULT,
           "straddling getcwd pointer rejected");
 
     close(p[0]);

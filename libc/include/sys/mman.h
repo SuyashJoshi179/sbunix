@@ -9,5 +9,7 @@
 #define MAP_ANON    0x20
 #define MAP_ANONYMOUS MAP_ANON
 
+#define MAP_FAILED ((void *)-1)
+
 void *mmap(void *addr, long len, int prot, int flags, int fd, long off);
 int   munmap(void *addr, long len);

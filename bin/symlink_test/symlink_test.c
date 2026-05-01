@@ -21,13 +21,13 @@ int main(void) {
     if (n > 0) buf[n] = 0;
     check(strcmp(buf, "/dev/loop") == 0, "readlink target string");
 
-    /* readlink on a non-symlink returns -EINVAL. */
+    /* readlink on a non-symlink returns -1, errno=EINVAL. */
     long r = readlink("/dev/console", buf, sizeof(buf));
-    check(r == -EINVAL, "readlink on non-symlink → EINVAL");
+    check(r == -1 && errno == EINVAL, "readlink on non-symlink → EINVAL");
 
-    /* readlink on a missing path returns -ENOENT. */
+    /* readlink on a missing path returns -1, errno=ENOENT. */
     r = readlink("/dev/no_such_thing", buf, sizeof(buf));
-    check(r == -ENOENT, "readlink on missing path → ENOENT");
+    check(r == -1 && errno == ENOENT, "readlink on missing path → ENOENT");
 
     /* Buffer truncation: target is 9 bytes, ask for 4 → 4 bytes, no NUL. */
     char tbuf[16];
@@ -44,7 +44,7 @@ int main(void) {
 
     /* open follows the symlink → ELOOP because target is itself. */
     int fd = open("/dev/loop", 0);
-    check(fd == -ELOOP, "open(/dev/loop) → ELOOP");
+    check(fd == -1 && errno == ELOOP, "open(/dev/loop) → ELOOP");
 
     /* lstat on a non-link still works (regression check). */
     rc = lstat("/dev/console", &st);

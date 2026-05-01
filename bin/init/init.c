@@ -79,6 +79,7 @@ int main(void) {
         "/bin/ps",
         "/bin/header_test",
         "/bin/headers_compile_gate",
+        "/bin/sh_c_test",
         "/bin/usertests",
     };
     int ntests = (int)(sizeof(tests) / sizeof(tests[0]));
@@ -95,7 +96,7 @@ int main(void) {
         while (1) {
             int got = wait(&status);
             if (got == pid) break;
-            if (got == -EINTR) continue;
+            if (got == -1 && errno == EINTR) continue;
             if (got < 0) {
                 status = 1;
                 break;
@@ -121,7 +122,7 @@ int main(void) {
         while (1) {
             int got = wait(0);
             if (got == pid) break;
-            if (got == -EINTR) continue;
+            if (got == -1 && errno == EINTR) continue;
             if (got < 0) break;
         }
     }
