@@ -9,6 +9,7 @@
 #include <printk.h>
 #include <procfs.h>
 #include <proc.h>
+#include <riscv.h>
 
 enum proc_kind {
     PK_PIDDIR = 1,
@@ -27,10 +28,9 @@ struct proc_node {
 };
 
 #define PROC_INODE_POOL 64
-#define SSTATUS_SIE (1UL << 1)
 static struct proc_node pool[PROC_INODE_POOL];
 
-static uint64_t procfs_pool_irq_save(void) {
+static uint64_t procfs_irq_save(void) {
     uint64_t sstatus;
 
     __asm__ volatile("csrr %0, sstatus" : "=r"(sstatus));
@@ -38,32 +38,32 @@ static uint64_t procfs_pool_irq_save(void) {
     return sstatus;
 }
 
-static void procfs_pool_irq_restore(uint64_t sstatus) {
+static void procfs_irq_restore(uint64_t sstatus) {
     if (sstatus & SSTATUS_SIE)
         __asm__ volatile("csrs sstatus, %0" :: "r"(SSTATUS_SIE) : "memory");
 }
 
 static struct proc_node *pool_alloc(void) {
-    uint64_t sstatus = procfs_pool_irq_save();
+    uint64_t sstatus = procfs_irq_save();
 
     for (int i = 0; i < PROC_INODE_POOL; i++) {
         if (!pool[i].in_use) {
             struct proc_node *pn = &pool[i];
             for (uint64_t b = 0; b < sizeof(*pn); b++) ((char *)pn)[b] = 0;
             pn->in_use = 1;
-            procfs_pool_irq_restore(sstatus);
+            procfs_irq_restore(sstatus);
             return pn;
         }
     }
 
-    procfs_pool_irq_restore(sstatus);
+    procfs_irq_restore(sstatus);
     return 0;
 }
 
 static void pool_free(struct proc_node *pn) {
-    uint64_t sstatus = procfs_pool_irq_save();
+    uint64_t sstatus = procfs_irq_save();
     pn->in_use = 0;
-    procfs_pool_irq_restore(sstatus);
+    procfs_irq_restore(sstatus);
 }
 
 static int piddir_read(struct inode *ip, uint64_t off, void *buf, uint64_t n);
@@ -176,33 +176,43 @@ static char state_letter(proc_state_t state) {
     }
 }
 
-static int prod_status(char *out, int cap, struct pcb *pcb) {
+/* Snapshot of pcb fields formatted by the producers below. Taking a
+ * snapshot under IRQ-off lets us format from stable values after
+ * re-enabling interrupts, avoiding use-after-free if the pcb is
+ * reaped mid-format. */
+struct proc_snap {
+    proc_state_t state;
+    int          pid;
+    int          parent_pid;
+};
+
+static int prod_status(char *out, int cap, const struct proc_snap *s) {
     int n = 0;
     n = append_str(out, cap, n, "Name:\tproc\nState:\t");
-    if (n < cap) out[n++] = state_letter(pcb->state);
+    if (n < cap) out[n++] = state_letter(s->state);
     n = append_str(out, cap, n, "\nPid:\t");
-    n = append_u64(out, cap, n, (uint64_t)pcb->pid);
+    n = append_u64(out, cap, n, (uint64_t)s->pid);
     n = append_str(out, cap, n, "\nPPid:\t");
-    n = append_u64(out, cap, n, (uint64_t)pcb->parent_pid);
+    n = append_u64(out, cap, n, (uint64_t)s->parent_pid);
     n = append_str(out, cap, n, "\nUid:\t0\nGid:\t0\nVmSize:\t0 kB\n");
     return n;
 }
 
-static int prod_cmdline(char *out, int cap, struct pcb *pcb) {
-    (void)pcb;
-    static const char s[] = "proc";
+static int prod_cmdline(char *out, int cap, const struct proc_snap *s) {
+    (void)s;
+    static const char str[] = "proc";
     int n = 0;
-    for (int i = 0; i < (int)sizeof(s) && n < cap; i++) out[n++] = s[i];
+    for (int i = 0; i < (int)sizeof(str) && n < cap; i++) out[n++] = str[i];
     return n;
 }
 
-static int prod_stat(char *out, int cap, struct pcb *pcb) {
+static int prod_stat(char *out, int cap, const struct proc_snap *s) {
     int n = 0;
-    n = append_u64(out, cap, n, (uint64_t)pcb->pid);
+    n = append_u64(out, cap, n, (uint64_t)s->pid);
     n = append_str(out, cap, n, " (proc) ");
-    if (n < cap) out[n++] = state_letter(pcb->state);
+    if (n < cap) out[n++] = state_letter(s->state);
     if (n < cap) out[n++] = ' ';
-    n = append_u64(out, cap, n, (uint64_t)pcb->parent_pid);
+    n = append_u64(out, cap, n, (uint64_t)s->parent_pid);
     n = append_str(out, cap, n, " 0 0 0 0 0\n");
     return n;
 }
@@ -407,39 +417,36 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
     struct proc_node *pn = (struct proc_node *)ip->fs_data;
     if (!pn) return -ESRCH;
 
-    char tmp[512];
-    int total;
-    int ret = 0;
-    int irq_state = irq_disable_save();
+    /* Re-validate the pcb under IRQ-off and snapshot the fields we need.
+     * After releasing the critical section the pcb may be reaped, but the
+     * snapshot is stable. */
+    struct proc_snap snap;
+    uint64_t sstatus = procfs_irq_save();
     struct pcb *pcb = proc_find_by_pid(pn->pid);
     if (!pcb || pcb->generation != pn->generation) {
-        irq_restore(irq_state);
+        procfs_irq_restore(sstatus);
         return -ESRCH;
     }
+    snap.state      = pcb->state;
+    snap.pid        = pcb->pid;
+    snap.parent_pid = pcb->parent_pid;
+    procfs_irq_restore(sstatus);
 
+    char tmp[512];
+    int total;
     switch (pn->kind) {
-    case PK_STATUS:
-        total = prod_status(tmp, (int)sizeof(tmp), pcb);
-        break;
-    case PK_CMDLINE:
-        total = prod_cmdline(tmp, (int)sizeof(tmp), pcb);
-        break;
-    case PK_STAT:
-        total = prod_stat(tmp, (int)sizeof(tmp), pcb);
-        break;
-    default:
-        irq_restore(irq_state);
-        return -ENOENT;
+    case PK_STATUS:  total = prod_status(tmp, (int)sizeof(tmp), &snap); break;
+    case PK_CMDLINE: total = prod_cmdline(tmp, (int)sizeof(tmp), &snap); break;
+    case PK_STAT:    total = prod_stat(tmp, (int)sizeof(tmp), &snap); break;
+    default:         return -ENOENT;
     }
-    irq_restore(irq_state);
 
     if (off >= (uint64_t)total) return 0;
     int copy = total - (int)off;
     if ((int)n < copy) copy = (int)n;
     char *dst = (char *)buf;
     for (int i = 0; i < copy; i++) dst[i] = tmp[(int)off + i];
-    ret = copy;
-    return ret;
+    return copy;
 }
 
 #define DEFINE_STATIC_FILE(NAME, READFN)                                       \
@@ -483,7 +490,10 @@ static uint64_t self_target_len(void) {
         return (uint64_t)((sizeof(prefix) - 1) + 20);
     }
 
-    return (uint64_t)((sizeof(prefix) - 1) + dec_digits_u64((uint64_t)p->pid));
+    uint64_t v = (uint64_t)p->pid;
+    int digits = 1;
+    while (v >= 10) { v /= 10; digits++; }
+    return (uint64_t)((sizeof(prefix) - 1) + digits);
 }
 
 static int self_stat(struct inode *ip, struct stat *st) {
@@ -595,7 +605,7 @@ static int proc_root_getdents(struct inode *dir, uint64_t off, void *buf,
 
     int idx = (int)(off - (uint64_t)nstat);
     int seen = 0;
-    uint64_t irq_state = procfs_pool_irq_save();
+    uint64_t irq_state = procfs_irq_save();
     for (struct pcb *p = proc_list_head(); p; p = p->next) {
         if (p->state == PROC_UNUSED) continue;
         if (seen == idx) {
@@ -605,7 +615,7 @@ static int proc_root_getdents(struct inode *dir, uint64_t off, void *buf,
             name[namelen++] = '\0';
             int reclen = (DIRENT64_FIXED_LEN + namelen + 7) & ~7;
             if ((uint64_t)reclen > n) {
-                procfs_pool_irq_restore(irq_state);
+                procfs_irq_restore(irq_state);
                 if (out_next) *out_next = off;
                 return 0;
             }
@@ -617,13 +627,13 @@ static int proc_root_getdents(struct inode *dir, uint64_t off, void *buf,
             de->d_type = DT_DIR;
             for (int j = 0; j < namelen; j++) de->d_name[j] = name[j];
 
-            procfs_pool_irq_restore(irq_state);
+            procfs_irq_restore(irq_state);
             if (out_next) *out_next = off + 1;
             return reclen;
         }
         seen++;
     }
-    procfs_pool_irq_restore(irq_state);
+    procfs_irq_restore(irq_state);
 
     if (out_next) *out_next = off;
     return 0;
