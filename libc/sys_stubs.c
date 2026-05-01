@@ -27,9 +27,12 @@ mode_t umask(mode_t mask) {
 int mkfifo(const char *path, mode_t mode)       { (void)path; (void)mode; errno = ENOSYS; return -1; }
 int mknod(const char *p, mode_t m, dev_t d)     { (void)p; (void)m; (void)d; errno = ENOSYS; return -1; }
 
-/* stat/lstat: no SYS_stat in the kernel. Open the path RDONLY and call
+/* stat: no SYS_stat in the kernel. Open the path RDONLY and call
  * fstat on the resulting fd. This works for regular files and dirs in
- * tarfs/sbfs but fails for anything that cant be opened. */
+ * tarfs/sbfs but fails for anything that cant be opened.
+ *
+ * NB: lstat() is a real syscall — see libc/syscall.c. Don't add a
+ * duplicate definition here. */
 int stat(const char *path, struct stat *st) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) return -1;
@@ -37,7 +40,6 @@ int stat(const char *path, struct stat *st) {
     close(fd);
     return r;
 }
-int lstat(const char *path, struct stat *st) { return stat(path, st); }
 
 int creat(const char *path, mode_t mode) {
     (void)mode;
