@@ -27,3 +27,4 @@
 #define EPIPE        32
 #define ENOTSUP      95
 #define ELOOP        40
+#define EXDEV        18    /* cross-device link */
