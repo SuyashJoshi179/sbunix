@@ -30,12 +30,12 @@ int main(void) {
     check(d >= 0, "dup(fd) succeeds");
     if (d >= 0) {
         check(close(d) == 0, "close duplicated fd");
-        check(close(d) == -EBADF, "double close returns -EBADF");
+        check(close(d) == -1 && errno == EBADF, "double close returns -EBADF");
     }
 
     check(close(fd) == 0, "close original fd");
     char c = 0;
-    check(read(fd, &c, 1) == -EBADF, "read on closed fd returns -EBADF");
+    check(read(fd, &c, 1) == -1 && errno == EBADF, "read on closed fd returns -EBADF");
 
     int fds[64];
     int n = 0;
@@ -45,7 +45,7 @@ int main(void) {
         if (rc < 0) break;
         fds[n++] = rc;
     }
-    check(rc == -EMFILE, "fd table reaches -EMFILE");
+    check(rc == -1 && errno == EMFILE, "fd table reaches -EMFILE");
 
     for (int i = 0; i < n; i++)
         close(fds[i]);

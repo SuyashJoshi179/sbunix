@@ -1,5 +1,6 @@
 #include <signal.h>
 #include <unistd.h>
+#include "syscall_priv.h"
 
 extern void __sigtramp(void);
 
@@ -28,7 +29,7 @@ static long ecall3(long num, long a0, long a1, long a2) {
 }
 
 int kill(int pid, int sig) {
-    return (int)ecall2(90, (long)pid, (long)sig);
+    return (int)syscall_ret(ecall2(90, (long)pid, (long)sig));
 }
 
 int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact) {
@@ -41,7 +42,7 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact) {
         actp = &kact;
     }
 
-    return (int)ecall3(91, (long)sig, (long)actp, (long)oldact);
+    return (int)syscall_ret(ecall3(91, (long)sig, (long)actp, (long)oldact));
 }
 
 sighandler_t signal(int sig, sighandler_t handler) {
@@ -59,7 +60,7 @@ sighandler_t signal(int sig, sighandler_t handler) {
 }
 
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
-    return (int)ecall3(92, (long)how, (long)set, (long)oldset);
+    return (int)syscall_ret(ecall3(92, (long)how, (long)set, (long)oldset));
 }
 
 int raise(int sig) {
@@ -67,5 +68,5 @@ int raise(int sig) {
 }
 
 int pause(void) {
-    return (int)ecall0(94);
+    return (int)syscall_ret(ecall0(94));
 }

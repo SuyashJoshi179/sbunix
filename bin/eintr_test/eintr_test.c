@@ -39,7 +39,7 @@ int main(void) {
 
         char c;
         long r = read(pf[0], &c, 1);
-        if (r != -EINTR)
+        if (r != -1 || errno != EINTR)
             exit(3);
         if (!got_term)
             exit(4);
@@ -48,7 +48,7 @@ int main(void) {
         struct timespec rem = {0, 0};
         got_term = 0;
         r = nanosleep(&req, &rem);
-        if (r != -EINTR)
+        if (r != -1 || errno != EINTR)
             exit(5);
         if (!got_term)
             exit(6);

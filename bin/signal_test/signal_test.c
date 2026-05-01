@@ -44,10 +44,10 @@ int main(void) {
     sa.sa_mask = 0;
     sa.sa_flags = 0;
     sa.sa_restorer = 0;
-    check(sigaction(SIGKILL, &sa, 0) == -EINVAL, "sigaction(SIGKILL) rejected");
+    check(sigaction(SIGKILL, &sa, 0) == -1 && errno == EINVAL, "sigaction(SIGKILL) rejected");
 
     check(kill(getpid(), 0) == 0, "kill(self, 0) succeeds");
-    check(kill(99999, 0) == -ESRCH, "kill(missing, 0) returns -ESRCH");
+    check(kill(99999, 0) == -1 && errno == ESRCH, "kill(missing, 0) returns -ESRCH");
 
     set = (1ULL << SIGTERM);
     check(sigprocmask(SIG_BLOCK, &set, 0) == 0, "sigprocmask block SIGTERM");

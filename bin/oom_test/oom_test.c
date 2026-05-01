@@ -31,7 +31,7 @@ int main(void) {
         ((volatile char *)p)[0] = 0x5a;
         pages++;
     }
-    check(r == -ENOMEM, "sbrk exhaustion returns -ENOMEM");
+    check(r == -1 && errno == ENOMEM, "sbrk exhaustion returns -ENOMEM");
 
     int kids[256];
     int nkids = 0;
@@ -48,7 +48,7 @@ int main(void) {
         }
         kids[nkids++] = pid;
     }
-    check(fork_err == -ENOMEM, "fork exhaustion returns -ENOMEM");
+    check(fork_err == -1 && errno == ENOMEM, "fork exhaustion returns -ENOMEM");
 
     for (int i = 0; i < nkids; i++)
         kill(kids[i], SIGTERM);
@@ -58,7 +58,7 @@ int main(void) {
         while (1) {
             int got = wait(&st);
             if (got == kids[i]) break;
-            if (got == -EINTR) continue;
+            if (got == -1 && errno == EINTR) continue;
             if (got < 0) break;
         }
     }

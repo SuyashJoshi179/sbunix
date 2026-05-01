@@ -127,7 +127,7 @@ int main(void) {
     check(strcmp(rbuf, want) == 0, "readlink /proc/self matches /proc/<pid>");
 
     int fd = open("/proc/999999/status", 0);
-    check(fd == -ENOENT, "open /proc/999999/status -> ENOENT");
+    check(fd == -1 && errno == ENOENT, "open /proc/999999/status -> ENOENT");
 
     long free_before = meminfo();
     check(free_before > 0, "meminfo before valid");

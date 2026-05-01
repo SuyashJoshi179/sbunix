@@ -23,7 +23,7 @@ static int spawn_orphan_cycle(void) {
     while (1) {
         int got = wait(&st);
         if (got == shell_like) break;
-        if (got == -EINTR) continue;
+        if (got == -1 && errno == EINTR) continue;
         if (got < 0) return got;
     }
 
@@ -41,8 +41,8 @@ int main(void) {
 
         int st;
         int w = wait(&st);
-        if (w != -ECHILD) {
-            printf("reap_stress_test: cycle %d expected -ECHILD got %d\n", i, w);
+        if (w != -1 || errno != ECHILD) {
+            printf("reap_stress_test: cycle %d expected ECHILD got w=%d errno=%d\n", i, w, errno);
             return 1;
         }
     }

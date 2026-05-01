@@ -4,7 +4,8 @@
 #include <errno.h>
 
 static int report(const char *path, int rc) {
-    printf("mkdir: cannot create directory '%s': errno %d\n", path, -rc);
+    (void)rc;
+    printf("mkdir: cannot create directory '%s': errno %d\n", path, errno);
     return -1;
 }
 
@@ -33,12 +34,12 @@ static int do_parents(const char *path) {
         if (buf[i] == '/') {
             buf[i] = '\0';
             int rc = mkdir(buf, 0755);
-            if (rc < 0 && rc != -EEXIST) return report(buf, rc);
+            if (rc < 0 && errno != EEXIST) return report(buf, rc);
             buf[i] = '/';
         }
     }
     int rc = mkdir(buf, 0755);
-    if (rc < 0 && rc != -EEXIST) return report(buf, rc);
+    if (rc < 0 && errno != EEXIST) return report(buf, rc);
     return 0;
 }
 

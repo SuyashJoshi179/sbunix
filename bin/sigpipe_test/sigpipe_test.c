@@ -41,7 +41,7 @@ int main(void) {
         close(pf[0]);
 
         long w = write(pf[1], "x", 1);
-        if (w != -EPIPE)
+        if (w != -1 || errno != EPIPE)
             return 4;
         if (!saw_pipe)
             return 5;
