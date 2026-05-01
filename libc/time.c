@@ -49,7 +49,8 @@ clock_t times(struct tms *buf) {
         buf->tms_cstime = 0;
     }
     struct timespec ts;
-    if (clock_gettime(1 /* CLOCK_MONOTONIC */, &ts) < 0) return (clock_t)-1;
+    int rc = clock_gettime(1 /* CLOCK_MONOTONIC */, &ts);
+    if (rc < 0) return (clock_t)rc;
     return (clock_t)(ts.tv_sec * CLOCKS_PER_SEC
                    + ts.tv_nsec * CLOCKS_PER_SEC / 1000000000L);
 }
