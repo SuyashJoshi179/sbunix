@@ -16,3 +16,10 @@ typedef int64_t  suseconds_t;
 typedef int64_t  clock_t;
 typedef int64_t  off_t;
 typedef int64_t  ssize_t;
+
+/* size_t is also defined in <stddef.h>; share the guard so either
+ * include order works. */
+#ifndef _SIZE_T_DEFINED
+#define _SIZE_T_DEFINED
+typedef unsigned long size_t;
+#endif

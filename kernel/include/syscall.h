@@ -64,6 +64,8 @@
 
 // Phase 9e: memory info
 #define SYS_meminfo       111   // () -> free physical pages
+#define SYS_readlink      112
+#define SYS_lstat         113
 // Trap-frame word indices for registers saved by trap.S.
 // Frame layout (8 bytes per slot, from sp):
 //   offset   0: x1  (ra)

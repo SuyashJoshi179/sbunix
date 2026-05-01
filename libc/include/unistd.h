@@ -23,6 +23,7 @@ int   dup(int fd);
 int   dup2(int oldfd, int newfd);
 long  lseek(int fd, long off, int whence);
 int   fstat(int fd, struct stat *st);
+int   lstat(const char *path, struct stat *st);
 long  getdents64(int fd, void *buf, long n);
 int   chdir(const char *path);
 long  getcwd(char *buf, long n);

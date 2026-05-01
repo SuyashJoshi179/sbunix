@@ -91,6 +91,10 @@ int fstat(int fd, struct stat *st) {
     return (int)ecall2(17, (long)fd, (long)st);
 }
 
+int lstat(const char *path, struct stat *st) {
+    return (int)ecall2(113, (long)path, (long)st);
+}
+
 long getdents64(int fd, void *buf, long n) {
     return ecall3(18, (long)fd, (long)buf, n);
 }
@@ -166,8 +170,7 @@ int access(const char *path, int mode) {
 }
 
 long readlink(const char *path, char *buf, long n) {
-    (void)path; (void)buf; (void)n;
-    return -EINVAL;
+    return ecall3(112, (long)path, (long)buf, n);
 }
 
 /* No SYS_waitpid in the kernel. Block on wait() and surface what we get;

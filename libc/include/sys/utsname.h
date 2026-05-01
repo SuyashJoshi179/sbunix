@@ -1,12 +1,15 @@
 #pragma once
 
+/* Field length matches Linux convention (including trailing NUL). */
+#define UTSNAME_LEN 65
+
 struct utsname {
-    char sysname[65];
-    char nodename[65];
-    char release[65];
-    char version[65];
-    char machine[65];
-    char domainname[65];
+    char sysname[UTSNAME_LEN];   /* "SBUnix" */
+    char nodename[UTSNAME_LEN];  /* host name */
+    char release[UTSNAME_LEN];   /* kernel release */
+    char version[UTSNAME_LEN];   /* build identifier */
+    char machine[UTSNAME_LEN];   /* "riscv64" */
+    char domainname[UTSNAME_LEN];
 };
 
 int uname(struct utsname *buf);
