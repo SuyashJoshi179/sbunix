@@ -438,6 +438,7 @@ static int64_t sys_readlink(const char *path, char *buf, uint64_t n) {
     int got = ip->ops->readlink(ip, kbuf, cap);
     inode_put(ip);
     if (got < 0) return got;
+    if ((uint64_t)got > cap) return -EIO;
 
     if (got > 0 && copyout(buf, kbuf, (unsigned long)got) < 0) return -EFAULT;
     return got;
