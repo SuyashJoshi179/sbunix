@@ -51,6 +51,10 @@
 #define EINPROGRESS 115
 #define EALREADY    114
 #define ENOTSUP      95
+#define ENOTCONN    107
+#define ECONNREFUSED 111
+#define EHOSTUNREACH 113
+#define ENOTIMPL    ENOSYS
 
 int *__errno_location(void);
 #define errno (*__errno_location())
