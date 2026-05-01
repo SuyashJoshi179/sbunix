@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "syscall_priv.h"
 
 static long ecall0(long num) {
     register long _a7 asm("a7") = num;
@@ -18,5 +19,5 @@ unsigned int getuid(void)  { return (unsigned int)ecall0(100); }
 unsigned int geteuid(void) { return (unsigned int)ecall0(101); }
 unsigned int getgid(void)  { return (unsigned int)ecall0(102); }
 unsigned int getegid(void) { return (unsigned int)ecall0(103); }
-int setuid(unsigned int uid) { return (int)ecall1(104, (long)uid); }
-int setgid(unsigned int gid) { return (int)ecall1(105, (long)gid); }
+int setuid(unsigned int uid) { return (int)syscall_ret(ecall1(104, (long)uid)); }
+int setgid(unsigned int gid) { return (int)syscall_ret(ecall1(105, (long)gid)); }

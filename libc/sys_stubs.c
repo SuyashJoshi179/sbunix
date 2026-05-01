@@ -37,7 +37,7 @@ int stat(const char *path, struct stat *st) {
     close(fd);
     return r;
 }
-int lstat(const char *path, struct stat *st) { return stat(path, st); }
+/* lstat lives in syscall.c (real SYS_lstat). */
 
 int creat(const char *path, mode_t mode) {
     (void)mode;
