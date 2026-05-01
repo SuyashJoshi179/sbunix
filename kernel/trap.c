@@ -21,14 +21,14 @@ static void check_user_return(uint64_t *tf, const char *tag) {
         struct pcb *p = current_proc();
         printk("[BUG %s] pid=%d returning to user with bad sepc=0x%lx — killing\n",
                tag, p ? p->pid : -1, pc);
-        proc_exit_current(139);
+        proc_exit_current(SIGSEGV & 0x7f);
     }
     uint64_t sp = tf[1];
     if (sp == 0 || sp >= USER_STACK_TOP) {
         struct pcb *p = current_proc();
         printk("[BUG %s] pid=%d returning to user with bad sp=0x%lx sepc=0x%lx — killing\n",
                tag, p ? p->pid : -1, sp, pc);
-        proc_exit_current(139);
+        proc_exit_current(SIGSEGV & 0x7f);
     }
 }
 

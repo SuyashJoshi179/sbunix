@@ -94,7 +94,7 @@ static int alloc_fd(struct pcb *p, struct file *f) {
 // sys_exit
 // ---------------------------------------------------------------------------
 static int64_t sys_exit(int status) {
-    proc_exit_current(status);
+    proc_exit_current((status & 0xff) << 8);
     return 0;
 }
 
