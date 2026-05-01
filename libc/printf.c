@@ -216,6 +216,7 @@ long getline(char **lineptr, unsigned long *n, FILE *stream) {
         }
         if (len + 1 >= *n) {
             unsigned long cap = *n * 2;
+            if (cap < *n) return -1;
             char *p = realloc(*lineptr, cap);
             if (!p) return -1;
             *lineptr = p;
