@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 #include <string.h>
@@ -424,8 +425,104 @@ static int run_pipeline(int start, int in_fd) {
     }
 }
 
+// Run the already-tokenized line. Returns the exit status of the last
+// external command (0..255), or 0 for built-ins that succeed. The `exit`
+// built-in does not return — it terminates the shell directly.
+static int run_line(void) {
+    if (ntokens == 0) return 0;
+
+    if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "exit") == 0) {
+        int code = 0;
+        if (ntokens > 1 && tokens[1].type == T_WORD)
+            code = parse_int(tokens[1].val);
+        _exit(code & 0xff);
+    }
+
+    if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "cd") == 0) {
+        char *dir = (ntokens > 1 && tokens[1].type == T_WORD) ? tokens[1].val : "/";
+        if (chdir(dir) < 0) {
+            printf("cd: '%s': no such directory\n", dir);
+            return 1;
+        }
+        return 0;
+    }
+
+    if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "pwd") == 0) {
+        char cwdbuf[256];
+        if (getcwd(cwdbuf, sizeof(cwdbuf)) >= 0)
+            printf("%s\n", cwdbuf);
+        return 0;
+    }
+
+    if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "kill") == 0) {
+        int sig = SIGTERM;
+        int argi = 1;
+        if (ntokens > 2 && tokens[1].type == T_WORD && tokens[1].val[0] == '-') {
+            sig = parse_int(tokens[1].val + 1);
+            argi = 2;
+        }
+        if (argi >= ntokens || tokens[argi].type != T_WORD) {
+            printf("usage: kill [-sig] <pid>\n");
+            return 1;
+        }
+        int pid = parse_int(tokens[argi].val);
+        int rc = kill(pid, sig);
+        if (rc < 0) {
+            printf("kill: failed (%d)\n", rc);
+            return 1;
+        }
+        return 0;
+    }
+
+    if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "echo") == 0) {
+        int has_redir = 0;
+        for (int i = 1; i < ntokens; i++) {
+            if (tokens[i].type == T_REDIR_OUT || tokens[i].type == T_REDIR_APPEND ||
+                tokens[i].type == T_PIPE) {
+                has_redir = 1;
+                break;
+            }
+        }
+        if (!has_redir) {
+            for (int i = 1; i < ntokens; i++) {
+                if (tokens[i].type == T_WORD) {
+                    if (i > 1) write(1, " ", 1);
+                    write(1, tokens[i].val, strlen(tokens[i].val));
+                }
+            }
+            write(1, "\n", 1);
+            return 0;
+        }
+    }
+
+    int cmd_start = 0;
+    int last_status = 0;
+    for (int i = 0;; i++) {
+        if (tokens[i].type == T_AND || tokens[i].type == T_END) {
+            int saved = tokens[i].type;
+            tokens[i].type = T_END;
+            last_status = run_pipeline(cmd_start, -1);
+            tokens[i].type = saved;
+            set_console_fg(getpid());
+
+            if (saved == T_END) break;
+            if (last_status != 0) break;
+            cmd_start = i + 1;
+        }
+    }
+    return WEXITSTATUS(last_status);
+}
+
 int main(int argc, char **argv) {
-    (void)argc; (void)argv;
+    if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
+        size_t n = strlen(argv[2]);
+        if (n >= sizeof(linebuf)) n = sizeof(linebuf) - 1;
+        memcpy(linebuf, argv[2], n);
+        linebuf[n] = 0;
+        tokenize();
+        expand_globs();
+        return run_line() & 0xff;
+    }
 
     struct sigaction sa;
     sa.sa_handler = on_sigint;
@@ -447,89 +544,7 @@ int main(int argc, char **argv) {
 
         tokenize();
         expand_globs();
-        if (ntokens == 0) continue;
-
-        // Builtins
-        if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "exit") == 0) {
-            int code = 0;
-            if (ntokens > 1 && tokens[1].type == T_WORD)
-                code = parse_int(tokens[1].val);
-            _exit(code & 0xff);
-        }
-
-        if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "cd") == 0) {
-            char *dir = (ntokens > 1 && tokens[1].type == T_WORD) ? tokens[1].val : "/";
-            if (chdir(dir) < 0)
-                printf("cd: '%s': no such directory\n", dir);
-            continue;
-        }
-
-        if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "pwd") == 0) {
-            char cwdbuf[256];
-            if (getcwd(cwdbuf, sizeof(cwdbuf)) >= 0)
-                printf("%s\n", cwdbuf);
-            continue;
-        }
-
-        if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "kill") == 0) {
-            int sig = SIGTERM;
-            int argi = 1;
-            if (ntokens > 2 && tokens[1].type == T_WORD && tokens[1].val[0] == '-') {
-                sig = parse_int(tokens[1].val + 1);
-                argi = 2;
-            }
-            if (argi >= ntokens || tokens[argi].type != T_WORD) {
-                printf("usage: kill [-sig] <pid>\n");
-                continue;
-            }
-            int pid = parse_int(tokens[argi].val);
-            int rc = kill(pid, sig);
-            if (rc < 0)
-                printf("kill: failed (%d)\n", rc);
-            continue;
-        }
-
-        // echo builtin for simplicity
-        if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "echo") == 0) {
-            // Check for redirection — if present, fork+exec instead
-            int has_redir = 0;
-            for (int i = 1; i < ntokens; i++) {
-                if (tokens[i].type == T_REDIR_OUT || tokens[i].type == T_REDIR_APPEND ||
-                    tokens[i].type == T_PIPE) {
-                    has_redir = 1;
-                    break;
-                }
-            }
-            if (!has_redir) {
-                for (int i = 1; i < ntokens; i++) {
-                    if (tokens[i].type == T_WORD) {
-                        if (i > 1) write(1, " ", 1);
-                        write(1, tokens[i].val, strlen(tokens[i].val));
-                    }
-                }
-                write(1, "\n", 1);
-                continue;
-            }
-        }
-
-        int cmd_start = 0;
-        int last_status = 0;
-
-        for (int i = 0;; i++) {
-            if (tokens[i].type == T_AND || tokens[i].type == T_END) {
-                int saved = tokens[i].type;
-                tokens[i].type = T_END;
-                last_status = run_pipeline(cmd_start, -1);
-                tokens[i].type = saved;
-                set_console_fg(getpid());
-
-                if (saved == T_END)
-                    break;
-                if (last_status != 0)
-                    break;
-                cmd_start = i + 1;
-            }
-        }
+        run_line();
     }
 
     return 0;
