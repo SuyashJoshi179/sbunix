@@ -414,6 +414,73 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_rename — atomically move oldpath to newpath.
+//
+// POSIX rules implemented:
+//   - oldpath must exist                              → -ENOENT
+//   - both parents must be directories                → -ENOTDIR
+//   - both paths must be on the same fs              → -EXDEV
+//   - newpath's filesystem must support rename        → -EROFS
+//   - rename of dir into its own subtree              → -EINVAL  (loop)
+//   - file replacing dir / dir replacing file         → -EISDIR / -ENOTDIR
+//   - non-empty dir target                            → -ENOTEMPTY
+//   - same path same name                             → 0  (no-op)
+// ---------------------------------------------------------------------------
+static int64_t sys_rename(const char *oldpath, const char *newpath) {
+    char kold[PATH_MAX_LOCAL], knew[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(oldpath, kold, sizeof(kold));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(newpath, knew, sizeof(knew));
+    if (rc < 0) return rc;
+
+    // Split both paths into (parent, leaf).
+    char old_parent_buf[PATH_MAX_LOCAL];
+    char new_parent_buf[PATH_MAX_LOCAL];
+    const char *old_leaf = 0, *new_leaf = 0;
+    if (path_split(kold, old_parent_buf, &old_leaf) < 0) return -EINVAL;
+    if (path_split(knew, new_parent_buf, &new_leaf) < 0) return -EINVAL;
+    if (!old_leaf || !old_leaf[0]) return -EINVAL;
+    if (!new_leaf || !new_leaf[0]) return -EINVAL;
+
+    // Resolve both parents.
+    struct inode *old_p = 0;
+    if (namei(old_parent_buf, &old_p) < 0) return -ENOENT;
+    if (old_p->type != I_DIR) {
+        inode_put(old_p);
+        return -ENOTDIR;
+    }
+
+    struct inode *new_p = 0;
+    if (namei(new_parent_buf, &new_p) < 0) {
+        inode_put(old_p);
+        return -ENOENT;
+    }
+    if (new_p->type != I_DIR) {
+        inode_put(new_p);
+        inode_put(old_p);
+        return -ENOTDIR;
+    }
+
+    // Cross-filesystem rename is impossible (different inum spaces).
+    if (old_p->ops != new_p->ops) {
+        inode_put(new_p);
+        inode_put(old_p);
+        return -EXDEV;
+    }
+
+    if (!new_p->ops || !new_p->ops->rename) {
+        inode_put(new_p);
+        inode_put(old_p);
+        return -EROFS;
+    }
+
+    int r = new_p->ops->rename(old_p, old_leaf, new_p, new_leaf);
+    inode_put(new_p);
+    inode_put(old_p);
+    return r;
+}
+
+// ---------------------------------------------------------------------------
 // sys_close
 // ---------------------------------------------------------------------------
 static int64_t sys_close(int fd) {
@@ -1197,6 +1264,10 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_link:
             return sys_link((const char *)trapframe[TF_A0],
                             (const char *)trapframe[TF_A1]);
+
+        case SYS_rename:
+            return sys_rename((const char *)trapframe[TF_A0],
+                              (const char *)trapframe[TF_A1]);
 
         case SYS_pipe:
             return sys_pipe((int *)trapframe[TF_A0]);

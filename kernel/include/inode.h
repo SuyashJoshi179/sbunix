@@ -32,6 +32,12 @@ struct inode_ops {
      * the existing `target` inode. Caller (sys_link) guarantees same fs,
      * non-directory target, and that `name` does not already exist. */
     int  (*link)    (struct inode *parent, struct inode *target, const char *name);
+    /* Atomic rename: move (old_parent, old_name) to (new_parent, new_name).
+     * Caller (sys_rename) guarantees same fs and that both parents are dirs.
+     * Implementation handles: replace if newpath exists, ".." fixup for
+     * directory cross-parent moves, and loop prevention. */
+    int  (*rename)  (struct inode *old_parent, const char *old_name,
+                     struct inode *new_parent, const char *new_name);
 };
 
 #define I_REG  1
