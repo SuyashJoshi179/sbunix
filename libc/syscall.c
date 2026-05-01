@@ -116,6 +116,10 @@ int unlink(const char *path) {
     return (int)ecall1(22, (long)path);
 }
 
+int link(const char *oldpath, const char *newpath) {
+    return (int)ecall2(25, (long)oldpath, (long)newpath);
+}
+
 int pipe(int fds[2]) {
     return (int)ecall1(23, (long)fds);
 }

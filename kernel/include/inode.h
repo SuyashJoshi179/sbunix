@@ -28,6 +28,10 @@ struct inode_ops {
     int  (*create)  (struct inode *parent, const char *name, struct inode **out);
     int  (*mkdir)   (struct inode *parent, const char *name);
     int  (*unlink)  (struct inode *parent, const char *name);
+    /* Hard link: add a new directory entry `name` in `parent` referencing
+     * the existing `target` inode. Caller (sys_link) guarantees same fs,
+     * non-directory target, and that `name` does not already exist. */
+    int  (*link)    (struct inode *parent, struct inode *target, const char *name);
 };
 
 #define I_REG  1

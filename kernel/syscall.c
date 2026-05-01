@@ -334,6 +334,86 @@ static int64_t sys_unlink(const char *path) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_link — create newpath as a hard link to oldpath.
+//
+// POSIX rules implemented:
+//   - oldpath must exist                              → -ENOENT
+//   - target must not be a directory                  → -EPERM
+//   - newpath's parent must be a directory            → -ENOTDIR
+//   - target and newpath must be on the same fs      → -EXDEV
+//   - newpath must not already exist                  → -EEXIST
+//   - target's filesystem must support link           → -EROFS
+// ---------------------------------------------------------------------------
+static int64_t sys_link(const char *oldpath, const char *newpath) {
+    char kold[PATH_MAX_LOCAL], knew[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(oldpath, kold, sizeof(kold));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(newpath, knew, sizeof(knew));
+    if (rc < 0) return rc;
+
+    // Resolve target.
+    struct inode *target = 0;
+    if (namei(kold, &target) < 0) return -ENOENT;
+    if (target->type == I_DIR) {
+        inode_put(target);
+        return -EPERM;
+    }
+
+    // Resolve parent of newpath.
+    char parent_path[PATH_MAX_LOCAL];
+    const char *leaf = 0;
+    if (path_split(knew, parent_path, &leaf) < 0) {
+        inode_put(target);
+        return -EINVAL;
+    }
+    if (!leaf || !leaf[0]) {
+        inode_put(target);
+        return -EINVAL;
+    }
+
+    struct inode *parent = 0;
+    if (namei(parent_path, &parent) < 0) {
+        inode_put(target);
+        return -ENOENT;
+    }
+    if (parent->type != I_DIR) {
+        inode_put(parent);
+        inode_put(target);
+        return -ENOTDIR;
+    }
+
+    // Cross-filesystem hard link is meaningless: a dirent stores an inum
+    // that is only valid in its own filesystem's inode table.
+    if (parent->ops != target->ops) {
+        inode_put(parent);
+        inode_put(target);
+        return -EXDEV;
+    }
+
+    if (!parent->ops || !parent->ops->link) {
+        inode_put(parent);
+        inode_put(target);
+        return -EROFS;
+    }
+
+    // EEXIST takes priority over later checks.
+    if (parent->ops->lookup) {
+        struct inode *existing = 0;
+        if (parent->ops->lookup(parent, leaf, &existing) == 0) {
+            inode_put(existing);
+            inode_put(parent);
+            inode_put(target);
+            return -EEXIST;
+        }
+    }
+
+    int r = parent->ops->link(parent, target, leaf);
+    inode_put(parent);
+    inode_put(target);
+    return r;
+}
+
+// ---------------------------------------------------------------------------
 // sys_close
 // ---------------------------------------------------------------------------
 static int64_t sys_close(int fd) {
@@ -1113,6 +1193,10 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_unlink:
             return sys_unlink((const char *)trapframe[TF_A0]);
+
+        case SYS_link:
+            return sys_link((const char *)trapframe[TF_A0],
+                            (const char *)trapframe[TF_A1]);
 
         case SYS_pipe:
             return sys_pipe((int *)trapframe[TF_A0]);

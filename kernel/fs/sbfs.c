@@ -56,6 +56,7 @@ static void sbfs_op_release(struct inode *);
 static int  sbfs_op_create(struct inode *, const char *, struct inode **);
 static int  sbfs_op_mkdir (struct inode *, const char *);
 static int  sbfs_op_unlink(struct inode *, const char *);
+static int  sbfs_op_link  (struct inode *, struct inode *, const char *);
 
 /* Internal helpers used before their definition. */
 static void sbfs_itrunc(struct sbfs_inode *si);
@@ -71,6 +72,7 @@ static const struct inode_ops sbfs_iops = {
     .create   = sbfs_op_create,
     .mkdir    = sbfs_op_mkdir,
     .unlink   = sbfs_op_unlink,
+    .link     = sbfs_op_link,
 };
 
 /* -----------------------------------------------------------------------
@@ -684,6 +686,37 @@ static int sbfs_op_mkdir(struct inode *parent, const char *name) {
 static int sbfs_op_unlink(struct inode *parent, const char *name) {
     begin_op();
     int rc = sbfs_unlink(parent, name);
+    end_op();
+    return rc;
+}
+
+/* -----------------------------------------------------------------------
+ * sbfs_link — add a directory entry pointing to an existing inode.
+ *
+ * Caller (sys_link) has already verified:
+ *   - target is not a directory  (POSIX: hard link to dir → -EPERM)
+ *   - target is in the same fs as parent  (-EXDEV otherwise)
+ *   - `name` does not already exist in parent  (-EEXIST otherwise)
+ *
+ * On success the target's nlink is incremented and the in-memory +
+ * on-disk inode are updated.
+ * ----------------------------------------------------------------------- */
+static int sbfs_link(struct inode *parent, struct inode *target, const char *name) {
+    struct sbfs_inode *si = (struct sbfs_inode *)target;
+
+    int rc = sbfs_dirlink(parent, name, si->inum);
+    if (rc < 0) return rc;
+
+    si->d.nlink++;
+    si->vnode.nlink++;
+    si->dirty = 1;
+    sbfs_iupdate(si);
+    return 0;
+}
+
+static int sbfs_op_link(struct inode *parent, struct inode *target, const char *name) {
+    begin_op();
+    int rc = sbfs_link(parent, target, name);
     end_op();
     return rc;
 }
