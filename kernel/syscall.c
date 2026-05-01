@@ -21,7 +21,6 @@
 #include <vmem.h>
 #include <log.h>
 #include <drivers/uart.h>
-#include <drivers/rtc.h>
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -169,23 +168,18 @@ static int64_t sys_read(int fd, void *buf, uint64_t len) {
 }
 
 // ---------------------------------------------------------------------------
-// path_split — split a path into parent dir path + leaf name.
-//
+// path_split — split an absolute or relative path into parent dir path +
+// leaf name.  parent_buf must hold at least the length of path + 2 bytes.
 // Strips trailing '/' (POSIX: "/foo/" is equivalent to "/foo"), so `path`
-// must be writable. Handles both absolute and relative paths:
-//   "/foo/bar"  -> parent="/foo",  leaf="bar"
-//   "/foo"      -> parent="/",     leaf="foo"
-//   "/foo/"     -> parent="/",     leaf="foo"
-//   "foo/bar"   -> parent="foo",   leaf="bar"
-//   "foo"       -> parent=".",     leaf="foo"
-//
-// Returns 0 on success, -EINVAL if path has no leaf component
-// (e.g. "", "/", "////").
-// path_split — split an absolute path into parent dir path + leaf name.
-// parent_buf must hold at least the length of path.
-// Strips trailing '/' (POSIX: "/foo/" is equivalent to "/foo"), so `path`
-// must be writable. Returns 0 on success, -EINVAL if path has no leaf
+// must be writable.  Returns 0 on success, -EINVAL if path has no leaf
 // component (e.g. "" or "/" or "////").
+//
+// Relative-path handling:
+//   "foo"      → parent ".",  leaf "foo"
+//   "foo/bar"  → parent "foo", leaf "bar"
+//   "./foo"    → parent ".",  leaf "foo"
+// Callers pass parent_buf to namei(), which resolves relative parents from
+// the process cwd — consistent with how namei() handles relative paths.
 // ---------------------------------------------------------------------------
 static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     int len = 0;
@@ -196,15 +190,8 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     while (len > 1 && path[len - 1] == '/') {
         path[--len] = '\0';
     }
-    // After stripping, "/" alone has no leaf.
+    // After stripping, absolute "/" alone has no leaf.
     if (len == 1 && path[0] == '/') return -EINVAL;
-
-    // Strip trailing slashes, but never reduce "/" itself to "".
-    while (len > 1 && path[len - 1] == '/') {
-        path[--len] = '\0';
-    }
-    // After stripping, "/" alone has no leaf.
-    if (len == 1) return -EINVAL;
 
     // Find last '/'.
     int last_slash = -1;
@@ -213,7 +200,7 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     }
 
     if (last_slash < 0) {
-        // Relative path with no slash: parent is cwd ".".
+        // No slash: bare relative name — parent is cwd (".").
         parent_buf[0] = '.';
         parent_buf[1] = '\0';
         *leaf_out = path;
@@ -226,7 +213,6 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     parent_buf[plen] = '\0';
 
     *leaf_out = &path[last_slash + 1];
-    if (!(*leaf_out)[0]) return -EINVAL;
     return 0;
 }
 
@@ -306,9 +292,8 @@ static int64_t sys_mkdir(const char *path) {
     if (namei(parent_path, &parent) < 0) return -ENOENT;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
 
-    // Check name doesn't already exist (EEXIST takes precedence over EROFS so
-    // `mkdir -p` works correctly when an intermediate dir is a mount point
-    // sitting on a read-only parent fs).
+    // Check existence first: EEXIST takes priority over EROFS so that
+    // mkdir -p style callers on a read-only fs get the right error.
     if (parent->ops && parent->ops->lookup) {
         struct inode *existing = 0;
         if (parent->ops->lookup(parent, leaf, &existing) == 0) {
@@ -438,6 +423,7 @@ static int64_t sys_readlink(const char *path, char *buf, uint64_t n) {
     int got = ip->ops->readlink(ip, kbuf, cap);
     inode_put(ip);
     if (got < 0) return got;
+    if ((uint64_t)got > cap) return -EIO;
 
     if (got > 0 && copyout(buf, kbuf, (unsigned long)got) < 0) return -EFAULT;
     return got;
@@ -936,21 +922,11 @@ static int64_t sys_sleep(uint64_t ms) {
 // ---------------------------------------------------------------------------
 static int64_t sys_clock_gettime(int clockid, struct timespec *ts) {
     if (!ts) return -EFAULT;
+    if (clockid != CLOCK_REALTIME && clockid != CLOCK_MONOTONIC) return -EINVAL;
     struct timespec kts;
-    if (clockid == CLOCK_REALTIME) {
-        // Wall-clock time from the Goldfish RTC (nanoseconds since epoch).
-        uint64_t ns = rtc_read_ns();
-        kts.tv_sec  = (int64_t)(ns / 1000000000UL);
-        kts.tv_nsec = (int64_t)(ns % 1000000000UL);
-    } else if (clockid == CLOCK_MONOTONIC) {
-        // Monotonic uptime derived from the timer-tick counter.
-        uint64_t ticks = timer_ticks();
-        kts.tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
-        kts.tv_nsec = (int64_t)((ticks % TICKS_PER_SEC) *
-                                (1000000000UL / TICKS_PER_SEC));
-    } else {
-        return -EINVAL;
-    }
+    uint64_t ticks = timer_ticks();
+    kts.tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
+    kts.tv_nsec = (int64_t)((ticks % TICKS_PER_SEC) * (1000000000UL / TICKS_PER_SEC));
     if (copyout(ts, &kts, sizeof(kts)) < 0) return -EFAULT;
     return 0;
 }
@@ -961,11 +937,10 @@ static int64_t sys_clock_gettime(int clockid, struct timespec *ts) {
 static int64_t sys_gettimeofday(struct timeval *tv, void *tz) {
     (void)tz;
     if (!tv) return -EFAULT;
-    // Wall-clock time from the Goldfish RTC.
-    uint64_t ns = rtc_read_ns();
     struct timeval ktv;
-    ktv.tv_sec  = (int64_t)(ns / 1000000000UL);
-    ktv.tv_usec = (int64_t)((ns / 1000UL) % 1000000UL);
+    uint64_t ticks = timer_ticks();
+    ktv.tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
+    ktv.tv_usec = (int64_t)((ticks % TICKS_PER_SEC) * (1000000UL / TICKS_PER_SEC));
     if (copyout(tv, &ktv, sizeof(ktv)) < 0) return -EFAULT;
     return 0;
 }

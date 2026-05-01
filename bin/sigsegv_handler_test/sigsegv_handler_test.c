@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 static volatile int segv_seen;
 
@@ -47,9 +48,8 @@ int main(void) {
         exit(9);
     }
     wait(&st);
-    if (st != (128 + SIGSEGV)) {
-        printf("sigsegv_handler_test: default case status=%d want=%d\n",
-               st, 128 + SIGSEGV);
+    if (!WIFSIGNALED(st) || WTERMSIG(st) != SIGSEGV) {
+        printf("sigsegv_handler_test: default case status=%d (expected SIGSEGV)\n", st);
         return 1;
     }
 

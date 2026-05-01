@@ -229,6 +229,7 @@ static int devroot_getdents(struct inode *dir, uint64_t off, void *buf,
     if ((uint64_t)reclen > n) { if (out_next) *out_next = off; return 0; }
 
     struct dirent64 *de = (struct dirent64 *)buf;
+    memset(de, 0, reclen);
     de->d_ino    = (uint64_t)(uintptr_t)ents[i].ino;
     de->d_off    = off + 1;
     de->d_reclen = (uint16_t)reclen;
@@ -300,5 +301,5 @@ void devfs_init(void) {
 
     // Mount devfs at /dev (requires tarfs "/" to already be mounted).
     mount_fs("/dev", &devroot_inode);
-    printk("devfs: mounted /dev/console\n");
+    printk("devfs: mounted /dev\n");
 }
