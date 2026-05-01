@@ -7,6 +7,9 @@
  * Caller must call inode_put(*out) when done. */
 int namei(const char *path, struct inode **out);
 
+/* Like namei, but does not follow a trailing symlink component. */
+int lnamei(const char *path, struct inode **out);
+
 /* Register a mounted filesystem root at the given path.
  * The path must already exist in the VFS tree (or be "/" for the root mount).
  * Returns 0 on success, -errno on failure. */

@@ -137,6 +137,38 @@ static const struct inode_ops console_ops = {
 // The console inode (static, never freed).
 static struct inode console_inode;
 
+/* ----------------------------------------------------------------
+ * /dev/loop — self-referential symlink, used by the symlink test
+ * to exercise ELOOP detection. readlink returns "/dev/loop", so
+ * resolution loops until namei hits SYMLINK_MAX.
+ * ---------------------------------------------------------------- */
+static int loop_readlink(struct inode *ip, char *buf, uint64_t n) {
+    (void)ip;
+    static const char target[] = "/dev/loop";
+    int len = (int)sizeof(target) - 1;  /* 9, no NUL */
+    int copy = (int)n < len ? (int)n : len;
+    for (int i = 0; i < copy; i++) buf[i] = target[i];
+    return copy;
+}
+
+static int loop_stat(struct inode *ip, struct stat *st) {
+    st->st_dev   = 2;
+    st->st_ino   = (uint64_t)(uintptr_t)ip;
+    st->st_mode  = ip->mode;
+    st->st_nlink = 1;
+    st->st_uid   = st->st_gid = 0;
+    st->st_size  = 9;       /* strlen("/dev/loop") */
+    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    return 0;
+}
+
+static const struct inode_ops loop_ops = {
+    .stat     = loop_stat,
+    .readlink = loop_readlink,
+};
+
+static struct inode loop_inode;
+
 static int devroot_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
     (void)ip; (void)off; (void)buf; (void)n;
     return -EISDIR;
@@ -167,28 +199,44 @@ static int devroot_lookup(struct inode *dir, const char *name,
         *out = inode_get(&console_inode);
         return 0;
     }
+    if (streq(name, "loop")) {
+        *out = inode_get(&loop_inode);
+        return 0;
+    }
     return -ENOENT;
 }
 static int devroot_getdents(struct inode *dir, uint64_t off, void *buf,
                              uint64_t n, uint64_t *out_next) {
     (void)dir;
-    if (off > 0) { if (out_next) *out_next = off; return 0; }
 
-    int         namelen = 8;  // strlen("console") + 1 (null terminator)
-    int         reclen  = (DIRENT64_FIXED_LEN + namelen + 7) & ~7;
+    static const struct {
+        const char *name;
+        struct inode *ino;
+        uint8_t d_type;
+    } ents[] = {
+        { "console", &console_inode, DT_CHR },
+        { "loop",    &loop_inode,    DT_UNKNOWN },  /* DT_LNK not defined */
+    };
+    int nent = (int)(sizeof(ents) / sizeof(ents[0]));
 
-    if ((uint64_t)reclen > n) { if (out_next) *out_next = 0; return 0; }
+    if (off >= (uint64_t)nent) { if (out_next) *out_next = off; return 0; }
+
+    int i = (int)off;
+    int namelen = 0;
+    while (ents[i].name[namelen]) namelen++;
+    namelen++;                                       /* include NUL */
+    int reclen = (DIRENT64_FIXED_LEN + namelen + 7) & ~7;
+    if ((uint64_t)reclen > n) { if (out_next) *out_next = off; return 0; }
 
     struct dirent64 *de = (struct dirent64 *)buf;
-    de->d_ino    = (uint64_t)(uintptr_t)&console_inode;
-    de->d_off    = 1;
+    memset(de, 0, reclen);
+    de->d_ino    = (uint64_t)(uintptr_t)ents[i].ino;
+    de->d_off    = off + 1;
     de->d_reclen = (uint16_t)reclen;
-    de->d_type   = DT_CHR;
-    de->d_name[0] = 'c'; de->d_name[1] = 'o'; de->d_name[2] = 'n';
-    de->d_name[3] = 's'; de->d_name[4] = 'o'; de->d_name[5] = 'l';
-    de->d_name[6] = 'e'; de->d_name[7] = '\0';
+    de->d_type   = ents[i].d_type;
+    for (int j = 0; j < namelen; j++) de->d_name[j] = ents[i].name[j];
 
-    if (out_next) *out_next = 1;
+    if (out_next) *out_next = off + 1;
     return reclen;
 }
 
@@ -238,7 +286,20 @@ void devfs_init(void) {
     console_inode.mount_child = 0;
     console_inode.mount_parent = 0;
 
+    loop_inode.type        = I_LNK;
+    loop_inode.mode        = S_IFLNK | 0777;
+    loop_inode.uid         = 0;
+    loop_inode.gid         = 0;
+    loop_inode.size        = 9;
+    loop_inode.mtime       = 0;
+    loop_inode.nlink       = 1;
+    loop_inode.refcnt      = 1;
+    loop_inode.ops         = &loop_ops;
+    loop_inode.fs_data     = 0;
+    loop_inode.mount_child = 0;
+    loop_inode.mount_parent = 0;
+
     // Mount devfs at /dev (requires tarfs "/" to already be mounted).
     mount_fs("/dev", &devroot_inode);
-    printk("devfs: mounted /dev/console\n");
+    printk("devfs: mounted /dev\n");
 }
