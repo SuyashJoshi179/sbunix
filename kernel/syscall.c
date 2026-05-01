@@ -168,30 +168,44 @@ static int64_t sys_read(int fd, void *buf, uint64_t len) {
 }
 
 // ---------------------------------------------------------------------------
-// path_split — split an absolute path into parent dir path + leaf name.
-// parent_buf must hold at least the length of path.
+// path_split — split an absolute or relative path into parent dir path +
+// leaf name.  parent_buf must hold at least the length of path + 2 bytes.
 // Strips trailing '/' (POSIX: "/foo/" is equivalent to "/foo"), so `path`
-// must be writable. Returns 0 on success, -EINVAL if path has no leaf
+// must be writable.  Returns 0 on success, -EINVAL if path has no leaf
 // component (e.g. "" or "/" or "////").
+//
+// Relative-path handling:
+//   "foo"      → parent ".",  leaf "foo"
+//   "foo/bar"  → parent "foo", leaf "bar"
+//   "./foo"    → parent ".",  leaf "foo"
+// Callers pass parent_buf to namei(), which resolves relative parents from
+// the process cwd — consistent with how namei() handles relative paths.
 // ---------------------------------------------------------------------------
 static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     int len = 0;
     while (path[len]) len++;
-    if (len == 0 || path[0] != '/') return -EINVAL;
+    if (len == 0) return -EINVAL;
 
     // Strip trailing slashes, but never reduce "/" itself to "".
     while (len > 1 && path[len - 1] == '/') {
         path[--len] = '\0';
     }
-    // After stripping, "/" alone has no leaf.
-    if (len == 1) return -EINVAL;
+    // After stripping, absolute "/" alone has no leaf.
+    if (len == 1 && path[0] == '/') return -EINVAL;
 
     // Find last '/'.
     int last_slash = -1;
     for (int i = len - 1; i >= 0; i--) {
         if (path[i] == '/') { last_slash = i; break; }
     }
-    if (last_slash < 0) return -EINVAL;
+
+    if (last_slash < 0) {
+        // No slash: bare relative name — parent is cwd (".").
+        parent_buf[0] = '.';
+        parent_buf[1] = '\0';
+        *leaf_out = path;
+        return 0;
+    }
 
     // parent = path[0..last_slash) — or "/" if last_slash == 0
     int plen = last_slash == 0 ? 1 : last_slash;
