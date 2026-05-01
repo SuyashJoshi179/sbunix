@@ -130,6 +130,10 @@ int link(const char *oldpath, const char *newpath) {
     return (int)ecall2(25, (long)oldpath, (long)newpath);
 }
 
+int rename(const char *oldpath, const char *newpath) {
+    return (int)ecall2(26, (long)oldpath, (long)newpath);
+}
+
 int pipe(int fds[2]) {
     return (int)syscall_ret(ecall1(23, (long)fds));
 }
