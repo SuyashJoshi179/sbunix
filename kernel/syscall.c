@@ -291,10 +291,10 @@ static int64_t sys_mkdir(const char *path) {
     struct inode *parent = 0;
     if (namei(parent_path, &parent) < 0) return -ENOENT;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
-    if (!parent->ops || !parent->ops->mkdir) { inode_put(parent); return -EROFS; }
 
-    // Check name doesn't already exist
-    if (parent->ops->lookup) {
+    // Check existence first: EEXIST takes priority over EROFS so that
+    // mkdir -p style callers on a read-only fs get the right error.
+    if (parent->ops && parent->ops->lookup) {
         struct inode *existing = 0;
         if (parent->ops->lookup(parent, leaf, &existing) == 0) {
             inode_put(existing);
@@ -302,6 +302,8 @@ static int64_t sys_mkdir(const char *path) {
             return -EEXIST;
         }
     }
+
+    if (!parent->ops || !parent->ops->mkdir) { inode_put(parent); return -EROFS; }
 
     int rc = parent->ops->mkdir(parent, leaf);
     inode_put(parent);
