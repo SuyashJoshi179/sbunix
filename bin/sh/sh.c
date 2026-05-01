@@ -7,22 +7,171 @@
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
+#include <dirent.h>
+
+#include "glob_match.h"
 
 #define MAXLINE 256
-#define MAXTOK  32
-#define MAXARG  16
+#define MAXTOK  128
+#define MAXARG  64
 
 // Token types
 enum { T_WORD, T_PIPE, T_REDIR_IN, T_REDIR_OUT, T_REDIR_APPEND, T_AND, T_END };
 
 struct token {
     int  type;
+    int  quoted;  // word came from a quoted literal — suppresses globbing
     char *val;
 };
 
 static char linebuf[MAXLINE];
 static struct token tokens[MAXTOK];
 static int ntokens;
+
+// Arena for glob-expanded path strings; reset per command line.
+static char glob_arena[8192];
+static int  glob_arena_pos;
+
+static int has_glob(const char *s) { return glob_has_meta(s); }
+
+// Insertion-sort matched names into argv slots [start, end) lexicographically.
+static void sort_range(char **argv, int start, int end) {
+    for (int i = start + 1; i < end; i++) {
+        char *cur = argv[i];
+        int j = i;
+        while (j > start && strcmp(argv[j - 1], cur) > 0) {
+            argv[j] = argv[j - 1];
+            j--;
+        }
+        argv[j] = cur;
+    }
+}
+
+// Expand a single token into one or more tokens of `out`. Returns the
+// number written. If no matches, falls back to writing the literal pattern.
+static int expand_one(const char *pat, struct token *out, int cap) {
+    if (cap <= 0) return 0;
+    if (!has_glob(pat)) {
+        out[0].type = T_WORD;
+        out[0].val = (char *)pat;
+        out[0].quoted = 0;
+        return 1;
+    }
+
+    const char *slash = strrchr(pat, '/');
+    char dirbuf[256];
+    const char *dir;
+    const char *base;
+    size_t plen;
+    if (slash) {
+        size_t dlen = slash - pat;
+        if (dlen == 0) { dirbuf[0] = '/'; dirbuf[1] = 0; }
+        else {
+            if (dlen > sizeof(dirbuf) - 1) dlen = sizeof(dirbuf) - 1;
+            memcpy(dirbuf, pat, dlen);
+            dirbuf[dlen] = 0;
+        }
+        dir = dirbuf;
+        base = slash + 1;
+        plen = (size_t)(slash - pat) + 1;
+    } else {
+        dir = ".";
+        base = pat;
+        plen = 0;
+    }
+
+    if (!has_glob(base)) {
+        out[0].type = T_WORD;
+        out[0].val = (char *)pat;
+        out[0].quoted = 0;
+        return 1;
+    }
+
+    int fd = open(dir, O_RDONLY);
+    if (fd < 0) {
+        out[0].type = T_WORD;
+        out[0].val = (char *)pat;
+        out[0].quoted = 0;
+        return 1;
+    }
+
+    int n_out = 0;
+    char buf[1024];
+    char *names[MAXARG];
+    int nnames = 0;
+    long n;
+    while ((n = getdents64(fd, buf, sizeof(buf))) > 0) {
+        long off = 0;
+        while (off < n) {
+            struct dirent64 *de = (struct dirent64 *)(buf + off);
+            off += de->d_reclen;
+            if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+                continue;
+            // Hidden files only match if pattern explicitly starts with '.'
+            if (de->d_name[0] == '.' && base[0] != '.') continue;
+            if (!glob_match(base, de->d_name)) continue;
+
+            size_t nlen = strlen(de->d_name);
+            // Build "<dir-prefix><name>" in the arena.
+            if (glob_arena_pos + plen + nlen + 1 > sizeof(glob_arena)) {
+                static int arena_warned;
+                if (!arena_warned) {
+                    const char *m = "sh: glob: too many matches, truncating\n";
+                    write(2, m, strlen(m));
+                    arena_warned = 1;
+                }
+                continue;
+            }
+            char *full = glob_arena + glob_arena_pos;
+            if (plen) memcpy(full, pat, plen);
+            memcpy(full + plen, de->d_name, nlen);
+            full[plen + nlen] = 0;
+            glob_arena_pos += plen + nlen + 1;
+
+            if (nnames < MAXARG && n_out < cap) {
+                names[nnames++] = full;
+                n_out++;
+            }
+        }
+    }
+    close(fd);
+
+    if (n_out == 0) {
+        out[0].type = T_WORD;
+        out[0].val = (char *)pat;
+        out[0].quoted = 0;
+        return 1;
+    }
+
+    sort_range(names, 0, nnames);
+    for (int i = 0; i < nnames; i++) {
+        out[i].type = T_WORD;
+        out[i].val = names[i];
+        out[i].quoted = 0;
+    }
+    return n_out;
+}
+
+static struct token expanded_tokens[MAXTOK];
+
+static void expand_globs(void) {
+    glob_arena_pos = 0;
+    int nc = 0;
+    for (int i = 0; i < ntokens && nc < MAXTOK - 1; i++) {
+        if (tokens[i].type != T_WORD || tokens[i].quoted) {
+            expanded_tokens[nc++] = tokens[i];
+            continue;
+        }
+        int written = expand_one(tokens[i].val,
+                                 &expanded_tokens[nc],
+                                 MAXTOK - 1 - nc);
+        nc += written;
+    }
+    expanded_tokens[nc].type = T_END;
+    expanded_tokens[nc].val = 0;
+    for (int i = 0; i <= nc; i++) tokens[i] = expanded_tokens[i];
+    ntokens = nc;
+}
 
 static volatile int shell_interrupted;
 
@@ -60,6 +209,9 @@ static void tokenize(void) {
         while (is_space(*p)) p++;
         if (!*p) break;
 
+        tokens[ntokens].quoted = 0;
+        tokens[ntokens].val = 0;
+
         if (*p == '|') {
             tokens[ntokens].type = T_PIPE;
             tokens[ntokens].val = 0;
@@ -85,12 +237,14 @@ static void tokenize(void) {
         } else if (*p == '"') {
             p++;
             tokens[ntokens].type = T_WORD;
+            tokens[ntokens].quoted = 1;
             tokens[ntokens].val = p;
             while (*p && *p != '"') p++;
             if (*p == '"') *p++ = 0;
             ntokens++;
         } else {
             tokens[ntokens].type = T_WORD;
+            tokens[ntokens].quoted = 0;
             tokens[ntokens].val = p;
             while (*p && !is_space(*p) && *p != '|' && *p != '<' && *p != '>') p++;
             if (*p) { *p = 0; p++; }
@@ -292,6 +446,7 @@ int main(int argc, char **argv) {
         }
 
         tokenize();
+        expand_globs();
         if (ntokens == 0) continue;
 
         // Builtins
