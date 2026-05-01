@@ -450,8 +450,12 @@ int main(int argc, char **argv) {
         if (ntokens == 0) continue;
 
         // Builtins
-        if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "exit") == 0)
-            break;
+        if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "exit") == 0) {
+            int code = 0;
+            if (ntokens > 1 && tokens[1].type == T_WORD)
+                code = parse_int(tokens[1].val);
+            _exit(code & 0xff);
+        }
 
         if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "cd") == 0) {
             char *dir = (ntokens > 1 && tokens[1].type == T_WORD) ? tokens[1].val : "/";
