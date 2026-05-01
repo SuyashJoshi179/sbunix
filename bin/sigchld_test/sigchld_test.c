@@ -1,6 +1,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 static volatile int chld_seen;
 
@@ -44,8 +45,8 @@ int main(void) {
         printf("sigchld_test: wait pid mismatch got=%d want=%d\n", got, pid);
         return 1;
     }
-    if (st != 7) {
-        printf("sigchld_test: status mismatch got=%d want=7\n", st);
+    if (!WIFEXITED(st) || WEXITSTATUS(st) != 7) {
+        printf("sigchld_test: status mismatch got=%d want exit(7)\n", st);
         return 1;
     }
 

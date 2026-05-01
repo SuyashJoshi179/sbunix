@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 static volatile int got_term;
 
@@ -66,8 +67,8 @@ int main(void) {
 
     int st = -1;
     wait(&st);
-    if (st != 42) {
-        printf("eintr_test: child status=%d want=42\n", st);
+    if (!WIFEXITED(st) || WEXITSTATUS(st) != 42) {
+        printf("eintr_test: child status=%d want exit(42)\n", st);
         return 1;
     }
 
