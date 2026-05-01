@@ -73,6 +73,8 @@ int main(void) {
         "/bin/demand_walk_test",
         "/bin/stack_overflow_test",
         "/bin/symlink_test",
+        "/bin/proc_test",
+        "/bin/ps",
         "/bin/header_test",
         "/bin/headers_compile_gate",
         "/bin/usertests",

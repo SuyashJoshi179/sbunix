@@ -36,6 +36,7 @@ typedef enum {
 
 struct pcb {
     int            pid;
+    uint64_t       generation;      // bumped on each alloc_proc; pid-recycle guard
     int            parent_pid;
     int            exit_status;
     proc_state_t   state;
@@ -89,6 +90,7 @@ void  swtch(struct context *old, struct context *new);
 
 struct pcb *current_proc(void);
 struct pcb *proc_list_head(void);  // for timer_handler sleeper scan
+struct pcb *proc_find_by_pid(int pid);
 struct pcb *alloc_proc(void);
 void        free_proc(struct pcb *p);
 
