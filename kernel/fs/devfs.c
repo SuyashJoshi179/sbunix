@@ -301,5 +301,5 @@ void devfs_init(void) {
 
     // Mount devfs at /dev (requires tarfs "/" to already be mounted).
     mount_fs("/dev", &devroot_inode);
-    printk("devfs: mounted /dev/console\n");
+    printk("devfs: mounted /dev\n");
 }
