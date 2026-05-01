@@ -66,13 +66,14 @@ struct dirent *readdir(DIR *d) {
         if (r <= 0) return 0;
     }
     struct dirent64 *de = (struct dirent64 *)(d->buf + d->buf_pos);
-    if (de->d_reclen == 0 || d->buf_pos + de->d_reclen > d->buf_len) return 0;
+    size_t hdr = (size_t)((char *)de->d_name - (char *)de);
+    if (de->d_reclen < hdr || d->buf_pos + de->d_reclen > d->buf_len) return 0;
     d->ent.d_ino = de->d_ino;
     d->ent.d_off = (int64_t)de->d_off;
     d->ent.d_reclen = de->d_reclen;
     d->ent.d_type = de->d_type;
     /* d_name in dirent64 is flexible array; copy up to 255 chars + NUL. */
-    size_t name_max = de->d_reclen - (size_t)((char *)de->d_name - (char *)de);
+    size_t name_max = de->d_reclen - hdr;
     if (name_max > sizeof(d->ent.d_name) - 1) name_max = sizeof(d->ent.d_name) - 1;
     size_t i;
     for (i = 0; i < name_max && de->d_name[i]; i++) d->ent.d_name[i] = de->d_name[i];

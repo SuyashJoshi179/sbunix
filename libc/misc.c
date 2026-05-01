@@ -25,7 +25,7 @@ int uname(struct utsname *u) {
 int gethostname(char *buf, size_t len) {
     if (!buf || len == 0) { errno = EINVAL; return -1; }
     size_t hl = strlen(hostname);
-    if (hl >= len) hl = len - 1;
+    if (hl >= len) { errno = ENAMETOOLONG; return -1; }
     memcpy(buf, hostname, hl);
     buf[hl] = '\0';
     return 0;

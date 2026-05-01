@@ -60,7 +60,7 @@ speed_t cfgetospeed(const struct termios *t) {
 }
 
 int cfsetispeed(struct termios *t, speed_t speed) {
-    if (!t) return -1;
+    if (!t) { errno = EINVAL; return -1; }
     t->c_cflag = (t->c_cflag & ~_SPEED_MASK) | ((speed & 0xFFFFu) << _SPEED_SHIFT);
     return 0;
 }

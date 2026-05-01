@@ -1,10 +1,11 @@
 #include <mntent.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 
 /* Hardcoded mount table: tarfs at / and sbfs at /data. We dont have
  * /etc/mtab on disk, so setmntent ignores its arguments and walks this
- * fixed list once. */
+ * fixed list once per opened stream. */
 
 static const struct mntent table[] = {
     { (char *)"tarfs", (char *)"/",     (char *)"tarfs", (char *)"ro,defaults", 0, 0 },
@@ -13,25 +14,36 @@ static const struct mntent table[] = {
 
 #define TABLE_LEN (int)(sizeof(table) / sizeof(table[0]))
 
-/* We use the FILE* opaquely as a cursor — caller treats it as a token. */
-static int cursor;
+/* Mirror the first two ints of `struct _FILE` (see libc/printf.c) so the
+ * pointer we hand back is also a valid FILE*: fileno() reads `fd` (-1,
+ * a benign sentinel) and fclose() inspects `flags` (no _FILE_OWNED, so
+ * it no-ops). The cursor lives after that header — one cursor per
+ * stream, so concurrent setmntent calls don't trample each other. */
+struct mntent_handle {
+    int fd;
+    int flags;
+    int cursor;
+};
 
 FILE *setmntent(const char *file, const char *mode) {
     (void)file; (void)mode;
-    cursor = 0;
-    return (FILE *)&cursor;
+    struct mntent_handle *h = malloc(sizeof(*h));
+    if (!h) return 0;
+    h->fd = -1;
+    h->flags = 0;
+    h->cursor = 0;
+    return (FILE *)h;
 }
 
 int endmntent(FILE *fp) {
-    (void)fp;
-    cursor = 0;
+    free(fp);
     return 1;
 }
 
 struct mntent *getmntent(FILE *fp) {
-    (void)fp;
-    if (cursor >= TABLE_LEN) return 0;
-    return (struct mntent *)&table[cursor++];
+    struct mntent_handle *h = (struct mntent_handle *)fp;
+    if (!h || h->cursor >= TABLE_LEN) return 0;
+    return (struct mntent *)&table[h->cursor++];
 }
 
 struct mntent *getmntent_r(FILE *fp, struct mntent *m, char *buf, int buflen) {

@@ -2,6 +2,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
@@ -13,7 +14,16 @@
 
 int chmod(const char *path, mode_t mode)        { (void)path; (void)mode; return 0; }
 int fchmod(int fd, mode_t mode)                 { (void)fd;   (void)mode; return 0; }
-mode_t umask(mode_t mask)                       { (void)mask; return 022; }
+
+/* Track umask in libc so install-style code that saves/restores via
+ * `old = umask(0); ...; umask(old);` round-trips correctly. The kernel
+ * has no permission bits to honor, so this is purely cosmetic state. */
+static mode_t current_umask = 022;
+mode_t umask(mode_t mask) {
+    mode_t old = current_umask;
+    current_umask = mask & 0777;
+    return old;
+}
 int mkfifo(const char *path, mode_t mode)       { (void)path; (void)mode; errno = ENOSYS; return -1; }
 int mknod(const char *p, mode_t m, dev_t d)     { (void)p; (void)m; (void)d; errno = ENOSYS; return -1; }
 
@@ -44,20 +54,26 @@ int openat(int dirfd, const char *path, int flags, ...) {
 
 /* Duplicate fd to the lowest free descriptor >= minfd. Loops dup() and
  * closes intermediates so we honor the F_DUPFD/F_DUPFD_CLOEXEC contract
- * even though the kernel has no fcntl-aware allocator. */
+ * even though the kernel has no fcntl-aware allocator. The held buffer
+ * is sized to minfd so the loop can occupy every descriptor below minfd
+ * without spuriously hitting EMFILE. */
 static int dup_to_minfd(int fd, int minfd) {
     if (minfd < 0) { errno = EINVAL; return -1; }
-    int held[16];
+    int *held = NULL;
+    if (minfd > 0) {
+        held = malloc((size_t)minfd * sizeof(int));
+        if (!held) { errno = ENOMEM; return -1; }
+    }
     int nheld = 0;
     int out = -1;
-    while (nheld < (int)(sizeof(held)/sizeof(held[0]))) {
+    while (nheld < minfd) {
         int n = dup(fd);
-        if (n < 0) { out = -1; break; }
+        if (n < 0) break;
         if (n >= minfd) { out = n; break; }
         held[nheld++] = n;
     }
-    if (out < 0 && nheld == (int)(sizeof(held)/sizeof(held[0]))) errno = EMFILE;
     for (int i = 0; i < nheld; i++) close(held[i]);
+    free(held);
     return out;
 }
 

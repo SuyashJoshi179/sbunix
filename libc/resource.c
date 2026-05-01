@@ -20,23 +20,16 @@ static struct rlimit limits[RLIM_NLIMITS] = {
 };
 
 int getrlimit(int resource, struct rlimit *rlim) {
-    if (resource < 0 || resource >= RLIM_NLIMITS || !rlim) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (resource < 0 || resource >= RLIM_NLIMITS) { errno = EINVAL; return -1; }
+    if (!rlim) { errno = EFAULT; return -1; }
     *rlim = limits[resource];
     return 0;
 }
 
 int setrlimit(int resource, const struct rlimit *rlim) {
-    if (resource < 0 || resource >= RLIM_NLIMITS || !rlim) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (rlim->rlim_cur > rlim->rlim_max) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (resource < 0 || resource >= RLIM_NLIMITS) { errno = EINVAL; return -1; }
+    if (!rlim) { errno = EFAULT; return -1; }
+    if (rlim->rlim_cur > rlim->rlim_max) { errno = EINVAL; return -1; }
     limits[resource] = *rlim;
     return 0;
 }
