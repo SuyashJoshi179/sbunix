@@ -595,6 +595,7 @@ static int proc_root_getdents(struct inode *dir, uint64_t off, void *buf,
 
     int idx = (int)(off - (uint64_t)nstat);
     int seen = 0;
+    uint64_t irq_state = procfs_pool_irq_save();
     for (struct pcb *p = proc_list_head(); p; p = p->next) {
         if (p->state == PROC_UNUSED) continue;
         if (seen == idx) {
@@ -603,7 +604,11 @@ static int proc_root_getdents(struct inode *dir, uint64_t off, void *buf,
                                      (uint64_t)p->pid);
             name[namelen++] = '\0';
             int reclen = (DIRENT64_FIXED_LEN + namelen + 7) & ~7;
-            if ((uint64_t)reclen > n) { if (out_next) *out_next = off; return 0; }
+            if ((uint64_t)reclen > n) {
+                procfs_pool_irq_restore(irq_state);
+                if (out_next) *out_next = off;
+                return 0;
+            }
 
             struct dirent64 *de = (struct dirent64 *)buf;
             de->d_ino = (uint64_t)(uintptr_t)p;
@@ -612,11 +617,13 @@ static int proc_root_getdents(struct inode *dir, uint64_t off, void *buf,
             de->d_type = DT_DIR;
             for (int j = 0; j < namelen; j++) de->d_name[j] = name[j];
 
+            procfs_pool_irq_restore(irq_state);
             if (out_next) *out_next = off + 1;
             return reclen;
         }
         seen++;
     }
+    procfs_pool_irq_restore(irq_state);
 
     if (out_next) *out_next = off;
     return 0;
