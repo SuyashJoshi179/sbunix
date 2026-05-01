@@ -3,7 +3,9 @@
 
 /* POSIX wait-status word layout:
  *   bits 0-6  : termsig (0 if normal exit)
- *   bit  7    : core-dump flag (always 0 on SBUnix)
+ *   bit  7    : core-dump flag — kernel never sets this today,
+ *               but WCOREDUMP reads it per POSIX so adding core
+ *               dumps later is a kernel-side change only
  *   bits 8-15 : exit code (only valid if termsig == 0)
  */
 
