@@ -38,10 +38,19 @@ struct pcb *current_proc(void)   { return current; }
 struct pcb *proc_list_head(void) { return procs;   }
 
 struct pcb *proc_find_by_pid(int pid) {
+    uint64_t sstatus = read_sstatus();
+    struct pcb *found = 0;
+
+    write_sstatus(sstatus & ~SSTATUS_SIE);
     for (struct pcb *p = proc_list_head(); p; p = p->next) {
-        if (p->pid == pid && p->state != PROC_UNUSED) return p;
+        if (p->pid == pid && p->state != PROC_UNUSED) {
+            found = p;
+            break;
+        }
     }
-    return 0;
+    write_sstatus(read_sstatus() | (sstatus & SSTATUS_SIE));
+
+    return found;
 }
 
 static void proc_unlink(struct pcb *victim) {

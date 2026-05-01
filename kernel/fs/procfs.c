@@ -27,22 +27,43 @@ struct proc_node {
 };
 
 #define PROC_INODE_POOL 64
+#define SSTATUS_SIE (1UL << 1)
 static struct proc_node pool[PROC_INODE_POOL];
 
+static uint64_t procfs_pool_irq_save(void) {
+    uint64_t sstatus;
+
+    __asm__ volatile("csrr %0, sstatus" : "=r"(sstatus));
+    __asm__ volatile("csrc sstatus, %0" :: "r"(SSTATUS_SIE) : "memory");
+    return sstatus;
+}
+
+static void procfs_pool_irq_restore(uint64_t sstatus) {
+    if (sstatus & SSTATUS_SIE)
+        __asm__ volatile("csrs sstatus, %0" :: "r"(SSTATUS_SIE) : "memory");
+}
+
 static struct proc_node *pool_alloc(void) {
+    uint64_t sstatus = procfs_pool_irq_save();
+
     for (int i = 0; i < PROC_INODE_POOL; i++) {
         if (!pool[i].in_use) {
             struct proc_node *pn = &pool[i];
             for (uint64_t b = 0; b < sizeof(*pn); b++) ((char *)pn)[b] = 0;
             pn->in_use = 1;
+            procfs_pool_irq_restore(sstatus);
             return pn;
         }
     }
+
+    procfs_pool_irq_restore(sstatus);
     return 0;
 }
 
 static void pool_free(struct proc_node *pn) {
+    uint64_t sstatus = procfs_pool_irq_save();
     pn->in_use = 0;
+    procfs_pool_irq_restore(sstatus);
 }
 
 static int piddir_read(struct inode *ip, uint64_t off, void *buf, uint64_t n);
@@ -386,23 +407,39 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
     struct proc_node *pn = (struct proc_node *)ip->fs_data;
     if (!pn) return -ESRCH;
 
-    struct pcb *pcb = proc_find_by_pid(pn->pid);
-    if (!pcb || pcb->generation != pn->generation) return -ESRCH;
-
     char tmp[512];
     int total;
-    switch (pn->kind) {
-    case PK_STATUS:  total = prod_status(tmp, (int)sizeof(tmp), pcb); break;
-    case PK_CMDLINE: total = prod_cmdline(tmp, (int)sizeof(tmp), pcb); break;
-    case PK_STAT:    total = prod_stat(tmp, (int)sizeof(tmp), pcb); break;
-    default:         return -ENOENT;
+    int ret = 0;
+    int irq_state = irq_disable_save();
+    struct pcb *pcb = proc_find_by_pid(pn->pid);
+    if (!pcb || pcb->generation != pn->generation) {
+        irq_restore(irq_state);
+        return -ESRCH;
     }
+
+    switch (pn->kind) {
+    case PK_STATUS:
+        total = prod_status(tmp, (int)sizeof(tmp), pcb);
+        break;
+    case PK_CMDLINE:
+        total = prod_cmdline(tmp, (int)sizeof(tmp), pcb);
+        break;
+    case PK_STAT:
+        total = prod_stat(tmp, (int)sizeof(tmp), pcb);
+        break;
+    default:
+        irq_restore(irq_state);
+        return -ENOENT;
+    }
+    irq_restore(irq_state);
+
     if (off >= (uint64_t)total) return 0;
     int copy = total - (int)off;
     if ((int)n < copy) copy = (int)n;
     char *dst = (char *)buf;
     for (int i = 0; i < copy; i++) dst[i] = tmp[(int)off + i];
-    return copy;
+    ret = copy;
+    return ret;
 }
 
 #define DEFINE_STATIC_FILE(NAME, READFN)                                       \
@@ -437,13 +474,25 @@ static int self_readlink(struct inode *ip, char *buf, uint64_t n) {
     return copy;
 }
 
+static uint64_t self_target_len(void) {
+    static const char prefix[] = "/proc/";
+    struct pcb *p = current_proc();
+
+    if (!p) {
+        /* Conservative upper bound for "/proc/" + max uint64 decimal PID. */
+        return (uint64_t)((sizeof(prefix) - 1) + 20);
+    }
+
+    return (uint64_t)((sizeof(prefix) - 1) + dec_digits_u64((uint64_t)p->pid));
+}
+
 static int self_stat(struct inode *ip, struct stat *st) {
     st->st_dev   = 3;
     st->st_ino   = (uint64_t)(uintptr_t)ip;
     st->st_mode  = ip->mode;
     st->st_nlink = 1;
     st->st_uid = st->st_gid = 0;
-    st->st_size = 0;
+    st->st_size = self_target_len();
     st->st_atime = st->st_mtime = st->st_ctime = 0;
     return 0;
 }
