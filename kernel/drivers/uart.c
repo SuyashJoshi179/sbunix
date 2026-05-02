@@ -114,18 +114,25 @@ void uart_rx_isr(void) {
         struct termios tio;
         termios_get(&tio);
 
-        if ((tio.c_lflag & ISIG) && c == (char)tio.c_cc[VINTR]) {
-            edit_len = 0;
-            if (tio.c_lflag & ECHO) {
-                write_char('^');
-                write_char('C');
-                write_char('\r');
-                write_char('\n');
+        if (tio.c_lflag & ISIG) {
+            int sigchar = 0;
+            char ech = 0;
+            if (c == (char)tio.c_cc[VINTR])      { sigchar = SIGINT;  ech = 'C'; }
+            else if (c == (char)tio.c_cc[VQUIT]) { sigchar = SIGQUIT; ech = '\\'; }
+            else if (c == (char)tio.c_cc[VSUSP]) { sigchar = SIGTSTP; ech = 'Z'; }
+            if (sigchar) {
+                edit_len = 0;
+                if (tio.c_lflag & ECHO) {
+                    write_char('^');
+                    write_char(ech);
+                    write_char('\r');
+                    write_char('\n');
+                }
+                int pgid = termios_get_fg_pgid();
+                if (pgid > 0)
+                    send_signal_pgrp(pgid, sigchar);
+                continue;
             }
-            int fg = termios_get_fg_pid();
-            if (fg > 0)
-                send_signal_by_pid(fg, SIGINT);
-            continue;
         }
 
         if ((tio.c_iflag & ICRNL) && c == '\r')
