@@ -56,6 +56,9 @@ static void sbfs_op_release(struct inode *);
 static int  sbfs_op_create(struct inode *, const char *, struct inode **);
 static int  sbfs_op_mkdir (struct inode *, const char *);
 static int  sbfs_op_unlink(struct inode *, const char *);
+static int  sbfs_op_link  (struct inode *, struct inode *, const char *);
+static int  sbfs_op_rename(struct inode *, const char *,
+                           struct inode *, const char *);
 
 /* Internal helpers used before their definition. */
 static void sbfs_itrunc(struct sbfs_inode *si);
@@ -71,6 +74,8 @@ static const struct inode_ops sbfs_iops = {
     .create   = sbfs_op_create,
     .mkdir    = sbfs_op_mkdir,
     .unlink   = sbfs_op_unlink,
+    .link     = sbfs_op_link,
+    .rename   = sbfs_op_rename,
 };
 
 /* -----------------------------------------------------------------------
@@ -684,6 +689,189 @@ static int sbfs_op_mkdir(struct inode *parent, const char *name) {
 static int sbfs_op_unlink(struct inode *parent, const char *name) {
     begin_op();
     int rc = sbfs_unlink(parent, name);
+    end_op();
+    return rc;
+}
+
+/* -----------------------------------------------------------------------
+ * sbfs_link — add a directory entry pointing to an existing inode.
+ *
+ * Caller (sys_link) has already verified:
+ *   - target is not a directory  (POSIX: hard link to dir → -EPERM)
+ *   - target is in the same fs as parent  (-EXDEV otherwise)
+ *   - `name` does not already exist in parent  (-EEXIST otherwise)
+ *
+ * On success the target's nlink is incremented and the in-memory +
+ * on-disk inode are updated.
+ * ----------------------------------------------------------------------- */
+static int sbfs_link(struct inode *parent, struct inode *target, const char *name) {
+    struct sbfs_inode *si = (struct sbfs_inode *)target;
+
+    int rc = sbfs_dirlink(parent, name, si->inum);
+    if (rc < 0) return rc;
+
+    si->d.nlink++;
+    si->vnode.nlink++;
+    si->dirty = 1;
+    sbfs_iupdate(si);
+    return 0;
+}
+
+static int sbfs_op_link(struct inode *parent, struct inode *target, const char *name) {
+    begin_op();
+    int rc = sbfs_link(parent, target, name);
+    end_op();
+    return rc;
+}
+
+/* -----------------------------------------------------------------------
+ * sbfs_rename — atomically move (old_p, old_name) to (new_p, new_name).
+ *
+ * Caller (sys_rename) has already verified that both parents are sbfs
+ * directories (same filesystem). This function handles all the messy
+ * POSIX semantics:
+ *   - same-path no-op
+ *   - replacing an existing newpath (file→file or empty-dir→empty-dir)
+ *   - rejecting cross-type replacement (-EISDIR / -ENOTDIR)
+ *   - rejecting non-empty target (-ENOTEMPTY)
+ *   - cross-parent directory move: fix ".." and adjust nlinks on both parents
+ *   - loop prevention: cannot rename a directory into its own subtree
+ *
+ * Must be called inside begin_op/end_op.
+ * ----------------------------------------------------------------------- */
+static int sbfs_rename(struct inode *old_p, const char *old_name,
+                       struct inode *new_p, const char *new_name) {
+    /* 1. Source must exist. */
+    struct inode *src = sbfs_dirlookup(old_p, old_name);
+    if (!src) return -ENOENT;
+
+    /* 2. Same parent + same name = POSIX no-op. */
+    if (old_p == new_p && strncmp(old_name, new_name, SBFS_DIRSIZ) == 0) {
+        inode_put(src);
+        return 0;
+    }
+
+    /* 3. Look up dst (may or may not exist). */
+    struct inode *dst = sbfs_dirlookup(new_p, new_name);
+
+    /* 4. Loop prevention: if src is a directory, new_p must not be src
+     *    or any descendant of src. */
+    if (src->type == I_DIR && old_p != new_p) {
+        if (new_p == src) {
+            if (dst) inode_put(dst);
+            inode_put(src);
+            return -EINVAL;
+        }
+        struct inode *walk = sbfs_dirlookup(new_p, "..");
+        while (walk) {
+            if (walk == src) {
+                inode_put(walk);
+                if (dst) inode_put(dst);
+                inode_put(src);
+                return -EINVAL;
+            }
+            struct inode *parent = sbfs_dirlookup(walk, "..");
+            if (parent == walk) {
+                /* root: ".." points to itself — done walking. */
+                inode_put(parent);
+                inode_put(walk);
+                break;
+            }
+            inode_put(walk);
+            walk = parent;
+        }
+    }
+
+    /* 5. If dst exists, validate replace semantics and remove it. */
+    if (dst) {
+        if (src->type == I_DIR && dst->type != I_DIR) {
+            inode_put(dst); inode_put(src);
+            return -ENOTDIR;
+        }
+        if (src->type != I_DIR && dst->type == I_DIR) {
+            inode_put(dst); inode_put(src);
+            return -EISDIR;
+        }
+        if (dst->type == I_DIR &&
+            !dir_is_empty((struct sbfs_inode *)dst)) {
+            inode_put(dst); inode_put(src);
+            return -ENOTEMPTY;
+        }
+        /* Release our ref before sbfs_unlink (which takes its own ref). */
+        inode_put(dst);
+        int rc = sbfs_unlink(new_p, new_name);
+        if (rc < 0) {
+            inode_put(src);
+            return rc;
+        }
+    }
+
+    /* 6. Add new dirent, then remove old. */
+    struct sbfs_inode *src_si = (struct sbfs_inode *)src;
+    int rc = sbfs_dirlink(new_p, new_name, src_si->inum);
+    if (rc < 0) {
+        inode_put(src);
+        return rc;
+    }
+    rc = sbfs_dirunlink(old_p, old_name);
+    if (rc < 0) {
+        int rollback_rc = sbfs_dirunlink(new_p, new_name);
+        if (rollback_rc < 0) {
+            printk("sbfs: rename rollback failed (%d) after unlink error %d\n",
+                   rollback_rc, rc);
+        }
+        inode_put(src);
+        return rc;
+    }
+
+    /* 7. Cross-parent directory move: fix src's ".." and adjust nlinks.
+     *
+     * Order matters here: update ".." first and check both dir ops, then
+     * touch parent nlinks only on success. If we adjusted nlinks first
+     * and ".." rewriting failed (e.g. ENOSPC/EIO during dirlink), the
+     * filesystem would be permanently inconsistent — moved dir with no
+     * (or stale) ".." entry plus mis-counted parent nlinks.
+     */
+    if (src->type == I_DIR && old_p != new_p) {
+        struct sbfs_inode *new_p_si = (struct sbfs_inode *)new_p;
+        struct sbfs_inode *old_p_si = (struct sbfs_inode *)old_p;
+
+        int dr = sbfs_dirunlink(src, "..");
+        if (dr < 0) {
+            /* Every directory must have ".." — this should be unreachable,
+             * but propagate rather than silently corrupting nlink. */
+            inode_put(src);
+            return dr;
+        }
+        int dl = sbfs_dirlink(src, "..", new_p_si->inum);
+        if (dl < 0) {
+            /* Best-effort recovery: put the old ".." back so the dir is
+             * not left with no parent reference at all. */
+            (void)sbfs_dirlink(src, "..", old_p_si->inum);
+            inode_put(src);
+            return dl;
+        }
+
+        /* ".." update committed — now safe to adjust parent nlinks. */
+        old_p_si->d.nlink--;
+        old_p_si->vnode.nlink--;
+        old_p_si->dirty = 1;
+        sbfs_iupdate(old_p_si);
+
+        new_p_si->d.nlink++;
+        new_p_si->vnode.nlink++;
+        new_p_si->dirty = 1;
+        sbfs_iupdate(new_p_si);
+    }
+
+    inode_put(src);
+    return 0;
+}
+
+static int sbfs_op_rename(struct inode *old_p, const char *old_name,
+                          struct inode *new_p, const char *new_name) {
+    begin_op();
+    int rc = sbfs_rename(old_p, old_name, new_p, new_name);
     end_op();
     return rc;
 }

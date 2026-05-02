@@ -190,7 +190,7 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     while (len > 1 && path[len - 1] == '/') {
         path[--len] = '\0';
     }
-    // After stripping, absolute "/" alone has no leaf.
+    // After stripping, "/" alone has no leaf.
     if (len == 1 && path[0] == '/') return -EINVAL;
 
     // Find last '/'.
@@ -331,6 +331,153 @@ static int64_t sys_unlink(const char *path) {
     int rc = parent->ops->unlink(parent, leaf);
     inode_put(parent);
     return rc;
+}
+
+// ---------------------------------------------------------------------------
+// sys_link — create newpath as a hard link to oldpath.
+//
+// POSIX rules implemented:
+//   - oldpath must exist                              → -ENOENT
+//   - target must not be a directory                  → -EPERM
+//   - newpath's parent must be a directory            → -ENOTDIR
+//   - target and newpath must be on the same fs      → -EXDEV
+//   - newpath must not already exist                  → -EEXIST
+//   - target's filesystem must support link           → -EROFS
+// ---------------------------------------------------------------------------
+static int64_t sys_link(const char *oldpath, const char *newpath) {
+    char kold[PATH_MAX_LOCAL], knew[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(oldpath, kold, sizeof(kold));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(newpath, knew, sizeof(knew));
+    if (rc < 0) return rc;
+
+    // Resolve target.
+    struct inode *target = 0;
+    if (namei(kold, &target) < 0) return -ENOENT;
+    if (target->type == I_DIR) {
+        inode_put(target);
+        return -EPERM;
+    }
+
+    // Resolve parent of newpath.
+    char parent_path[PATH_MAX_LOCAL];
+    const char *leaf = 0;
+    if (path_split(knew, parent_path, &leaf) < 0) {
+        inode_put(target);
+        return -EINVAL;
+    }
+    if (!leaf || !leaf[0]) {
+        inode_put(target);
+        return -EINVAL;
+    }
+
+    struct inode *parent = 0;
+    if (namei(parent_path, &parent) < 0) {
+        inode_put(target);
+        return -ENOENT;
+    }
+    if (parent->type != I_DIR) {
+        inode_put(parent);
+        inode_put(target);
+        return -ENOTDIR;
+    }
+
+    // Cross-filesystem hard link is meaningless: a dirent stores an inum
+    // that is only valid in its own filesystem's inode table.
+    if (parent->ops != target->ops) {
+        inode_put(parent);
+        inode_put(target);
+        return -EXDEV;
+    }
+
+    if (!parent->ops || !parent->ops->link) {
+        inode_put(parent);
+        inode_put(target);
+        return -EROFS;
+    }
+
+    // EEXIST takes priority over later checks.
+    if (parent->ops->lookup) {
+        struct inode *existing = 0;
+        if (parent->ops->lookup(parent, leaf, &existing) == 0) {
+            inode_put(existing);
+            inode_put(parent);
+            inode_put(target);
+            return -EEXIST;
+        }
+    }
+
+    int r = parent->ops->link(parent, target, leaf);
+    inode_put(parent);
+    inode_put(target);
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// sys_rename — atomically move oldpath to newpath.
+//
+// POSIX rules implemented:
+//   - oldpath must exist                              → -ENOENT
+//   - both parents must be directories                → -ENOTDIR
+//   - both paths must be on the same fs              → -EXDEV
+//   - newpath's filesystem must support rename        → -EROFS
+//   - rename of dir into its own subtree              → -EINVAL  (loop)
+//   - file replacing dir / dir replacing file         → -EISDIR / -ENOTDIR
+//   - non-empty dir target                            → -ENOTEMPTY
+//   - same path same name                             → 0  (no-op)
+// ---------------------------------------------------------------------------
+static int64_t sys_rename(const char *oldpath, const char *newpath) {
+    char kold[PATH_MAX_LOCAL], knew[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(oldpath, kold, sizeof(kold));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(newpath, knew, sizeof(knew));
+    if (rc < 0) return rc;
+
+    // Split both paths into (parent, leaf).
+    char old_parent_buf[PATH_MAX_LOCAL];
+    char new_parent_buf[PATH_MAX_LOCAL];
+    const char *old_leaf = 0, *new_leaf = 0;
+    if (path_split(kold, old_parent_buf, &old_leaf) < 0) return -EINVAL;
+    if (path_split(knew, new_parent_buf, &new_leaf) < 0) return -EINVAL;
+    if (!old_leaf || !old_leaf[0]) return -EINVAL;
+    if (!new_leaf || !new_leaf[0]) return -EINVAL;
+
+    // Resolve both parents.
+    struct inode *old_p = 0;
+    if (namei(old_parent_buf, &old_p) < 0) return -ENOENT;
+    if (old_p->type != I_DIR) {
+        inode_put(old_p);
+        return -ENOTDIR;
+    }
+
+    struct inode *new_p = 0;
+    if (namei(new_parent_buf, &new_p) < 0) {
+        inode_put(old_p);
+        return -ENOENT;
+    }
+    if (new_p->type != I_DIR) {
+        inode_put(new_p);
+        inode_put(old_p);
+        return -ENOTDIR;
+    }
+
+    // Cross-filesystem rename is impossible (different inum spaces).
+    if (old_p->ops != new_p->ops) {
+        inode_put(new_p);
+        inode_put(old_p);
+        return -EXDEV;
+    }
+
+    if (!new_p->ops || !new_p->ops->rename) {
+        inode_put(new_p);
+        inode_put(old_p);
+        return -EROFS;
+    }
+
+    int r = new_p->ops->rename(old_p, old_leaf, new_p, new_leaf);
+    inode_put(new_p);
+    inode_put(old_p);
+    return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -1113,6 +1260,14 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_unlink:
             return sys_unlink((const char *)trapframe[TF_A0]);
+
+        case SYS_link:
+            return sys_link((const char *)trapframe[TF_A0],
+                            (const char *)trapframe[TF_A1]);
+
+        case SYS_rename:
+            return sys_rename((const char *)trapframe[TF_A0],
+                              (const char *)trapframe[TF_A1]);
 
         case SYS_pipe:
             return sys_pipe((int *)trapframe[TF_A0]);

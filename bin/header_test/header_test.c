@@ -171,8 +171,8 @@ int main(void) {
             fclose(fp);
         }
 
-        /* rename of nonexistent source fails */
-        CHECK(rename("/data/no_such.x", dst) == -1);
+        /* rename of nonexistent source fails (libc returns -errno) */
+        CHECK(rename("/data/no_such.x", dst) < 0);
 
         remove(dst);
     }

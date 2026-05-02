@@ -30,6 +30,10 @@
 #define SYS_mkdir      21
 #define SYS_unlink     22
 
+// Phase 10 prep: hard link + rename
+#define SYS_link       25  // (oldpath, newpath)
+#define SYS_rename     26  // (oldpath, newpath)
+
 // Phase 6: pipes and exec with argv
 #define SYS_pipe       23
 #define SYS_execv      24
