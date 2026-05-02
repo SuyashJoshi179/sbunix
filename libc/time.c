@@ -1,6 +1,7 @@
 #include <time.h>
 #include <sys/times.h>
 #include <stdint.h>
+#include "syscall_priv.h"
 
 static long ecall2(long num, long a0, long a1) {
     register long _a7 asm("a7") = num;
@@ -11,15 +12,15 @@ static long ecall2(long num, long a0, long a1) {
 }
 
 int clock_gettime(int clockid, struct timespec *ts) {
-    return (int)ecall2(80, (long)clockid, (long)ts);
+    return (int)syscall_ret(ecall2(80, (long)clockid, (long)ts));
 }
 
 int gettimeofday(struct timeval *tv, void *tz) {
-    return (int)ecall2(81, (long)tv, (long)tz);
+    return (int)syscall_ret(ecall2(81, (long)tv, (long)tz));
 }
 
 int nanosleep(const struct timespec *req, struct timespec *rem) {
-    return (int)ecall2(82, (long)req, (long)rem);
+    return (int)syscall_ret(ecall2(82, (long)req, (long)rem));
 }
 
 time_t time(time_t *tloc) {
@@ -50,7 +51,7 @@ clock_t times(struct tms *buf) {
     }
     struct timespec ts;
     int rc = clock_gettime(1 /* CLOCK_MONOTONIC */, &ts);
-    if (rc < 0) return (clock_t)rc;
+    if (rc < 0) return (clock_t)-1;
     return (clock_t)(ts.tv_sec * CLOCKS_PER_SEC
                    + ts.tv_nsec * CLOCKS_PER_SEC / 1000000000L);
 }

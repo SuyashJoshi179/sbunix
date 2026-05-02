@@ -34,8 +34,8 @@ int main(void) {
 
     check(munmap(m + PAGE_SZ, 2 * PAGE_SZ) == 0, "munmap middle two pages");
 
-    check(munmap(m + PAGE_SZ, PAGE_SZ) == -EINVAL, "double munmap middle returns -EINVAL");
-    check(munmap(m + 1, PAGE_SZ) == -EINVAL, "unaligned munmap returns -EINVAL");
+    check(munmap(m + PAGE_SZ, PAGE_SZ) == -1 && errno == EINVAL, "double munmap middle returns -EINVAL");
+    check(munmap(m + 1, PAGE_SZ) == -1 && errno == EINVAL, "unaligned munmap returns -EINVAL");
 
     char *m2 = mmap(0, 2 * PAGE_SZ, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     check((long)m2 > 0, "mmap after middle hole split");

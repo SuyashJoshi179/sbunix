@@ -198,6 +198,37 @@ char *fgets(char *buf, int n, FILE *stream) {
     return buf;
 }
 
+long getline(char **lineptr, unsigned long *n, FILE *stream) {
+    if (!lineptr || !n || !stream) return -1;
+    if (!*lineptr || *n == 0) {
+        unsigned long cap = 128;
+        char *p = realloc(*lineptr, cap);
+        if (!p) return -1;
+        *lineptr = p;
+        *n = cap;
+    }
+    unsigned long len = 0;
+    for (;;) {
+        int c = fgetc(stream);
+        if (c == EOF) {
+            if (len == 0) return -1;
+            break;
+        }
+        if (len + 1 >= *n) {
+            unsigned long cap = *n * 2;
+            if (cap < *n) return -1;
+            char *p = realloc(*lineptr, cap);
+            if (!p) return -1;
+            *lineptr = p;
+            *n = cap;
+        }
+        (*lineptr)[len++] = (char)c;
+        if (c == '\n') break;
+    }
+    (*lineptr)[len] = '\0';
+    return (long)len;
+}
+
 int fflush(FILE *stream) { (void)stream; return 0; }
 int fileno(FILE *stream) { return stream ? stream->fd : -1; }
 int feof(FILE *stream)   { return stream ? (stream->flags & _FILE_EOF) != 0 : 0; }

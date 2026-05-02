@@ -1,10 +1,12 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
 #include <stdint.h>
 #include <termios.h>
 #include <errno.h>
+#include "syscall_priv.h"
 
 // Generic ecall helpers (register-allocated per RISC-V calling convention).
 static long ecall1(long num, long a0) {
@@ -32,43 +34,43 @@ static long ecall3(long num, long a0, long a1, long a2) {
 }
 
 long write(int fd, const void *buf, long len) {
-    return ecall3(2, (long)fd, (long)buf, len);
+    return syscall_ret(ecall3(2, (long)fd, (long)buf, len));
 }
 
 long read(int fd, void *buf, long len) {
-    return ecall3(5, (long)fd, (long)buf, len);
+    return syscall_ret(ecall3(5, (long)fd, (long)buf, len));
 }
 
 int open(const char *path, int flags) {
-    return (int)ecall2(4, (long)path, (long)flags);
+    return (int)syscall_ret(ecall2(4, (long)path, (long)flags));
 }
 
 int close(int fd) {
-    return (int)ecall1(6, (long)fd);
+    return (int)syscall_ret(ecall1(6, (long)fd));
 }
 
 int getpid(void) {
-    return (int)ecall3(8, 0, 0, 0);
+    return (int)syscall_ret(ecall3(8, 0, 0, 0));
 }
 
 int fork(void) {
-    return (int)ecall3(9, 0, 0, 0);
+    return (int)syscall_ret(ecall3(9, 0, 0, 0));
 }
 
 int wait(int *status) {
-    return (int)ecall3(7, (long)status, 0, 0);
+    return (int)syscall_ret(ecall3(7, (long)status, 0, 0));
 }
 
 int getppid(void) {
-    return (int)ecall3(11, 0, 0, 0);
+    return (int)syscall_ret(ecall3(11, 0, 0, 0));
 }
 
 int sched_yield(void) {
-    return (int)ecall3(12, 0, 0, 0);
+    return (int)syscall_ret(ecall3(12, 0, 0, 0));
 }
 
 int sleep_ms(unsigned long ms) {
-    return (int)ecall3(13, (long)ms, 0, 0);
+    return (int)syscall_ret(ecall3(13, (long)ms, 0, 0));
 }
 
 int usleep(unsigned long us) {
@@ -76,44 +78,44 @@ int usleep(unsigned long us) {
 }
 
 int dup(int fd) {
-    return (int)ecall1(14, (long)fd);
+    return (int)syscall_ret(ecall1(14, (long)fd));
 }
 
 int dup2(int oldfd, int newfd) {
-    return (int)ecall2(15, (long)oldfd, (long)newfd);
+    return (int)syscall_ret(ecall2(15, (long)oldfd, (long)newfd));
 }
 
 long lseek(int fd, long off, int whence) {
-    return ecall3(16, (long)fd, off, (long)whence);
+    return syscall_ret(ecall3(16, (long)fd, off, (long)whence));
 }
 
 int fstat(int fd, struct stat *st) {
-    return (int)ecall2(17, (long)fd, (long)st);
+    return (int)syscall_ret(ecall2(17, (long)fd, (long)st));
 }
 
 int lstat(const char *path, struct stat *st) {
-    return (int)ecall2(113, (long)path, (long)st);
+    return (int)syscall_ret(ecall2(113, (long)path, (long)st));
 }
 
 long getdents64(int fd, void *buf, long n) {
-    return ecall3(18, (long)fd, (long)buf, n);
+    return syscall_ret(ecall3(18, (long)fd, (long)buf, n));
 }
 
 int chdir(const char *path) {
-    return (int)ecall1(19, (long)path);
+    return (int)syscall_ret(ecall1(19, (long)path));
 }
 
 long getcwd(char *buf, long n) {
-    return ecall2(20, (long)buf, n);
+    return syscall_ret(ecall2(20, (long)buf, n));
 }
 
 int mkdir(const char *path, int mode) {
     (void)mode;
-    return (int)ecall1(21, (long)path);
+    return (int)syscall_ret(ecall1(21, (long)path));
 }
 
 int unlink(const char *path) {
-    return (int)ecall1(22, (long)path);
+    return (int)syscall_ret(ecall1(22, (long)path));
 }
 
 int link(const char *oldpath, const char *newpath) {
@@ -125,15 +127,20 @@ int rename(const char *oldpath, const char *newpath) {
 }
 
 int pipe(int fds[2]) {
-    return (int)ecall1(23, (long)fds);
+    return (int)syscall_ret(ecall1(23, (long)fds));
 }
 
 int execv(const char *path, char *const argv[]) {
-    return (int)ecall2(24, (long)path, (long)argv);
+    return (int)syscall_ret(ecall2(24, (long)path, (long)argv));
 }
 
 void *sbrk(long incr) {
-    return (void *)ecall1(70, incr);
+    long r = ecall1(70, incr);
+    if (r < 0 && r > -4096) {
+        errno = (int)(-r);
+        return (void *)-1;
+    }
+    return (void *)r;
 }
 
 static long ecall6(long num, long a0, long a1, long a2, long a3, long a4, long a5) {
@@ -152,15 +159,20 @@ static long ecall6(long num, long a0, long a1, long a2, long a3, long a4, long a
 }
 
 void *mmap(void *addr, long len, int prot, int flags, int fd, long off) {
-    return (void *)ecall6(71, (long)addr, len, (long)prot, (long)flags, (long)fd, off);
+    long r = ecall6(71, (long)addr, len, (long)prot, (long)flags, (long)fd, off);
+    if (r < 0 && r > -4096) {
+        errno = (int)(-r);
+        return MAP_FAILED;
+    }
+    return (void *)r;
 }
 
 int munmap(void *addr, long len) {
-    return (int)ecall2(72, (long)addr, len);
+    return (int)syscall_ret(ecall2(72, (long)addr, len));
 }
 
 int ioctl(int fd, int cmd, void *arg) {
-    return (int)ecall3(110, (long)fd, (long)cmd, (long)arg);
+    return (int)syscall_ret(ecall3(110, (long)fd, (long)cmd, (long)arg));
 }
 long meminfo(void) {
     return ecall1(111, 0);
@@ -174,11 +186,12 @@ int isatty(int fd) {
 
 int access(const char *path, int mode) {
     (void)path; (void)mode;
-    return -ENOSYS;
+    errno = ENOSYS;
+    return -1;
 }
 
 long readlink(const char *path, char *buf, long n) {
-    return ecall3(112, (long)path, (long)buf, n);
+    return syscall_ret(ecall3(112, (long)path, (long)buf, n));
 }
 
 /* No SYS_waitpid in the kernel. Block on wait() and surface what we get;
@@ -191,5 +204,6 @@ int waitpid(int pid, int *status, int options) {
     int got = wait(status);
     if (pid == -1 || pid == 0) return got;
     if (got == pid || got < 0) return got;
-    return -ECHILD;
+    errno = ECHILD;
+    return -1;
 }

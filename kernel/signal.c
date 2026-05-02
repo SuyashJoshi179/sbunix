@@ -78,7 +78,7 @@ static void build_sigframe_and_redirect(struct pcb *p, uint64_t *tf,
     /* Sanity: frame must be in user VA range. */
     if (frame_va < PAGE_SIZE || frame_va + sizeof(struct sigframe) > KVMEM_OFFSET) {
         p->delivering_segv = 1;
-        proc_exit_current(128 + SIGSEGV);
+        proc_exit_current(SIGSEGV & 0x7f);
     }
 
     /* Build the frame in kernel memory, then copyout. */
@@ -91,7 +91,7 @@ static void build_sigframe_and_redirect(struct pcb *p, uint64_t *tf,
     /* Write frame to user stack — faults in lazy/COW pages as needed. */
     if (copyout((void *)frame_va, &fr, sizeof(fr)) < 0) {
         p->delivering_segv = 1;
-        proc_exit_current(128 + SIGSEGV);
+        proc_exit_current(SIGSEGV & 0x7f);
     }
 
     /* Block current signal + handler's extra mask for the handler's duration. */
@@ -131,7 +131,7 @@ void check_signals(uint64_t *trapframe) {
 
     /* SIGKILL/SIGSTOP: always kill. */
     if (sig == SIGKILL || sig == SIGSTOP) {
-        proc_exit_current(128 + sig);
+        proc_exit_current(sig & 0x7f);
     }
 
     sighandler_t h = p->sig_handlers[sig].sa_handler;
@@ -144,7 +144,7 @@ void check_signals(uint64_t *trapframe) {
         if (sig == SIGSEGV && p->delivering_segv) {
             /* Recursive SIGSEGV — just die. */
         }
-        proc_exit_current(128 + sig);
+        proc_exit_current(sig & 0x7f);
     }
 
     /* Custom handler — redirect return-to-user into handler. */
@@ -233,10 +233,10 @@ int64_t sys_sigreturn(uint64_t *trapframe) {
 
     struct sigframe fr;
     if (copyin(&fr, (const void *)frame_va, sizeof(fr)) < 0)
-        proc_exit_current(128 + SIGSEGV);
+        proc_exit_current(SIGSEGV & 0x7f);
 
     if (fr.magic != SIGFRAME_MAGIC)
-        proc_exit_current(128 + SIGSEGV);
+        proc_exit_current(SIGSEGV & 0x7f);
 
     /* Sanitize sstatus: force SPP=0, SPIE=1. */
     uint64_t safe_sstatus = fr.saved_trapframe[TF_SSTATUS];
@@ -246,7 +246,7 @@ int64_t sys_sigreturn(uint64_t *trapframe) {
 
     /* Sanitize sepc: must be in user VA range. */
     if (fr.saved_trapframe[TF_SEPC] >= KVMEM_OFFSET)
-        proc_exit_current(128 + SIGSEGV);
+        proc_exit_current(SIGSEGV & 0x7f);
 
     memcpy(trapframe, fr.saved_trapframe, 288);
 

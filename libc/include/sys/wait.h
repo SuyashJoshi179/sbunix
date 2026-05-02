@@ -1,20 +1,22 @@
 #pragma once
 #include <sys/types.h>
 
-/* SBUnix wait-status convention (documented in docs/SBUnix_Roadmap.md):
- * the kernel writes a single byte into the status int — either 0..127
- * for a normal exit code, or 128 + signum when the child was killed by
- * a signal. The macros below decode that directly. WCOREDUMP / WIFSTOPPED
- * / WSTOPSIG are stubbed (no core dumps, no job control). */
+/* POSIX wait-status word layout:
+ *   bits 0-6  : termsig (0 if normal exit)
+ *   bit  7    : core-dump flag — kernel never sets this today,
+ *               but WCOREDUMP reads it per POSIX so adding core
+ *               dumps later is a kernel-side change only
+ *   bits 8-15 : exit code (only valid if termsig == 0)
+ */
 
 #define WNOHANG     1
 #define WUNTRACED   2
 
-#define WIFEXITED(s)    (((s) & 0x80) == 0)
-#define WEXITSTATUS(s)  ((s) & 0x7f)
-#define WIFSIGNALED(s)  (((s) & 0x80) != 0)
+#define WIFEXITED(s)    (((s) & 0x7f) == 0)
+#define WEXITSTATUS(s)  (((s) >> 8) & 0xff)
 #define WTERMSIG(s)     ((s) & 0x7f)
-#define WCOREDUMP(s)    (0)
+#define WIFSIGNALED(s)  (((s) & 0x7f) != 0 && ((s) & 0x7f) != 0x7f)
+#define WCOREDUMP(s)    (((s) & 0x80) != 0)
 #define WIFSTOPPED(s)   (0)
 #define WSTOPSIG(s)     (0)
 
