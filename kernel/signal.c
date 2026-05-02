@@ -50,6 +50,17 @@ void send_signal_by_pid(int pid, int sig) {
     }
 }
 
+int send_signal_pgrp(int pgid, int sig) {
+    int hits = 0;
+    for (struct pcb *p = proc_list_head(); p; p = p->next) {
+        if (p->state == PROC_UNUSED) continue;
+        if (p->pgid != pgid) continue;
+        send_signal(p, sig);
+        hits++;
+    }
+    return hits;
+}
+
 int sig_has_actionable(struct pcb *p) {
     if (!p) return 0;
     uint64_t deliverable = p->sig_pending & ~p->sig_blocked;
@@ -156,15 +167,37 @@ void check_signals(uint64_t *trapframe) {
  * ---------------------------------------------------------------- */
 int64_t sys_kill(int pid, int sig) {
     if (sig < 0 || sig >= NSIG) return -EINVAL;
-    if (pid <= 0) return -EINVAL;
 
-    for (struct pcb *p = proc_list_head(); p; p = p->next) {
-        if (p->pid == pid) {
-            if (sig != 0) send_signal(p, sig);
-            return 0;
+    if (pid > 0) {
+        for (struct pcb *p = proc_list_head(); p; p = p->next) {
+            if (p->pid == pid) {
+                if (sig != 0) send_signal(p, sig);
+                return 0;
+            }
         }
+        return -ESRCH;
     }
-    return -ESRCH;
+
+    int pgid;
+    if (pid == 0) {
+        struct pcb *me = current_proc();
+        if (!me) return -EINVAL;
+        pgid = me->pgid;
+    } else if (pid == -1) {
+        return -EPERM;          /* unprivileged broadcast not supported */
+    } else {
+        pgid = -pid;
+    }
+
+    if (sig == 0) {
+        /* Existence probe: return 0 if any member exists. */
+        for (struct pcb *p = proc_list_head(); p; p = p->next)
+            if (p->state != PROC_UNUSED && p->pgid == pgid) return 0;
+        return -ESRCH;
+    }
+
+    int hits = send_signal_pgrp(pgid, sig);
+    return hits ? 0 : -ESRCH;
 }
 
 /* ----------------------------------------------------------------

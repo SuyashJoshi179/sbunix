@@ -59,6 +59,7 @@ struct sigframe {
 struct pcb;
 void send_signal(struct pcb *target, int sig);
 void send_signal_by_pid(int pid, int sig);
+int  send_signal_pgrp(int pgid, int sig);
 void check_signals(uint64_t *trapframe);
 
 /* Signal syscall implementations (kernel/signal.c). */
