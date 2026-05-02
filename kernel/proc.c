@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <string.h>
 #include <syscall.h>
+#include <termios.h>
 #include <timer.h>
 #include <vmem.h>
 
@@ -408,6 +409,20 @@ void proc_exit_current(int status) {
             fileclose(p->ofile[fd]);
             p->ofile[fd] = 0;
         }
+    }
+
+    // Session-leader exit: if this proc is the session leader and the
+    // session owns the controlling terminal, hang up every member of
+    // every pgrp in the session (SIGHUP + SIGCONT to wake stopped jobs).
+    if (p->pid == p->sid && termios_get_session() == p->sid) {
+        for (struct pcb *q = procs; q; q = q->next) {
+            if (q == p || q->state == PROC_UNUSED) continue;
+            if (q->sid != p->sid) continue;
+            send_signal(q, SIGHUP);
+            send_signal(q, SIGCONT);
+        }
+        termios_set_session(0);
+        termios_set_fg_pgid(0);
     }
 
     // Notify parent: send SIGCHLD, then wake it if sleeping in wait
