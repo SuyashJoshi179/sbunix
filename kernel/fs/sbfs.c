@@ -824,21 +824,40 @@ static int sbfs_rename(struct inode *old_p, const char *old_name,
         return rc;
     }
 
-    /* 7. Cross-parent directory move: fix src's ".." and adjust nlinks. */
+    /* 7. Cross-parent directory move: fix src's ".." and adjust nlinks.
+     *
+     * Order matters here: update ".." first and check both dir ops, then
+     * touch parent nlinks only on success. If we adjusted nlinks first
+     * and ".." rewriting failed (e.g. ENOSPC/EIO during dirlink), the
+     * filesystem would be permanently inconsistent — moved dir with no
+     * (or stale) ".." entry plus mis-counted parent nlinks.
+     */
     if (src->type == I_DIR && old_p != new_p) {
         struct sbfs_inode *new_p_si = (struct sbfs_inode *)new_p;
         struct sbfs_inode *old_p_si = (struct sbfs_inode *)old_p;
 
-        sbfs_dirunlink(src, "..");
-        sbfs_dirlink(src, "..", new_p_si->inum);
+        int dr = sbfs_dirunlink(src, "..");
+        if (dr < 0) {
+            /* Every directory must have ".." — this should be unreachable,
+             * but propagate rather than silently corrupting nlink. */
+            inode_put(src);
+            return dr;
+        }
+        int dl = sbfs_dirlink(src, "..", new_p_si->inum);
+        if (dl < 0) {
+            /* Best-effort recovery: put the old ".." back so the dir is
+             * not left with no parent reference at all. */
+            (void)sbfs_dirlink(src, "..", old_p_si->inum);
+            inode_put(src);
+            return dl;
+        }
 
-        /* old_p loses one child's ".." back-ref. */
+        /* ".." update committed — now safe to adjust parent nlinks. */
         old_p_si->d.nlink--;
         old_p_si->vnode.nlink--;
         old_p_si->dirty = 1;
         sbfs_iupdate(old_p_si);
 
-        /* new_p gains one. */
         new_p_si->d.nlink++;
         new_p_si->vnode.nlink++;
         new_p_si->dirty = 1;
