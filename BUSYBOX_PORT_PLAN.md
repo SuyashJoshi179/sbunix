@@ -87,7 +87,7 @@ Approach: complete guaranteed libc/fs gaps first, attempt BB build, let link-err
 | 2 | Libc stdio scanf family | **DONE** | `libc/scanf.c` + extensions to `libc/printf.c`. Added: getdelim, sscanf, fscanf, scanf, vsscanf, vfscanf, vscanf, asprintf, vasprintf, fseeko, ftello. Real ungetc (1-char pushback). vsnprintf count-only fix. No %f scanf (no float). |
 | 5 | Libc glob/fnmatch | **DONE** | `libc/fnmatch.c` + `libc/glob.c`. POSIX shell wildcards. No GLOB_BRACE, no GLOB_TILDE (no $HOME) |
 | 6 | tarfs symlink support | **DONE** | typeflag '2' → I_LNK inode, readlink op, DT_LNK in getdents. namei + sys_readlink already symlink-aware |
-| 8 | Build BusyBox against libc.a | pending | Link errors drive remaining libc; runtime drives kernel |
+| 8 | Build BusyBox against libc.a | **IN PROGRESS** | BB 1.36.1 vendored at `third_party/busybox/`. Wrapper `tools/sbunix-cc.sh` set up. defconfig generated. First build attempts surface header gaps — adding stubs as encountered. Iterations ongoing. |
 | 7 | Reactive kernel additions | pending | Only what Stage 8/9 prove needed: candidates waitpid, ppoll, ftruncate, sigsuspend |
 | 9 | Runtime triage | pending | Iterate on failures |
 | 3 | Libc time funcs | **DEFERRED** | Decision pending — only if `ls -l`/`date` matter |
@@ -112,5 +112,8 @@ TBD. Each stage gets a "verify" entry as it lands. Pattern:
 
 - Created: 2026-05-02
 - Last updated: 2026-05-02
-- Current stage: Stages 1, 2, 5, 6 done; next Stage 8 (BB build attempt)
+- Current stage: Stages 1, 2, 5, 6 done. Stage 8 in iterative phase (header gaps).
+- BB build setup: `cd third_party/busybox && make defconfig && make CC=$REPO/tools/sbunix-cc.sh CROSS_COMPILE=riscv64-unknown-elf-`
+- Stubs added so far: byteswap, endian, paths, poll, sched, sys/select, sys/socket, sys/sysmacros, sys/uio
+- Stuck on: `sys/param.h` (next iteration). After headers, expect 30-50 link-time libc symbol gaps + kernel ENOSYS during runtime.
 - Reorder rationale: deferred all kernel work to reactive Stage 7. fork+exec+wait synchronous already works via libc waitpid fake; only proven runtime ENOSYS triggers kernel additions.
