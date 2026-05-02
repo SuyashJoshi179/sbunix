@@ -133,6 +133,11 @@ struct pcb *alloc_proc(void) {
     p->parent_pid = 0;
     p->exit_status= 0;
     p->state      = PROC_UNUSED;
+    p->pgid       = p->pid;
+    p->sid        = p->pid;
+    p->last_signal = 0;
+    p->stopped_reported = 0;
+    p->continued_pending = 0;
     p->is_user    = 0;
     p->pagetable  = 0;
     p->user_entry = 0;
@@ -278,6 +283,13 @@ int proc_fork_current(void) {
     child->user_sp    = parent->user_sp;
     child->parent_pid = parent->pid;
     child->brk_start  = parent->brk_start;
+
+    /* Inherit pgid/sid; pid-derived defaults from alloc_proc are overwritten. */
+    child->pgid       = parent->pgid;
+    child->sid        = parent->sid;
+    child->last_signal = 0;
+    child->stopped_reported = 0;
+    child->continued_pending = 0;
 
     /* Inherit signal handlers and mask; child starts with no pending signals. */
     for (int i = 0; i < NSIG; i++)
