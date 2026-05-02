@@ -55,6 +55,10 @@ div_t   div(int num, int den);
 ldiv_t  ldiv(long num, long den);
 lldiv_t lldiv(long long num, long long den);
 
+char  *realpath(const char *path, char *out);
+int    mkstemp(char *tmpl);
+char  *mkdtemp(char *tmpl);
+
 int    mblen(const char *s, size_t n);
 int    mbtowc(int *pwc, const char *s, size_t n);
 int    wctomb(char *s, int wc);
