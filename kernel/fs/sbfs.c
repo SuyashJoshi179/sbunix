@@ -813,7 +813,16 @@ static int sbfs_rename(struct inode *old_p, const char *old_name,
         inode_put(src);
         return rc;
     }
-    sbfs_dirunlink(old_p, old_name);
+    rc = sbfs_dirunlink(old_p, old_name);
+    if (rc < 0) {
+        int rollback_rc = sbfs_dirunlink(new_p, new_name);
+        if (rollback_rc < 0) {
+            printk("sbfs: rename rollback failed (%d) after unlink error %d\n",
+                   rollback_rc, rc);
+        }
+        inode_put(src);
+        return rc;
+    }
 
     /* 7. Cross-parent directory move: fix src's ".." and adjust nlinks. */
     if (src->type == I_DIR && old_p != new_p) {
