@@ -74,11 +74,29 @@ struct tarfs_child {
     struct tarfs_child *next;
 };
 
+#define TARFS_MAX_SYMLINKS 128
+
 static struct inode          pool_inodes  [TARFS_MAX_INODES];
 static struct tarfs_ino_data pool_data    [TARFS_MAX_INODES];
 static struct tarfs_child    pool_children[TARFS_MAX_CHILDREN];
+static char                  symlink_pool [TARFS_MAX_SYMLINKS][101];
 static int inode_count = 0;
 static int child_count = 0;
+static int symlink_count = 0;
+
+static const char *tarfs_alloc_symlink(const char *raw, uint64_t *out_len) {
+    if (symlink_count >= TARFS_MAX_SYMLINKS) {
+        printk("tarfs: symlink pool exhausted\n");
+        return 0;
+    }
+    char *slot = symlink_pool[symlink_count++];
+    int n = 0;
+    /* tar linkname is up to 100 bytes, may not be null-terminated. */
+    while (n < 100 && raw[n]) { slot[n] = raw[n]; n++; }
+    slot[n] = '\0';
+    if (out_len) *out_len = (uint64_t)n;
+    return slot;
+}
 
 struct inode *tarfs_root = 0;
 
@@ -242,6 +260,16 @@ static int tarfs_lookup(struct inode *dir, const char *name,
     return -ENOENT;
 }
 
+static int tarfs_readlink(struct inode *ip, char *buf, uint64_t n) {
+    if (ip->type != I_LNK) return -EINVAL;
+    struct tarfs_ino_data *d = ip->fs_data;
+    if (!d->data) return -EINVAL;
+    uint64_t len = d->file_size;
+    if (len > n) len = n;
+    for (uint64_t i = 0; i < len; i++) buf[i] = d->data[i];
+    return (int)len;
+}
+
 static int tarfs_getdents(struct inode *dir, uint64_t off, void *buf,
                            uint64_t n, uint64_t *out_next) {
     struct tarfs_ino_data *d = dir->fs_data;
@@ -267,7 +295,8 @@ static int tarfs_getdents(struct inode *dir, uint64_t off, void *buf,
         de->d_off    = next_off + 1;
         de->d_reclen = (uint16_t)reclen;
         de->d_type   = (c->ino->type == I_DIR) ? DT_DIR :
-                       (c->ino->type == I_CHR) ? DT_CHR : DT_REG;
+                       (c->ino->type == I_CHR) ? DT_CHR :
+                       (c->ino->type == I_LNK) ? DT_LNK : DT_REG;
         for (int i = 0; i < namelen; i++) de->d_name[i] = c->name[i];
 
         written  += (uint64_t)reclen;
@@ -285,6 +314,7 @@ static const struct inode_ops tarfs_ops = {
     .stat     = tarfs_stat,
     .lookup   = tarfs_lookup,
     .getdents = tarfs_getdents,
+    .readlink = tarfs_readlink,
 };
 
 /* ================================================================
@@ -366,8 +396,45 @@ void tarfs_init(void) {
                     tarfs_dir_add(parent, basename, fip);
                 }
             }
+        } else if (h->typeflag == '2') {
+            /* Symbolic link. linkname (header field) holds the target;
+             * stash a null-terminated copy in the symlink pool and point
+             * the inode's data at it. */
+            char fpath[256];
+            int n = 0;
+            while (raw[n] && n < 254) { fpath[n] = raw[n]; n++; }
+            fpath[n] = '\0';
+
+            int slash = -1;
+            for (int i = n - 1; i >= 0; i--) {
+                if (fpath[i] == '/') { slash = i; break; }
+            }
+
+            const char *basename;
+            struct inode *parent;
+            if (slash < 0) {
+                basename = fpath;
+                parent   = tarfs_root;
+            } else {
+                fpath[slash] = '\0';
+                basename     = fpath + slash + 1;
+                parent       = tarfs_ensure_dir(fpath);
+            }
+
+            if (parent && basename[0]) {
+                uint64_t tlen = 0;
+                const char *target = tarfs_alloc_symlink(h->linkname, &tlen);
+                if (target) {
+                    struct inode *lip = tarfs_alloc_inode(I_LNK,
+                                            S_IFLNK | 0777, tlen, target);
+                    if (lip) {
+                        lip->mtime = mtime;
+                        tarfs_dir_add(parent, basename, lip);
+                    }
+                }
+            }
         }
-        // Other typeflags (symlink='2', hard link='1', etc.) are skipped.
+        /* Hard links ('1') still skipped. */
 
         unsigned long data_blocks = (size + 511) / 512;
         p += 512 + data_blocks * 512;
