@@ -21,6 +21,9 @@
 #define SIGCHLD 17
 #define SIGCONT 18
 #define SIGSTOP 19
+#define SIGTSTP 20
+#define SIGTTIN 21
+#define SIGTTOU 22
 
 typedef uint64_t sigset_t;
 
@@ -54,6 +57,8 @@ struct sigframe {
 #define ACT_TERM 0
 #define ACT_IGN  1
 #define ACT_CORE 2  /* treated as TERM — no core dumps */
+#define ACT_STOP 3
+#define ACT_CONT 4
 
 /* Kernel-internal API (implementations in kernel/signal.c) */
 struct pcb;

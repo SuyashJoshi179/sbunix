@@ -15,7 +15,8 @@ static const uint8_t default_action[NSIG] = {
     [SIGBUS]  = ACT_CORE, [SIGFPE]  = ACT_CORE,  [SIGKILL] = ACT_TERM,
     [SIGUSR1] = ACT_TERM, [SIGSEGV] = ACT_CORE,  [SIGUSR2] = ACT_TERM,
     [SIGPIPE] = ACT_TERM, [SIGALRM] = ACT_TERM,  [SIGTERM] = ACT_TERM,
-    [SIGCHLD] = ACT_IGN,  [SIGCONT] = ACT_IGN,   [SIGSTOP] = ACT_TERM,
+    [SIGCHLD] = ACT_IGN,  [SIGCONT] = ACT_CONT,  [SIGSTOP] = ACT_STOP,
+    [SIGTSTP] = ACT_STOP, [SIGTTIN] = ACT_STOP,  [SIGTTOU] = ACT_STOP,
 };
 
 /* ----------------------------------------------------------------
@@ -29,6 +30,28 @@ void send_signal(struct pcb *target, int sig) {
     if (sig == SIGKILL || sig == SIGSTOP) {
         target->sig_blocked &= ~(1ULL << sig);
         target->sig_handlers[sig].sa_handler = SIG_DFL;
+    }
+
+    /* SIGCONT clears any pending stop signals (POSIX) and resumes a
+     * stopped process even if SIGCONT itself is blocked or ignored. */
+    if (sig == SIGCONT) {
+        target->sig_pending &= ~((1ULL << SIGSTOP) | (1ULL << SIGTSTP) |
+                                 (1ULL << SIGTTIN) | (1ULL << SIGTTOU));
+        if (target->state == PROC_STOPPED) {
+            target->state = PROC_READY;
+            target->wake_tick = 0;
+            target->continued_pending = 1;
+            /* Wake parent waiting in wait4(WCONTINUED). */
+            send_signal_by_pid(target->parent_pid, SIGCHLD);
+            proc_wakeup(target->parent_pid);
+        }
+    }
+
+    /* Stop-signal arriving on a stopped process: discard (POSIX: SIGCONT
+     * already drained these; another stop while stopped is meaningless). */
+    if ((sig == SIGTSTP || sig == SIGTTIN || sig == SIGTTOU || sig == SIGSTOP) &&
+        target->state == PROC_STOPPED) {
+        return;
     }
 
     target->sig_pending |= (1ULL << sig);
@@ -140,9 +163,19 @@ void check_signals(uint64_t *trapframe) {
 
     p->sig_pending &= ~(1ULL << sig);
 
-    /* SIGKILL/SIGSTOP: always kill. */
-    if (sig == SIGKILL || sig == SIGSTOP) {
+    /* SIGKILL: always kill, unblockable, uncatchable. */
+    if (sig == SIGKILL) {
         proc_exit_current(sig & 0x7f);
+    }
+
+    /* SIGSTOP: stop unconditionally — cannot be caught or ignored. */
+    if (sig == SIGSTOP) {
+        p->state = PROC_STOPPED;
+        p->last_signal = sig;
+        p->stopped_reported = 0;
+        send_signal_by_pid(p->parent_pid, SIGCHLD);
+        proc_wakeup(p->parent_pid);
+        return;
     }
 
     sighandler_t h = p->sig_handlers[sig].sa_handler;
@@ -151,7 +184,15 @@ void check_signals(uint64_t *trapframe) {
 
     if (h == SIG_DFL) {
         uint8_t act = (sig < NSIG) ? default_action[sig] : ACT_TERM;
-        if (act == ACT_IGN) return;
+        if (act == ACT_IGN || act == ACT_CONT) return;
+        if (act == ACT_STOP) {
+            p->state = PROC_STOPPED;
+            p->last_signal = sig;
+            p->stopped_reported = 0;
+            send_signal_by_pid(p->parent_pid, SIGCHLD);
+            proc_wakeup(p->parent_pid);
+            return;
+        }
         if (sig == SIGSEGV && p->delivering_segv) {
             /* Recursive SIGSEGV — just die. */
         }
