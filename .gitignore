@@ -4,3 +4,24 @@ CLAUDE.md
 zig-out/
 .zig-cache/
 docs/handoff/
+
+# Vendored BusyBox build artifacts (source tree itself is committed)
+third_party/busybox/.config
+third_party/busybox/.config.old
+third_party/busybox/include/autoconf.h
+third_party/busybox/include/bbconfigopts.h
+third_party/busybox/include/common_bufsiz.h
+third_party/busybox/include/embedded_scripts.h
+third_party/busybox/include/applet_tables.h
+third_party/busybox/include/NUM_APPLETS.h
+third_party/busybox/include/usage_compressed.h
+third_party/busybox/include/config/
+third_party/busybox/scripts/basic/fixdep
+third_party/busybox/scripts/kconfig/conf
+third_party/busybox/scripts/kconfig/zconf.lex.c
+third_party/busybox/scripts/kconfig/zconf.tab.c
+third_party/busybox/scripts/kconfig/zconf.hash.c
+third_party/busybox/applets/usage
+third_party/busybox/applets/applet_tables
+third_party/busybox/**/*.o
+third_party/busybox/**/*.cmd
