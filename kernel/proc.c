@@ -327,6 +327,18 @@ int proc_fork_current(void) {
 }
 
 // ----------------------------------------------------------------
+// proc_stop_current — current proc has been marked PROC_STOPPED by
+// signal delivery; relinquish the CPU. Resumes when SIGCONT switches
+// state back to PROC_READY and scheduler picks us again.
+// ----------------------------------------------------------------
+
+void proc_stop_current(void) {
+    if (!current) return;
+    /* state already set to PROC_STOPPED by caller */
+    swtch(&current->context, &sched_context);
+}
+
+// ----------------------------------------------------------------
 // yield — give up CPU, switch back to scheduler
 // ----------------------------------------------------------------
 

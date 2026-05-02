@@ -175,6 +175,7 @@ void check_signals(uint64_t *trapframe) {
         p->stopped_reported = 0;
         send_signal_by_pid(p->parent_pid, SIGCHLD);
         proc_wakeup(p->parent_pid);
+        proc_stop_current();
         return;
     }
 
@@ -191,6 +192,7 @@ void check_signals(uint64_t *trapframe) {
             p->stopped_reported = 0;
             send_signal_by_pid(p->parent_pid, SIGCHLD);
             proc_wakeup(p->parent_pid);
+            proc_stop_current();
             return;
         }
         if (sig == SIGSEGV && p->delivering_segv) {

@@ -96,6 +96,7 @@ struct pcb {
 void  sched_init(void);
 void  yield(void);
 void  swtch(struct context *old, struct context *new);
+void  proc_stop_current(void);
 
 struct pcb *current_proc(void);
 struct pcb *proc_list_head(void);  // for timer_handler sleeper scan

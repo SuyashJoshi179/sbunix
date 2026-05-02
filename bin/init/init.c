@@ -59,6 +59,10 @@ int main(void) {
         "/bin/date",
         "/bin/uid_test",
         /* Phase 8b/8c: signals + termios */
+        "/bin/pgrp_test",
+        "/bin/kill_pgrp_test",
+        "/bin/sigtstp_test",
+        "/bin/wait4_nohang_test",
         "/bin/signal_test",
         "/bin/sigchld_test",
         "/bin/sigpipe_test",
