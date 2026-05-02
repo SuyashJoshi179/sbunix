@@ -52,6 +52,7 @@ int main(void) {
         "/bin/uid_test",
         /* Phase 8b/8c: signals + termios */
         "/bin/signal_test",
+        "/bin/sigmask_test",
         "/bin/sigchld_test",
         "/bin/sigpipe_test",
         "/bin/sigsegv_handler_test",
