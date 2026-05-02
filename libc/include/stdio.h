@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdarg.h>
+#include <sys/types.h>
 
 #ifndef EOF
 #define EOF (-1)
@@ -39,6 +40,17 @@ int   getc(FILE *stream);
 int   fgetc(FILE *stream);
 char *fgets(char *buf, int n, FILE *stream);
 long  getline(char **lineptr, unsigned long *n, FILE *stream);
+long  getdelim(char **lineptr, unsigned long *n, int delim, FILE *stream);
+
+int   sscanf(const char *str, const char *fmt, ...);
+int   fscanf(FILE *stream, const char *fmt, ...);
+int   scanf(const char *fmt, ...);
+int   vsscanf(const char *str, const char *fmt, va_list ap);
+int   vfscanf(FILE *stream, const char *fmt, va_list ap);
+int   vscanf(const char *fmt, va_list ap);
+
+int   asprintf(char **strp, const char *fmt, ...);
+int   vasprintf(char **strp, const char *fmt, va_list ap);
 
 FILE  *fopen(const char *path, const char *mode);
 int    fclose(FILE *stream);
@@ -47,6 +59,8 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream);
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);
 int    fseek(FILE *stream, long off, int whence);
 long   ftell(FILE *stream);
+int    fseeko(FILE *stream, off_t off, int whence);
+off_t  ftello(FILE *stream);
 void   rewind(FILE *stream);
 int    feof(FILE *stream);
 int    ferror(FILE *stream);
