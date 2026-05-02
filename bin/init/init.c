@@ -72,6 +72,7 @@ int main(void) {
         /* Phase 7b: lazy allocation + demand paging */
         "/bin/lazy_sbrk_test",
         "/bin/zerofill_test",
+        "/bin/bss_test",
         "/bin/demand_walk_test",
         "/bin/stack_overflow_test",
         "/bin/symlink_test",

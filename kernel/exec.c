@@ -77,6 +77,16 @@ int load_user_elf(pgtable_t pt, const void *img, unsigned long img_size,
                         copy_va_end - copy_va_start);
             }
 
+            // POSIX: bytes in [filesz, memsz) must read as zero. page_alloc()
+            // already zeroes the whole page, so the tail is implicitly clean,
+            // but we zero again here so the invariant is local to this loader
+            // rather than coupled to the page allocator's behaviour.
+            unsigned long file_end_va = ph->p_vaddr + ph->p_filesz;
+            if (file_end_va < page_end) {
+                unsigned long zero_start = (file_end_va > va) ? file_end_va : va;
+                memset((char *)kpage + (zero_start - va), 0, page_end - zero_start);
+            }
+
             vmem_map(pt, va, virt_to_phys((unsigned long)kpage), PAGE_SIZE, perm);
         }
 
