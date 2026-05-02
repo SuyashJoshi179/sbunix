@@ -29,7 +29,7 @@ int mknod(const char *p, mode_t m, dev_t d)     { (void)p; (void)m; (void)d; err
 
 /* stat: no SYS_stat in the kernel. Open the path RDONLY and call
  * fstat on the resulting fd. This works for regular files and dirs in
- * tarfs/sbfs but fails for anything that cant be opened.
+ * tarfs/sbfs but fails for anything that can't be opened.
  *
  * NB: lstat() is a real syscall — see libc/syscall.c. Don't add a
  * duplicate definition here. */
