@@ -1,37 +1,37 @@
 #include <unistd.h>
 #include <errno.h>
+#include "syscall_priv.h"
 
-/* SBUnix has no kernel-side process groups, sessions, or job control. We
- * pretend each process is its own group leader (pgid == sid == pid) so
- * shells that *check* job-control state without actively managing it
- * (e.g. mostly-functional bash ports) keep working. Mutating calls
- * succeed silently — pretending compliance is less surprising for ports
- * than failing with EPERM, which they often handle by aborting. */
-
-pid_t getpgrp(void) { return getpid(); }
-
-pid_t getpgid(pid_t pid) {
-    if (pid == 0) return getpid();
-    /* No way to look up another process's pgid; return its own pid as a
-     * best-effort answer rather than EPERM. */
-    return pid;
+static long ecall0(long num) {
+    register long _a7 asm("a7") = num;
+    register long _a0 asm("a0") = 0;
+    asm volatile("ecall" : "+r"(_a0) : "r"(_a7) : "memory");
+    return _a0;
+}
+static long ecall1(long num, long a0) {
+    register long _a7 asm("a7") = num;
+    register long _a0 asm("a0") = a0;
+    asm volatile("ecall" : "+r"(_a0) : "r"(_a7) : "memory");
+    return _a0;
+}
+static long ecall2(long num, long a0, long a1) {
+    register long _a7 asm("a7") = num;
+    register long _a0 asm("a0") = a0;
+    register long _a1 asm("a1") = a1;
+    asm volatile("ecall" : "+r"(_a0) : "r"(_a7), "r"(_a1) : "memory");
+    return _a0;
 }
 
-int setpgid(pid_t pid, pid_t pgid) {
-    (void)pid; (void)pgid;
-    return 0;
+pid_t getpgrp(void)        { return (pid_t)syscall_ret(ecall0(97)); }
+pid_t getpgid(pid_t pid)   { return (pid_t)syscall_ret(ecall1(96, (long)pid)); }
+int   setpgid(pid_t pid, pid_t pgid) {
+    return (int)syscall_ret(ecall2(95, (long)pid, (long)pgid));
 }
-
-int setpgrp(void) { return 0; }
-
-pid_t setsid(void) { return getpid(); }
-
-pid_t getsid(pid_t pid) {
-    if (pid == 0) return getpid();
-    return pid;
-}
+int   setpgrp(void)        { return setpgid(0, 0); }
+pid_t setsid(void)         { return (pid_t)syscall_ret(ecall0(98)); }
+pid_t getsid(pid_t pid)    { return (pid_t)syscall_ret(ecall1(99, (long)pid)); }
 
 pid_t tcgetsid(int fd) {
     (void)fd;
-    return getpid();
+    return getsid(0);
 }

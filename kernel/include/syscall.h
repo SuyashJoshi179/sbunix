@@ -66,6 +66,13 @@
 #define SYS_meminfo       111   // () -> free physical pages
 #define SYS_readlink      112
 #define SYS_lstat         113
+
+// Job control: process groups / sessions
+#define SYS_setpgid        95   // (pid, pgid)
+#define SYS_getpgid        96   // (pid)
+#define SYS_getpgrp        97   // ()
+#define SYS_setsid         98   // ()
+#define SYS_getsid         99   // (pid)
 // Trap-frame word indices for registers saved by trap.S.
 // Frame layout (8 bytes per slot, from sp):
 //   offset   0: x1  (ra)
