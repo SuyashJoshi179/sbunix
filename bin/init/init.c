@@ -54,6 +54,7 @@ int main(void) {
         "/bin/uid_test",
         /* Phase 8b/8c: signals + termios */
         "/bin/signal_test",
+        "/bin/sigmask_test",
         "/bin/sigchld_test",
         "/bin/sigpipe_test",
         "/bin/sigsegv_handler_test",
@@ -72,6 +73,7 @@ int main(void) {
         /* Phase 7b: lazy allocation + demand paging */
         "/bin/lazy_sbrk_test",
         "/bin/zerofill_test",
+        "/bin/bss_test",
         "/bin/demand_walk_test",
         "/bin/stack_overflow_test",
         "/bin/symlink_test",
