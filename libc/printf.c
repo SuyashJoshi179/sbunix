@@ -12,11 +12,12 @@
 struct _FILE {
     int fd;
     int flags;
+    int unget;   /* -1 = none, otherwise pushed-back char (one slot, ANSI required) */
 };
 
-static struct _FILE _stdin  = { 0, 0 };
-static struct _FILE _stdout = { 1, 0 };
-static struct _FILE _stderr = { 2, 0 };
+static struct _FILE _stdin  = { 0, 0, -1 };
+static struct _FILE _stdout = { 1, 0, -1 };
+static struct _FILE _stderr = { 2, 0, -1 };
 
 FILE *stdin  = &_stdin;
 FILE *stdout = &_stdout;
@@ -32,11 +33,11 @@ struct sink {
 static void sink_put(struct sink *s, char c) {
     if (s->buf) {
         if (s->pos + 1 < s->cap) s->buf[s->pos] = c;
-        s->pos++;
-    } else {
+    } else if (s->fd >= 0) {
         write(s->fd, &c, 1);
-        s->pos++;
     }
+    /* Always count — supports vsnprintf(NULL, 0, ...) sizing pass. */
+    s->pos++;
 }
 
 static void sink_num(struct sink *s, unsigned long n, int base, int sign) {
@@ -173,6 +174,11 @@ int putchar(int c)              { return fputc(c, stdout); }
 
 int fgetc(FILE *stream) {
     if (!stream) return EOF;
+    if (stream->unget >= 0) {
+        int c = stream->unget;
+        stream->unget = -1;
+        return c;
+    }
     char ch;
     long r = read(stream->fd, &ch, 1);
     if (r == 1) return (unsigned char)ch;
@@ -257,6 +263,7 @@ FILE *fopen(const char *path, const char *mode) {
     if (!f) { close(fd); return NULL; }
     f->fd = fd;
     f->flags = _FILE_OWNED;
+    f->unget = -1;
     return f;
 }
 
@@ -275,6 +282,10 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
     size_t total = size * nmemb;
     size_t got = 0;
     char *p = ptr;
+    if (stream->unget >= 0 && got < total) {
+        p[got++] = (char)stream->unget;
+        stream->unget = -1;
+    }
     while (got < total) {
         long r = read(stream->fd, p + got, (long)(total - got));
         if (r < 0) { stream->flags |= _FILE_ERR; break; }
@@ -303,18 +314,31 @@ int fseek(FILE *stream, long off, int whence) {
     long r = lseek(stream->fd, off, whence);
     if (r < 0) { stream->flags |= _FILE_ERR; return -1; }
     stream->flags &= ~_FILE_EOF;
+    stream->unget = -1;
     return 0;
 }
 
 long ftell(FILE *stream) {
     if (!stream) return -1;
-    return lseek(stream->fd, 0, SEEK_CUR);
+    long r = lseek(stream->fd, 0, SEEK_CUR);
+    if (r < 0) return -1;
+    if (stream->unget >= 0) r--;
+    return r;
+}
+
+int fseeko(FILE *stream, off_t off, int whence) {
+    return fseek(stream, (long)off, whence);
+}
+
+off_t ftello(FILE *stream) {
+    return (off_t)ftell(stream);
 }
 
 void rewind(FILE *stream) {
     if (!stream) return;
     lseek(stream->fd, 0, SEEK_SET);
     stream->flags &= ~(_FILE_EOF | _FILE_ERR);
+    stream->unget = -1;
 }
 
 int remove(const char *path) {
@@ -324,8 +348,10 @@ int remove(const char *path) {
 /* rename() is now a real syscall — see libc/syscall.c. */
 
 int ungetc(int c, FILE *stream) {
-    (void)stream;
-    return c;
+    if (!stream || c == EOF || stream->unget >= 0) return EOF;
+    stream->unget = c & 0xff;
+    stream->flags &= ~_FILE_EOF;
+    return c & 0xff;
 }
 
 void setbuf(FILE *stream, char *buf) {
@@ -340,5 +366,60 @@ int setvbuf(FILE *stream, char *buf, int mode, size_t size) {
 char *tmpnam(char *s) {
     (void)s;
     return NULL;
+}
+
+int vasprintf(char **strp, const char *fmt, va_list ap) {
+    if (!strp) return -1;
+    va_list ap2;
+    va_copy(ap2, ap);
+    /* Sizing pass: NULL buf + fd=-1 makes sink_put count without writing. */
+    struct sink probe = { 0, 0, 0, -1 };
+    int n = do_format(&probe, fmt, ap2);
+    va_end(ap2);
+    if (n < 0) return -1;
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) return -1;
+    int r = vsnprintf(buf, (size_t)n + 1, fmt, ap);
+    if (r < 0) { free(buf); return -1; }
+    *strp = buf;
+    return r;
+}
+
+int asprintf(char **strp, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    int r = vasprintf(strp, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+long getdelim(char **lineptr, unsigned long *n, int delim, FILE *stream) {
+    if (!lineptr || !n || !stream) return -1;
+    if (!*lineptr || *n == 0) {
+        unsigned long cap = 128;
+        char *p = realloc(*lineptr, cap);
+        if (!p) return -1;
+        *lineptr = p;
+        *n = cap;
+    }
+    unsigned long len = 0;
+    for (;;) {
+        int c = fgetc(stream);
+        if (c == EOF) {
+            if (len == 0) return -1;
+            break;
+        }
+        if (len + 1 >= *n) {
+            unsigned long cap = *n * 2;
+            if (cap < *n) return -1;
+            char *p = realloc(*lineptr, cap);
+            if (!p) return -1;
+            *lineptr = p;
+            *n = cap;
+        }
+        (*lineptr)[len++] = (char)c;
+        if (c == delim) break;
+    }
+    (*lineptr)[len] = '\0';
+    return (long)len;
 }
 
