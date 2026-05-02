@@ -424,6 +424,21 @@ void proc_exit_current(int status) {
 // ----------------------------------------------------------------
 
 int proc_wait_current(int *status) {
+    return proc_wait4_current(-1, status, 0);
+}
+
+#define WNOHANG_K    1
+#define WUNTRACED_K  2
+#define WCONTINUED_K 8
+
+static int wait4_match(struct pcb *child, struct pcb *parent, int pid) {
+    if (pid > 0)  return child->pid  == pid;
+    if (pid == 0) return child->pgid == parent->pgid;
+    if (pid == -1) return 1;
+    return child->pgid == -pid;
+}
+
+int proc_wait4_current(int pid, int *status, int options) {
     if (current == 0) return -ECHILD;
 
     while (1) {
@@ -431,24 +446,32 @@ int proc_wait_current(int *status) {
 
         for (struct pcb *p = procs; p; p = p->next) {
             if (p->parent_pid != current->pid) continue;
+            if (!wait4_match(p, current, pid)) continue;
             found_child = 1;
+
             if (p->state == PROC_ZOMBIE) {
                 int cpid = p->pid;
                 if (status) *status = p->exit_status;
                 proc_destroy(p);
                 return cpid;
             }
+            if ((options & WUNTRACED_K) && p->state == PROC_STOPPED &&
+                !p->stopped_reported) {
+                p->stopped_reported = 1;
+                if (status)
+                    *status = ((p->last_signal & 0xff) << 8) | 0x7f;
+                return p->pid;
+            }
+            if ((options & WCONTINUED_K) && p->continued_pending) {
+                p->continued_pending = 0;
+                if (status) *status = 0xffff;
+                return p->pid;
+            }
         }
 
-        if (!found_child) return -ECHILD;   // no children at all
-
-        // If interrupted by an actionable signal while no child is ready,
-        // report EINTR. Reaping always takes priority when a zombie exists.
-        // SIGCHLD is default-ignored, so it does not interrupt wait().
-        if (sig_has_actionable(current))
-            return -EINTR;
-
-        // Sleep until a child exits
+        if (!found_child) return -ECHILD;
+        if (options & WNOHANG_K) return 0;
+        if (sig_has_actionable(current)) return -EINTR;
         proc_sleep(current);
     }
 }

@@ -67,6 +67,8 @@
 #define SYS_readlink      112
 #define SYS_lstat         113
 
+#define SYS_wait4         106   // (pid, *status, options, *rusage)
+
 // Job control: process groups / sessions
 #define SYS_setpgid        95   // (pid, pgid)
 #define SYS_getpgid        96   // (pid)

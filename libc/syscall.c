@@ -186,16 +186,16 @@ long readlink(const char *path, char *buf, long n) {
     return syscall_ret(ecall3(112, (long)path, (long)buf, n));
 }
 
-/* No SYS_waitpid in the kernel. Block on wait() and surface what we get;
- * options is ignored (WNOHANG is not supported — document this). pid==-1
- * matches wait()'s "any child"; any other pid is best-effort: we wait
- * once and verify the returned pid matches, otherwise return -ECHILD
- * because we can't push the unrelated child back onto the queue. */
+int wait4(int pid, int *status, int options, void *rusage) {
+    (void)rusage;
+    register long _a7 asm("a7") = 106;
+    register long _a0 asm("a0") = (long)pid;
+    register long _a1 asm("a1") = (long)status;
+    register long _a2 asm("a2") = (long)options;
+    asm volatile("ecall" : "+r"(_a0) : "r"(_a7), "r"(_a1), "r"(_a2) : "memory");
+    return (int)syscall_ret(_a0);
+}
+
 int waitpid(int pid, int *status, int options) {
-    (void)options;
-    int got = wait(status);
-    if (pid == -1 || pid == 0) return got;
-    if (got == pid || got < 0) return got;
-    errno = ECHILD;
-    return -1;
+    return wait4(pid, status, options, 0);
 }

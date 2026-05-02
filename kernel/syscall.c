@@ -1229,6 +1229,19 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_meminfo:
             return sys_meminfo();
 
+        case SYS_wait4: {
+            int pid_a       = (int)(int64_t)trapframe[TF_A0];
+            int *ustatus    = (int *)(uintptr_t)trapframe[TF_A1];
+            int options     = (int)(int64_t)trapframe[TF_A2];
+            int kstatus = 0;
+            int r = proc_wait4_current(pid_a, ustatus ? &kstatus : 0, options);
+            if (r > 0 && ustatus) {
+                if (copyout(ustatus, &kstatus, sizeof(kstatus)) < 0)
+                    return -EFAULT;
+            }
+            return (int64_t)r;
+        }
+
         case SYS_setpgid:
             return sys_setpgid((int)(int64_t)trapframe[TF_A0],
                                (int)(int64_t)trapframe[TF_A1]);
