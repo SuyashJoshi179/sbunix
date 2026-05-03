@@ -233,7 +233,7 @@ static const char *job_state_str(int s) {
 }
 
 static void jobs_print_one(struct job *j) {
-    printf("[%d] %d  %-7s  %s\n", j->id, j->pgid, job_state_str(j->state), j->cmd);
+    printf("[%d] %d  %s\t%s\n", j->id, j->pgid, job_state_str(j->state), j->cmd);
 }
 
 /* Drain finished/stopped/continued children; print and update table.
@@ -537,8 +537,9 @@ static int spawn_pipeline(int start, int in_fd, int *leader_io,
 
 /* Wait foreground pipeline: wait for every member of pgrp `pgid` to
  * exit or for any to stop. Returns last exit status. If a child
- * stops, register a job; if all reaped, return last status. */
-static int wait_fg_pgrp(int pgid, int last_pid, char *cmdbuf) {
+ * stops, mark the existing job slot stopped (slot >= 0) or allocate
+ * a fresh one (slot == -1). */
+static int wait_fg_pgrp(int pgid, int last_pid, char *cmdbuf, int reuse_slot) {
     int last_status = 0;
     int stopped = 0;
     while (1) {
@@ -551,30 +552,30 @@ static int wait_fg_pgrp(int pgid, int last_pid, char *cmdbuf) {
         if (WIFSTOPPED(st)) {
             stopped = 1;
             last_status = st;
-            /* Mark whole pipeline stopped — pgrp shares signal. */
+            /* Whole pgrp shares the stop signal — break and report once. */
             break;
         }
         if (r == last_pid) last_status = st;
-        /* Continue waiting until reap drains. */
     }
 
-    /* Reclaim tty before printing. */
     set_console_fg(shell_pgid);
 
     if (stopped) {
-        int slot = jobs_alloc_slot();
-        if (slot >= 0) {
-            jobs_tbl[slot].state = JOB_STOPPED;
+        int slot = reuse_slot;
+        if (slot < 0) {
+            slot = jobs_alloc_slot();
+            if (slot < 0) return last_status;
             jobs_tbl[slot].pgid = pgid;
             jobs_tbl[slot].id = next_job_id++;
-            jobs_tbl[slot].status = last_status;
             int n = 0;
             while (cmdbuf && cmdbuf[n] && n < (int)sizeof(jobs_tbl[slot].cmd) - 1) {
                 jobs_tbl[slot].cmd[n] = cmdbuf[n]; n++;
             }
             jobs_tbl[slot].cmd[n] = 0;
-            printf("\n[%d]+ Stopped     %s\n", jobs_tbl[slot].id, jobs_tbl[slot].cmd);
         }
+        jobs_tbl[slot].state = JOB_STOPPED;
+        jobs_tbl[slot].status = last_status;
+        printf("\n[%d]+ Stopped\t%s\n", jobs_tbl[slot].id, jobs_tbl[slot].cmd);
     }
     return last_status;
 }
@@ -606,7 +607,7 @@ static int run_pipeline(int start, int in_fd, int bg) {
     }
 
     set_console_fg(leader);
-    return wait_fg_pgrp(leader, last_pid, cmdbuf);
+    return wait_fg_pgrp(leader, last_pid, cmdbuf, -1);
 }
 
 // Run the already-tokenized line. Returns the exit status of the last
@@ -701,7 +702,7 @@ static int run_line(void) {
         j->state = JOB_RUNNING;
         if (is_fg) {
             printf("%s\n", j->cmd);
-            int st = wait_fg_pgrp(j->pgid, 0, j->cmd);
+            int st = wait_fg_pgrp(j->pgid, 0, j->cmd, slot);
             if (!WIFSTOPPED(st)) j->state = JOB_FREE;
             return WEXITSTATUS(st);
         } else {
