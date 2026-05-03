@@ -4,7 +4,7 @@ set -e
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BB="$REPO/third_party/busybox"
-SEED="$BB/configs/sbunix_min.config"
+SEED="$REPO/tools/busybox-min.config"
 CONFIG="$BB/.config"
 
 set_config() {
