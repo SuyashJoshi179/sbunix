@@ -51,6 +51,19 @@ int   vscanf(const char *fmt, va_list ap);
 
 int   asprintf(char **strp, const char *fmt, ...);
 int   vasprintf(char **strp, const char *fmt, va_list ap);
+int   dprintf(int fd, const char *fmt, ...);
+int   vdprintf(int fd, const char *fmt, va_list ap);
+
+/* glibc stdio _unlocked variants — single-threaded SBUnix has no locks,
+ * so these are simple aliases for the locked forms. */
+int   fputs_unlocked(const char *s, FILE *stream);
+int   putc_unlocked(int c, FILE *stream);
+int   getc_unlocked(FILE *stream);
+int   fgetc_unlocked(FILE *stream);
+int   fputc_unlocked(int c, FILE *stream);
+int   feof_unlocked(FILE *stream);
+int   ferror_unlocked(FILE *stream);
+int   fileno_unlocked(FILE *stream);
 
 FILE  *fopen(const char *path, const char *mode);
 int    fclose(FILE *stream);

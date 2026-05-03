@@ -21,6 +21,7 @@ char   *strtok_r(char *s, const char *delim, char **saveptr);
 char   *strdup(const char *s);
 char   *strndup(const char *s, size_t n);
 char   *strerror(int errnum);
+char   *strsignal(int sig);
 
 void   *memset(void *dst, int c, size_t n);
 void   *memcpy(void *dst, const void *src, size_t n);
