@@ -67,4 +67,10 @@ size_t wcstombs(char *s, const int *pwcs, size_t n);
 
 #define MB_CUR_MAX 1
 
+/* alloca: glibc exposes this through stdlib.h indirectly. Foreign code
+ * (BusyBox) calls alloca() without including <alloca.h>. Provide the
+ * builtin macro here so it resolves at compile time — a real function
+ * call cannot work because the stack frame would be freed on return. */
+#define alloca(size) __builtin_alloca(size)
+
 #endif
