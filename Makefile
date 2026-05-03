@@ -89,6 +89,9 @@ thirdparty: build/libc/crt.S.o build/libc.a
 	@rm -f build/tarfs.o
 	$(MAKE) build/kernel.elf
 
+busybox-minconfig:
+	tools/busybox-minconfig.sh
+
 build/tools/mkfs: tools/mkfs.c
 	@mkdir -p $(@D)
 	gcc -Wall -o $@ $<
@@ -130,4 +133,4 @@ submit:
 	echo "Submitted to $(SUBMIT_DIR)/sbunix"
 
 .PRECIOUS: build/%.S.o build/%.c.o
-.PHONY: all qemu clean thirdparty submit
+.PHONY: all qemu clean thirdparty busybox-minconfig submit
