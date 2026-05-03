@@ -15,7 +15,8 @@ static const uint8_t default_action[NSIG] = {
     [SIGBUS]  = ACT_CORE, [SIGFPE]  = ACT_CORE,  [SIGKILL] = ACT_TERM,
     [SIGUSR1] = ACT_TERM, [SIGSEGV] = ACT_CORE,  [SIGUSR2] = ACT_TERM,
     [SIGPIPE] = ACT_TERM, [SIGALRM] = ACT_TERM,  [SIGTERM] = ACT_TERM,
-    [SIGCHLD] = ACT_IGN,  [SIGCONT] = ACT_IGN,   [SIGSTOP] = ACT_TERM,
+    [SIGCHLD] = ACT_IGN,  [SIGCONT] = ACT_CONT,  [SIGSTOP] = ACT_STOP,
+    [SIGTSTP] = ACT_STOP, [SIGTTIN] = ACT_STOP,  [SIGTTOU] = ACT_STOP,
 };
 
 /* ----------------------------------------------------------------
@@ -29,6 +30,35 @@ void send_signal(struct pcb *target, int sig) {
     if (sig == SIGKILL || sig == SIGSTOP) {
         target->sig_blocked &= ~(1ULL << sig);
         target->sig_handlers[sig].sa_handler = SIG_DFL;
+    }
+
+    /* SIGCONT clears any pending stop signals (POSIX) and resumes a
+     * stopped process even if SIGCONT itself is blocked or ignored.
+     * If the target is not stopped and there is no user handler for
+     * SIGCONT, treat as default-ignore so we don't wake a timer-sleep
+     * via the "deliverable signal" wake check below. */
+    if (sig == SIGCONT) {
+        target->sig_pending &= ~((1ULL << SIGSTOP) | (1ULL << SIGTSTP) |
+                                 (1ULL << SIGTTIN) | (1ULL << SIGTTOU));
+        if (target->state == PROC_STOPPED) {
+            target->state = PROC_READY;
+            target->wake_tick = 0;
+            target->continued_pending = 1;
+            /* Wake parent waiting in wait4(WCONTINUED). */
+            send_signal_by_pid(target->parent_pid, SIGCHLD);
+            proc_wakeup(target->parent_pid);
+        }
+        if (target->sig_handlers[SIGCONT].sa_handler == SIG_DFL ||
+            target->sig_handlers[SIGCONT].sa_handler == SIG_IGN) {
+            return;
+        }
+    }
+
+    /* Stop-signal arriving on a stopped process: discard (POSIX: SIGCONT
+     * already drained these; another stop while stopped is meaningless). */
+    if ((sig == SIGTSTP || sig == SIGTTIN || sig == SIGTTOU || sig == SIGSTOP) &&
+        target->state == PROC_STOPPED) {
+        return;
     }
 
     target->sig_pending |= (1ULL << sig);
@@ -48,6 +78,17 @@ void send_signal_by_pid(int pid, int sig) {
             return;
         }
     }
+}
+
+int send_signal_pgrp(int pgid, int sig) {
+    int hits = 0;
+    for (struct pcb *p = proc_list_head(); p; p = p->next) {
+        if (p->state == PROC_UNUSED) continue;
+        if (p->pgid != pgid) continue;
+        send_signal(p, sig);
+        hits++;
+    }
+    return hits;
 }
 
 int sig_has_actionable(struct pcb *p) {
@@ -129,9 +170,20 @@ void check_signals(uint64_t *trapframe) {
 
     p->sig_pending &= ~(1ULL << sig);
 
-    /* SIGKILL/SIGSTOP: always kill. */
-    if (sig == SIGKILL || sig == SIGSTOP) {
+    /* SIGKILL: always kill, unblockable, uncatchable. */
+    if (sig == SIGKILL) {
         proc_exit_current(sig & 0x7f);
+    }
+
+    /* SIGSTOP: stop unconditionally — cannot be caught or ignored. */
+    if (sig == SIGSTOP) {
+        p->state = PROC_STOPPED;
+        p->last_signal = sig;
+        p->stopped_reported = 0;
+        send_signal_by_pid(p->parent_pid, SIGCHLD);
+        proc_wakeup(p->parent_pid);
+        proc_stop_current();
+        return;
     }
 
     sighandler_t h = p->sig_handlers[sig].sa_handler;
@@ -140,7 +192,16 @@ void check_signals(uint64_t *trapframe) {
 
     if (h == SIG_DFL) {
         uint8_t act = (sig < NSIG) ? default_action[sig] : ACT_TERM;
-        if (act == ACT_IGN) return;
+        if (act == ACT_IGN || act == ACT_CONT) return;
+        if (act == ACT_STOP) {
+            p->state = PROC_STOPPED;
+            p->last_signal = sig;
+            p->stopped_reported = 0;
+            send_signal_by_pid(p->parent_pid, SIGCHLD);
+            proc_wakeup(p->parent_pid);
+            proc_stop_current();
+            return;
+        }
         if (sig == SIGSEGV && p->delivering_segv) {
             /* Recursive SIGSEGV — just die. */
         }
@@ -156,15 +217,37 @@ void check_signals(uint64_t *trapframe) {
  * ---------------------------------------------------------------- */
 int64_t sys_kill(int pid, int sig) {
     if (sig < 0 || sig >= NSIG) return -EINVAL;
-    if (pid <= 0) return -EINVAL;
 
-    for (struct pcb *p = proc_list_head(); p; p = p->next) {
-        if (p->pid == pid) {
-            if (sig != 0) send_signal(p, sig);
-            return 0;
+    if (pid > 0) {
+        for (struct pcb *p = proc_list_head(); p; p = p->next) {
+            if (p->pid == pid) {
+                if (sig != 0) send_signal(p, sig);
+                return 0;
+            }
         }
+        return -ESRCH;
     }
-    return -ESRCH;
+
+    int pgid;
+    if (pid == 0) {
+        struct pcb *me = current_proc();
+        if (!me) return -EINVAL;
+        pgid = me->pgid;
+    } else if (pid == -1) {
+        return -EPERM;          /* unprivileged broadcast not supported */
+    } else {
+        pgid = -pid;
+    }
+
+    if (sig == 0) {
+        /* Existence probe: return 0 if any member exists. */
+        for (struct pcb *p = proc_list_head(); p; p = p->next)
+            if (p->state != PROC_UNUSED && p->pgid == pgid) return 0;
+        return -ESRCH;
+    }
+
+    int hits = send_signal_pgrp(pgid, sig);
+    return hits ? 0 : -ESRCH;
 }
 
 /* ----------------------------------------------------------------

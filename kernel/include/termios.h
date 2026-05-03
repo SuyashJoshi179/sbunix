@@ -18,10 +18,12 @@ struct termios {
 #define ECHO    0x00000008
 
 #define VINTR    0
+#define VQUIT    1
 #define VERASE   2
 #define VEOF     4
 #define VTIME    5
 #define VMIN     6
+#define VSUSP    10
 
 struct winsize {
     uint16_t ws_row;
@@ -39,5 +41,7 @@ struct winsize {
 void termios_init(void);
 void termios_get(struct termios *out);
 void termios_set(const struct termios *in);
-int termios_get_fg_pid(void);
-void termios_set_fg_pid(int pid);
+int  termios_get_fg_pgid(void);
+void termios_set_fg_pgid(int pgid);
+int  termios_get_session(void);
+void termios_set_session(int sid);

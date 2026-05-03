@@ -32,6 +32,7 @@ typedef enum {
     PROC_RUNNING  = 2,
     PROC_SLEEPING = 3,
     PROC_ZOMBIE   = 4,
+    PROC_STOPPED  = 5,
 } proc_state_t;
 
 struct pcb {
@@ -40,6 +41,14 @@ struct pcb {
     int            parent_pid;
     int            exit_status;
     proc_state_t   state;
+
+    // Job control: process group, session, last-stop signal, wait4 latches.
+    int            pgid;
+    int            sid;
+    int            last_signal;            // last signal that stopped/terminated
+    uint8_t        stopped_reported;       // wait4(WUNTRACED) already reported
+    uint8_t        continued_pending;      // SIGCONT seen, wait4(WCONTINUED) pending
+
     uint8_t        is_user;         // 1 for user processes, 0 for kernel threads
 
     void         (*entry)(void);    // entry function (kernel threads only)
@@ -87,6 +96,7 @@ struct pcb {
 void  sched_init(void);
 void  yield(void);
 void  swtch(struct context *old, struct context *new);
+void  proc_stop_current(void);
 
 struct pcb *current_proc(void);
 struct pcb *proc_list_head(void);  // for timer_handler sleeper scan
@@ -96,6 +106,7 @@ void        free_proc(struct pcb *p);
 
 void proc_exit_current(int status);
 int  proc_wait_current(int *status);
+int  proc_wait4_current(int pid, int *status, int options);
 int  proc_fork_current(void);
 void proc_sleep(struct pcb *p);
 void proc_sleep_ms(uint64_t ms);   // timed sleep
