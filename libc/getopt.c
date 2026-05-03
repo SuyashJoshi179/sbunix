@@ -19,6 +19,10 @@ static void warn_opt(const char *prog, const char *msg, char c) {
 
 int getopt(int argc, char *const argv[], const char *opts) {
     optarg = 0;
+    /* glibc convention: optind == 0 means "reset state, skip argv[0]". BB's
+     * GETOPT_RESET() relies on this — without it, argv[0] (program name) is
+     * treated as a positional and never advanced past. */
+    if (optind == 0) { optind = 1; subind = 1; }
     if (optind >= argc)                              { subind = 1; return -1; }
     const char *arg = argv[optind];
     if (!arg || arg[0] != '-' || arg[1] == '\0')    { subind = 1; return -1; }
@@ -69,6 +73,7 @@ static int long_match(const char *arg, const struct option *opt, int *eq_pos) {
 
 int getopt_long(int argc, char *const argv[], const char *opts,
                 const struct option *longopts, int *longindex) {
+    if (optind == 0) { optind = 1; subind = 1; }
     if (optind >= argc) return -1;
     const char *arg = argv[optind];
     if (!arg || arg[0] != '-') return -1;
