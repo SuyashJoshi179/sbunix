@@ -6,7 +6,7 @@ Strategy: minimal applet set first, expand once stable. Build BB statically, lin
 
 ## TL;DR — current state
 
-**Branch**: `feat/busybox-port-libc`. 13 commits ahead of `develop`.
+**Branch**: `feat/busybox-port-libc`. Now includes merge of `develop` (#45 job control). User handles `git push` to origin.
 
 **What works**:
 ```
@@ -98,13 +98,18 @@ Total: 48 cases.
 ### Kernel gaps (BusyBox impact)
 
 **Critical (Stage 7 reactive — surfaces when exercised)**:
-- `waitpid` with WNOHANG — currently libc fakes via `wait()`, options ignored. Sh background jobs (`&`), `wait` builtin broken.
+- ~~`waitpid` with WNOHANG~~ — **DONE via develop merge (#45)**. Real `wait4` syscall (106) with WUNTRACED/WCONTINUED/WNOHANG; libc waitpid routes through it.
 - `ppoll` — ash interactive `read`, pipe-driven applets. Currently libc returns `-ENOSYS`.
 - `ftruncate` — `>` redirect path. Open(O_TRUNC) already works for zero-truncate, so most BB usage may be OK.
 - `sigsuspend` — sh signal-safe pause. Currently libc uses `pause()` fallback (small race window).
 
+**Done via develop merge (#45)**:
+- `setpgid`/`getpgid`/`getpgrp`/`setsid`/`getsid` — real syscalls 95-99; libc lie-stubs replaced.
+- `kill(-pgid)` — pgrp-targeted signal delivery.
+- `tcsetpgrp`/`tcgetpgrp` via existing `ioctl(TIOCSPGRP/TIOCGPGRP)`.
+- SIGTSTP/SIGTTIN/SIGTTOU/SIGCONT default actions; PROC_STOPPED scheduler integration.
+
 **Optional (lies suffice for now)**:
-- `setpgid`/`getpgid`/`setsid`/`getsid` — libc returns success without doing anything. Only needed for full job control.
 - `symlink` — libc ENOSYS. Needed for `ln -s` runtime; not for BB applet install (those are in tarball).
 
 **Defer entirely**:
@@ -132,8 +137,8 @@ Approach: complete guaranteed libc/fs gaps first, attempt BB build, let link-err
 | 5 | Libc glob/fnmatch | **DONE** | `libc/fnmatch.c` + `libc/glob.c`. POSIX shell wildcards. No GLOB_BRACE, no GLOB_TILDE |
 | 6 | tarfs symlink support | **DONE** | typeflag '2' → I_LNK inode, readlink op, DT_LNK in getdents. namei + sys_readlink already symlink-aware |
 | 8 | Build BusyBox against libc.a | **DONE** | BB 1.36.1 vendored. Wrapper, stub headers, allnoconfig+seed config. Boots into ash prompt. |
-| 9 | Runtime triage | **IN PROGRESS** | cat-argv bug fixed (libc/getopt.c optind=0 reset). Next: drive more applets to surface poll/waitpid/sigsuspend/time/vsnprintf gaps. |
-| 7 | Reactive kernel additions | pending | Only what Stage 9 proves needed. Likely waitpid/ppoll/ftruncate. |
+| 9 | Runtime triage | **IN PROGRESS** | cat-argv FIXED. Merged develop (#45 job-control), waitpid/setpgid/setsid done. Next: surface ppoll/sigsuspend/ftruncate/time/vsnprintf via pipes/redirects/`read` builtin. |
+| 7 | Reactive kernel additions | partial | Done via develop: wait4(106), setpgid/getpgid/getpgrp/setsid/getsid (95-99). Pending: ppoll, sigsuspend, ftruncate. |
 | 3 | Libc time funcs | **DEFERRED** | Add only if `ls -l`/`date` matter |
 
 ## Branch / commit tree
