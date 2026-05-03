@@ -2,9 +2,17 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 
 int main(void) {
     printf("init: starting\n");
+
+    /* Become session leader and claim the console. Children fork into
+     * their own pgrps; the foreground pgrp is handed off via tcsetpgrp
+     * so signal chars (^C/^Z/^\) only hit the running test. */
+    setsid();
+    int shell_pgid = getpgrp();
+    ioctl(0, 0x5410 /* TIOCSPGRP */, &shell_pgid);
 
     char *tests[] = {
         /* libc surface tests — kept first so a libc regression fails
@@ -53,6 +61,10 @@ int main(void) {
         "/bin/date",
         "/bin/uid_test",
         /* Phase 8b/8c: signals + termios */
+        "/bin/pgrp_test",
+        "/bin/kill_pgrp_test",
+        "/bin/sigtstp_test",
+        "/bin/wait4_nohang_test",
         "/bin/signal_test",
         "/bin/sigmask_test",
         "/bin/sigchld_test",
@@ -90,10 +102,13 @@ int main(void) {
     for (int i = 0; i < ntests; i++) {
         int pid = fork();
         if (pid == 0) {
+            setpgid(0, 0);
             execv(tests[i], 0);
             printf("init: exec '%s' failed\n", tests[i]);
             exit(1);
         }
+        setpgid(pid, pid);
+        ioctl(0, 0x5410 /* TIOCSPGRP */, &pid);
         int status = -1;
         while (1) {
             int got = wait(&status);
@@ -104,6 +119,7 @@ int main(void) {
                 break;
             }
         }
+        ioctl(0, 0x5410 /* TIOCSPGRP */, &shell_pgid);
         if (status == 0) {
             pass++;
         } else {
@@ -117,16 +133,20 @@ int main(void) {
         printf("Starting /bin/sh\n");
         int pid = fork();
         if (pid == 0) {
+            setpgid(0, 0);
             char *sh_argv[] = { "/bin/sh", 0 };
             execv("/bin/sh", sh_argv);
             printf("init: exec /bin/sh failed\n");
             exit(1);
         }
+        setpgid(pid, pid);
+        ioctl(0, 0x5410 /* TIOCSPGRP */, &pid);
         while (1) {
             int got = wait(0);
             if (got == pid) break;
             if (got == -1 && errno == EINTR) continue;
             if (got < 0) break;
         }
+        ioctl(0, 0x5410 /* TIOCSPGRP */, &shell_pgid);
     }
 }

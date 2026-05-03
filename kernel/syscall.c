@@ -1140,6 +1140,71 @@ static int64_t sys_nanosleep(const struct timespec *req, struct timespec *rem) {
 }
 
 // ---------------------------------------------------------------------------
+// Job control: process group / session syscalls
+// ---------------------------------------------------------------------------
+static struct pcb *pcb_target(int pid) {
+    if (pid == 0) return current_proc();
+    return proc_find_by_pid(pid);
+}
+
+static int64_t sys_setpgid(int pid, int pgid) {
+    struct pcb *me = current_proc();
+    if (!me) return -EINVAL;
+    if (pid < 0 || pgid < 0) return -EINVAL;
+
+    /* Only allow setpgid() on the calling process (pid == 0/self).
+     * POSIX also permits a parent to set its child's pgid before exec,
+     * but our shell and init both already self-setpgid in the child,
+     * so the parent's call is redundant — restricting to self-only
+     * keeps the semantics tighter and matches the reviewer's preference. */
+    if (pid != 0 && pid != me->pid) return -EPERM;
+
+    struct pcb *p = pcb_target(pid);
+    if (!p) return -ESRCH;
+    if (p->sid != me->sid) return -EPERM;
+    if (p->pid == p->sid) return -EPERM;          // session leader
+
+    if (pgid == 0) pgid = p->pid;
+    /* Target pgrp must exist within the caller's session, unless the
+     * caller is making itself into the new pgrp's leader. */
+    if (pgid != p->pid) {
+        struct pcb *leader = proc_find_by_pid(pgid);
+        if (!leader || leader->sid != me->sid) return -EPERM;
+    }
+    p->pgid = pgid;
+    return 0;
+}
+
+static int64_t sys_getpgid(int pid) {
+    struct pcb *p = pcb_target(pid);
+    if (!p) return -ESRCH;
+    return p->pgid;
+}
+
+static int64_t sys_getpgrp(void) {
+    return current_proc()->pgid;
+}
+
+static int64_t sys_getsid(int pid) {
+    struct pcb *p = pcb_target(pid);
+    if (!p) return -ESRCH;
+    return p->sid;
+}
+
+static int64_t sys_setsid(void) {
+    struct pcb *me = current_proc();
+    /* Cannot setsid if already a process-group leader of any other proc. */
+    for (struct pcb *q = proc_list_head(); q; q = q->next) {
+        if (q == me) continue;
+        if (q->state == PROC_UNUSED) continue;
+        if (q->pgid == me->pid) return -EPERM;
+    }
+    me->sid  = me->pid;
+    me->pgid = me->pid;
+    return me->sid;
+}
+
+// ---------------------------------------------------------------------------
 // uid/gid stubs — always 0, never fail
 // ---------------------------------------------------------------------------
 static int64_t sys_getuid(void)  { return 0; }
@@ -1331,6 +1396,32 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_meminfo:
             return sys_meminfo();
+
+        case SYS_wait4: {
+            int pid_a       = (int)(int64_t)trapframe[TF_A0];
+            int *ustatus    = (int *)(uintptr_t)trapframe[TF_A1];
+            int options     = (int)(int64_t)trapframe[TF_A2];
+            int kstatus = 0;
+            int r = proc_wait4_current(pid_a, ustatus ? &kstatus : 0, options);
+            if (r > 0 && ustatus) {
+                if (copyout(ustatus, &kstatus, sizeof(kstatus)) < 0)
+                    return -EFAULT;
+            }
+            return (int64_t)r;
+        }
+
+        case SYS_setpgid:
+            return sys_setpgid((int)(int64_t)trapframe[TF_A0],
+                               (int)(int64_t)trapframe[TF_A1]);
+        case SYS_getpgid:
+            return sys_getpgid((int)(int64_t)trapframe[TF_A0]);
+        case SYS_getpgrp:
+            return sys_getpgrp();
+        case SYS_setsid:
+            return sys_setsid();
+        case SYS_getsid:
+            return sys_getsid((int)(int64_t)trapframe[TF_A0]);
+
         default:
             printk("syscall: unknown number %lu from pid %d\n",
                    sysnum,

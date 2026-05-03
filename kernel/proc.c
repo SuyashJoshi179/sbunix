@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <string.h>
 #include <syscall.h>
+#include <termios.h>
 #include <timer.h>
 #include <vmem.h>
 
@@ -133,6 +134,11 @@ struct pcb *alloc_proc(void) {
     p->parent_pid = 0;
     p->exit_status= 0;
     p->state      = PROC_UNUSED;
+    p->pgid       = p->pid;
+    p->sid        = p->pid;
+    p->last_signal = 0;
+    p->stopped_reported = 0;
+    p->continued_pending = 0;
     p->is_user    = 0;
     p->pagetable  = 0;
     p->user_entry = 0;
@@ -279,6 +285,13 @@ int proc_fork_current(void) {
     child->parent_pid = parent->pid;
     child->brk_start  = parent->brk_start;
 
+    /* Inherit pgid/sid; pid-derived defaults from alloc_proc are overwritten. */
+    child->pgid       = parent->pgid;
+    child->sid        = parent->sid;
+    child->last_signal = 0;
+    child->stopped_reported = 0;
+    child->continued_pending = 0;
+
     /* Inherit signal handlers and mask; child starts with no pending signals. */
     for (int i = 0; i < NSIG; i++)
         child->sig_handlers[i] = parent->sig_handlers[i];
@@ -311,6 +324,18 @@ int proc_fork_current(void) {
     child->state      = PROC_READY;
 
     return child->pid;
+}
+
+// ----------------------------------------------------------------
+// proc_stop_current — current proc has been marked PROC_STOPPED by
+// signal delivery; relinquish the CPU. Resumes when SIGCONT switches
+// state back to PROC_READY and scheduler picks us again.
+// ----------------------------------------------------------------
+
+void proc_stop_current(void) {
+    if (!current) return;
+    /* state already set to PROC_STOPPED by caller */
+    swtch(&current->context, &sched_context);
 }
 
 // ----------------------------------------------------------------
@@ -398,6 +423,20 @@ void proc_exit_current(int status) {
         }
     }
 
+    // Session-leader exit: if this proc is the session leader and the
+    // session owns the controlling terminal, hang up every member of
+    // every pgrp in the session (SIGHUP + SIGCONT to wake stopped jobs).
+    if (p->pid == p->sid && termios_get_session() == p->sid) {
+        for (struct pcb *q = procs; q; q = q->next) {
+            if (q == p || q->state == PROC_UNUSED) continue;
+            if (q->sid != p->sid) continue;
+            send_signal(q, SIGHUP);
+            send_signal(q, SIGCONT);
+        }
+        termios_set_session(0);
+        termios_set_fg_pgid(0);
+    }
+
     // Notify parent: send SIGCHLD, then wake it if sleeping in wait
     send_signal_by_pid(p->parent_pid, SIGCHLD);
     proc_wakeup(p->parent_pid);
@@ -412,6 +451,21 @@ void proc_exit_current(int status) {
 // ----------------------------------------------------------------
 
 int proc_wait_current(int *status) {
+    return proc_wait4_current(-1, status, 0);
+}
+
+#define WNOHANG_K    1
+#define WUNTRACED_K  2
+#define WCONTINUED_K 8
+
+static int wait4_match(struct pcb *child, struct pcb *parent, int pid) {
+    if (pid > 0)  return child->pid  == pid;
+    if (pid == 0) return child->pgid == parent->pgid;
+    if (pid == -1) return 1;
+    return child->pgid == -pid;
+}
+
+int proc_wait4_current(int pid, int *status, int options) {
     if (current == 0) return -ECHILD;
 
     while (1) {
@@ -419,24 +473,32 @@ int proc_wait_current(int *status) {
 
         for (struct pcb *p = procs; p; p = p->next) {
             if (p->parent_pid != current->pid) continue;
+            if (!wait4_match(p, current, pid)) continue;
             found_child = 1;
+
             if (p->state == PROC_ZOMBIE) {
                 int cpid = p->pid;
                 if (status) *status = p->exit_status;
                 proc_destroy(p);
                 return cpid;
             }
+            if ((options & WUNTRACED_K) && p->state == PROC_STOPPED &&
+                !p->stopped_reported) {
+                p->stopped_reported = 1;
+                if (status)
+                    *status = ((p->last_signal & 0xff) << 8) | 0x7f;
+                return p->pid;
+            }
+            if ((options & WCONTINUED_K) && p->continued_pending) {
+                p->continued_pending = 0;
+                if (status) *status = 0xffff;
+                return p->pid;
+            }
         }
 
-        if (!found_child) return -ECHILD;   // no children at all
-
-        // If interrupted by an actionable signal while no child is ready,
-        // report EINTR. Reaping always takes priority when a zombie exists.
-        // SIGCHLD is default-ignored, so it does not interrupt wait().
-        if (sig_has_actionable(current))
-            return -EINTR;
-
-        // Sleep until a child exits
+        if (!found_child) return -ECHILD;
+        if (options & WNOHANG_K) return 0;
+        if (sig_has_actionable(current)) return -EINTR;
         proc_sleep(current);
     }
 }

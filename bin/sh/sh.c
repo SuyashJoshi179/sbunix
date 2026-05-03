@@ -17,7 +17,7 @@
 #define MAXARG  64
 
 // Token types
-enum { T_WORD, T_PIPE, T_REDIR_IN, T_REDIR_OUT, T_REDIR_APPEND, T_AND, T_END };
+enum { T_WORD, T_PIPE, T_REDIR_IN, T_REDIR_OUT, T_REDIR_APPEND, T_AND, T_BG, T_END };
 
 struct token {
     int  type;
@@ -181,8 +181,91 @@ static void on_sigint(int sig) {
     shell_interrupted = 1;
 }
 
-static void set_console_fg(int pid) {
-    ioctl(0, TIOCSPGRP, &pid);
+static volatile int sigchld_pending;
+static void on_sigchld(int sig) {
+    (void)sig;
+    sigchld_pending = 1;
+}
+
+static void set_console_fg(int pgid) {
+    ioctl(0, TIOCSPGRP, &pgid);
+}
+
+/* ---------------- Job table ---------------- */
+#define MAX_JOBS 16
+enum { JOB_FREE = 0, JOB_RUNNING, JOB_STOPPED, JOB_DONE };
+struct job {
+    int  state;
+    int  pgid;
+    int  id;          /* %n */
+    int  status;      /* last reported status (for DONE) */
+    char cmd[96];
+};
+static struct job jobs_tbl[MAX_JOBS];
+static int next_job_id = 1;
+static int shell_pgid;
+
+static int jobs_alloc_slot(void) {
+    for (int i = 0; i < MAX_JOBS; i++)
+        if (jobs_tbl[i].state == JOB_FREE) return i;
+    return -1;
+}
+
+static int jobs_find_by_id(int id) {
+    for (int i = 0; i < MAX_JOBS; i++)
+        if (jobs_tbl[i].state != JOB_FREE && jobs_tbl[i].id == id) return i;
+    return -1;
+}
+
+static int jobs_most_recent(void) {
+    int best = -1;
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs_tbl[i].state == JOB_FREE) continue;
+        if (best < 0 || jobs_tbl[i].id > jobs_tbl[best].id) best = i;
+    }
+    return best;
+}
+
+static const char *job_state_str(int s) {
+    if (s == JOB_RUNNING) return "Running";
+    if (s == JOB_STOPPED) return "Stopped";
+    return "Done";
+}
+
+static void jobs_print_one(struct job *j) {
+    printf("[%d] %d  %s\t%s\n", j->id, j->pgid, job_state_str(j->state), j->cmd);
+}
+
+/* Drain finished/stopped/continued children; print and update table.
+ * Called between prompts. */
+static void jobs_poll(int announce_done) {
+    while (1) {
+        int st = 0;
+        int pid = wait4(-1, &st, 1 /*WNOHANG*/ | 2 /*WUNTRACED*/ | 8 /*WCONTINUED*/, 0);
+        if (pid <= 0) return;
+        int slot = -1;
+        for (int i = 0; i < MAX_JOBS; i++) {
+            if (jobs_tbl[i].state == JOB_FREE) continue;
+            /* All pipeline members share pgid; the reaped pid is one of them.
+             * We can't directly map pid→pgid here, so match if pid == pgid
+             * (the leader) or if no exact match, match the most-recent. */
+            if (jobs_tbl[i].pgid == pid) { slot = i; break; }
+        }
+        if (slot < 0) continue;
+        struct job *j = &jobs_tbl[slot];
+        if (WIFSTOPPED(st)) {
+            j->state = JOB_STOPPED;
+            j->status = st;
+            printf("\n[%d]+ Stopped     %s\n", j->id, j->cmd);
+        } else if (WIFCONTINUED(st)) {
+            j->state = JOB_RUNNING;
+        } else {
+            j->state = JOB_DONE;
+            j->status = st;
+            if (announce_done) printf("[%d]+ Done        %s\n", j->id, j->cmd);
+            j->state = JOB_FREE;
+        }
+    }
 }
 
 static int readline(void) {
@@ -221,6 +304,10 @@ static void tokenize(void) {
             tokens[ntokens].type = T_AND;
             tokens[ntokens].val = 0;
             ntokens++; p += 2;
+        } else if (*p == '&') {
+            tokens[ntokens].type = T_BG;
+            tokens[ntokens].val = 0;
+            ntokens++; p++;
         } else if (*p == '<') {
             tokens[ntokens].type = T_REDIR_IN;
             tokens[ntokens].val = 0;
@@ -265,7 +352,8 @@ static int parse_cmd(int start, char **argv, int *argc_out,
     *append = 0;
 
     int i = start;
-    while (i < ntokens && tokens[i].type != T_PIPE && tokens[i].type != T_END) {
+    while (i < ntokens && tokens[i].type != T_PIPE && tokens[i].type != T_END &&
+           tokens[i].type != T_BG && tokens[i].type != T_AND) {
         if (tokens[i].type == T_REDIR_IN) {
             i++;
             if (i < ntokens && tokens[i].type == T_WORD)
@@ -360,49 +448,71 @@ static void run_simple(char **argv, int argc, char *redir_in, char *redir_out,
 }
 
 // Execute the pipeline starting from token index `start`.
-// If `in_fd` >= 0, stdin has been redirected to that fd.
-static int run_pipeline(int start, int in_fd) {
+/* Reset job-control signals to default before exec (children inherit
+ * the shell's SIG_IGN otherwise). */
+static void child_reset_signals(void) {
+    struct sigaction sa = {0};
+    sa.sa_handler = SIG_DFL;
+    sigaction(SIGINT,  &sa, 0);
+    sigaction(SIGQUIT, &sa, 0);
+    sigaction(SIGTSTP, &sa, 0);
+    sigaction(SIGTTIN, &sa, 0);
+    sigaction(SIGTTOU, &sa, 0);
+}
+
+/* Recursive pipeline launcher. Tracks the leader pgid via *leader_io.
+ * Returns the pid of the child it forked (caller uses this for the
+ * last stage's status). Children: setpgid(0, leader). Parent: also
+ * setpgid(child, leader) for race coverage. */
+static int spawn_pipeline(int start, int in_fd, int *leader_io,
+                          int *last_pid_out, char *first_cmd_buf,
+                          int first_cmd_buf_sz) {
     char *argv[MAXARG];
     int argc;
     char *redir_in, *redir_out;
     int append;
 
     int next = parse_cmd(start, argv, &argc, &redir_in, &redir_out, &append);
-
     int has_pipe = (next < ntokens && tokens[next].type == T_PIPE);
+
+    /* Capture command label on first stage for the job table. */
+    if (first_cmd_buf && first_cmd_buf_sz > 0 && first_cmd_buf[0] == 0) {
+        int pos = 0;
+        for (int i = 0; i < argc && pos < first_cmd_buf_sz - 1; i++) {
+            if (i && pos < first_cmd_buf_sz - 1) first_cmd_buf[pos++] = ' ';
+            const char *s = argv[i];
+            while (*s && pos < first_cmd_buf_sz - 1) first_cmd_buf[pos++] = *s++;
+        }
+        first_cmd_buf[pos] = 0;
+    }
 
     if (has_pipe) {
         int pfd[2];
-        if (pipe(pfd) < 0) {
-            printf("sh: pipe failed\n");
-            return 1;
-        }
-
+        if (pipe(pfd) < 0) { printf("sh: pipe failed\n"); return 1; }
         int pid = fork();
         if (pid < 0) {
-            close(pfd[0]);
-            close(pfd[1]);
+            close(pfd[0]); close(pfd[1]);
             if (in_fd >= 0) close(in_fd);
             printf("sh: fork failed\n");
             return 1;
         }
         if (pid == 0) {
+            int leader = (*leader_io == 0) ? 0 /* self */ : *leader_io;
+            setpgid(0, leader);
+            child_reset_signals();
             close(pfd[0]);
             if (in_fd >= 0) { close(0); dup(in_fd); close(in_fd); }
-            close(1);
-            dup(pfd[1]);
-            close(pfd[1]);
+            close(1); dup(pfd[1]); close(pfd[1]);
             run_simple(argv, argc, redir_in, 0, 0);
         }
-
-        set_console_fg(pid);
+        if (*leader_io == 0) *leader_io = pid;
+        setpgid(pid, *leader_io);
 
         close(pfd[1]);
         if (in_fd >= 0) close(in_fd);
 
-        int st = run_pipeline(next + 1, pfd[0]);
-        wait(0);
-        return st;
+        return spawn_pipeline(next + 1, pfd[0], leader_io, last_pid_out,
+                              first_cmd_buf, first_cmd_buf_sz);
     } else {
         int pid = fork();
         if (pid < 0) {
@@ -411,18 +521,93 @@ static int run_pipeline(int start, int in_fd) {
             return 1;
         }
         if (pid == 0) {
+            int leader = (*leader_io == 0) ? 0 : *leader_io;
+            setpgid(0, leader);
+            child_reset_signals();
             if (in_fd >= 0) { close(0); dup(in_fd); close(in_fd); }
             run_simple(argv, argc, redir_in, redir_out, append);
         }
-        set_console_fg(pid);
+        if (*leader_io == 0) *leader_io = pid;
+        setpgid(pid, *leader_io);
         if (in_fd >= 0) close(in_fd);
-        int st = 0;
-        for (;;) {
-            int r = wait(&st);
-            if (r >= 0) break;
-        }
-        return st;
+        if (last_pid_out) *last_pid_out = pid;
+        return 0;
     }
+}
+
+/* Wait foreground pipeline: wait for every member of pgrp `pgid` to
+ * exit or for any to stop. Returns last exit status. If a child
+ * stops, mark the existing job slot stopped (slot >= 0) or allocate
+ * a fresh one (slot == -1). */
+static int wait_fg_pgrp(int pgid, int last_pid, char *cmdbuf, int reuse_slot) {
+    int last_status = 0;
+    int stopped = 0;
+    while (1) {
+        int st = 0;
+        int r = wait4(-pgid, &st, 2 /*WUNTRACED*/, 0);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (WIFSTOPPED(st)) {
+            stopped = 1;
+            last_status = st;
+            /* Whole pgrp shares the stop signal — break and report once. */
+            break;
+        }
+        if (r == last_pid) last_status = st;
+    }
+
+    set_console_fg(shell_pgid);
+
+    if (stopped) {
+        int slot = reuse_slot;
+        if (slot < 0) {
+            slot = jobs_alloc_slot();
+            if (slot < 0) return last_status;
+            jobs_tbl[slot].pgid = pgid;
+            jobs_tbl[slot].id = next_job_id++;
+            int n = 0;
+            while (cmdbuf && cmdbuf[n] && n < (int)sizeof(jobs_tbl[slot].cmd) - 1) {
+                jobs_tbl[slot].cmd[n] = cmdbuf[n]; n++;
+            }
+            jobs_tbl[slot].cmd[n] = 0;
+        }
+        jobs_tbl[slot].state = JOB_STOPPED;
+        jobs_tbl[slot].status = last_status;
+        printf("\n[%d]+ Stopped\t%s\n", jobs_tbl[slot].id, jobs_tbl[slot].cmd);
+    }
+    return last_status;
+}
+
+/* Run a single pipeline. `bg` = trailing & detected. Returns status. */
+static int run_pipeline(int start, int in_fd, int bg) {
+    int leader = 0;
+    int last_pid = 0;
+    char cmdbuf[96] = {0};
+    spawn_pipeline(start, in_fd, &leader, &last_pid, cmdbuf, sizeof(cmdbuf));
+    if (leader == 0) return 0;
+
+    if (bg) {
+        int slot = jobs_alloc_slot();
+        if (slot < 0) {
+            printf("sh: too many background jobs\n");
+            return 0;
+        }
+        jobs_tbl[slot].state = JOB_RUNNING;
+        jobs_tbl[slot].pgid = leader;
+        jobs_tbl[slot].id = next_job_id++;
+        int n = 0;
+        while (cmdbuf[n] && n < (int)sizeof(jobs_tbl[slot].cmd) - 1) {
+            jobs_tbl[slot].cmd[n] = cmdbuf[n]; n++;
+        }
+        jobs_tbl[slot].cmd[n] = 0;
+        printf("[%d] %d\n", jobs_tbl[slot].id, leader);
+        return 0;
+    }
+
+    set_console_fg(leader);
+    return wait_fg_pgrp(leader, last_pid, cmdbuf, -1);
 }
 
 // Run the already-tokenized line. Returns the exit status of the last
@@ -495,19 +680,52 @@ static int run_line(void) {
         }
     }
 
+    /* Builtins for job control. */
+    if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "jobs") == 0) {
+        for (int i = 0; i < MAX_JOBS; i++)
+            if (jobs_tbl[i].state != JOB_FREE) jobs_print_one(&jobs_tbl[i]);
+        return 0;
+    }
+    if (tokens[0].type == T_WORD &&
+        (strcmp(tokens[0].val, "fg") == 0 || strcmp(tokens[0].val, "bg") == 0)) {
+        int is_fg = (tokens[0].val[0] == 'f');
+        int slot;
+        if (ntokens > 1 && tokens[1].type == T_WORD && tokens[1].val[0] == '%')
+            slot = jobs_find_by_id(parse_int(tokens[1].val + 1));
+        else
+            slot = jobs_most_recent();
+        if (slot < 0) { printf("%s: no such job\n", is_fg ? "fg" : "bg"); return 1; }
+        struct job *j = &jobs_tbl[slot];
+        int was_stopped = (j->state == JOB_STOPPED);
+        if (is_fg) set_console_fg(j->pgid);
+        if (was_stopped) kill(-j->pgid, SIGCONT);
+        j->state = JOB_RUNNING;
+        if (is_fg) {
+            printf("%s\n", j->cmd);
+            int st = wait_fg_pgrp(j->pgid, 0, j->cmd, slot);
+            if (!WIFSTOPPED(st)) j->state = JOB_FREE;
+            return WEXITSTATUS(st);
+        } else {
+            printf("[%d] %s &\n", j->id, j->cmd);
+            return 0;
+        }
+    }
+
     int cmd_start = 0;
     int last_status = 0;
     for (int i = 0;; i++) {
-        if (tokens[i].type == T_AND || tokens[i].type == T_END) {
+        if (tokens[i].type == T_AND || tokens[i].type == T_END ||
+            tokens[i].type == T_BG) {
             int saved = tokens[i].type;
+            int bg = (saved == T_BG);
             tokens[i].type = T_END;
-            last_status = run_pipeline(cmd_start, -1);
+            last_status = run_pipeline(cmd_start, -1, bg);
             tokens[i].type = saved;
-            set_console_fg(getpid());
 
             if (saved == T_END) break;
-            if (last_status != 0) break;
+            if (saved == T_AND && last_status != 0) break;
             cmd_start = i + 1;
+            if (cmd_start >= ntokens) break;
         }
     }
     return WEXITSTATUS(last_status);
@@ -524,16 +742,34 @@ int main(int argc, char **argv) {
         return run_line() & 0xff;
     }
 
-    struct sigaction sa;
+    /* Become our own process group leader and claim the controlling tty. */
+    setpgid(0, 0);
+    shell_pgid = getpgrp();
+    set_console_fg(shell_pgid);
+
+    /* Ignore job-control signals so the shell doesn't kill or stop itself
+     * when reclaiming the tty or when the user types ^C/^Z at the prompt.
+     * Children reset these to SIG_DFL before exec via child_reset_signals. */
+    struct sigaction sa = {0};
+    sa.sa_handler = SIG_IGN;
+    sigaction(SIGTTIN, &sa, 0);
+    sigaction(SIGTTOU, &sa, 0);
+    sigaction(SIGTSTP, &sa, 0);
+    sigaction(SIGQUIT, &sa, 0);
     sa.sa_handler = on_sigint;
-    sa.sa_mask = 0;
-    sa.sa_flags = 0;
-    sa.sa_restorer = 0;
     sigaction(SIGINT, &sa, 0);
 
-    set_console_fg(getpid());
+    /* SIGCHLD handler: just sets a flag. Its presence makes the kernel
+     * treat SIGCHLD as actionable, so the read(0, ...) in readline()
+     * returns -EINTR when a background job changes state. The main loop
+     * then re-runs jobs_poll(1) and we get the Done/Stopped line printed
+     * before the next prompt instead of after the next command. */
+    sa.sa_handler = on_sigchld;
+    sigaction(SIGCHLD, &sa, 0);
 
     while (1) {
+        jobs_poll(1);
+
         int rl = readline();
         if (rl < 0) break;
         if (linebuf[0] == 0) continue;

@@ -8,6 +8,8 @@
 #include <string.h>
 #include <drivers/uart.h>
 #include <printk.h>
+#include <proc.h>
+#include <signal.h>
 
 static int streq(const char *a, const char *b) { return strcmp(a, b) == 0; }
 
@@ -21,6 +23,20 @@ static int console_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
     struct termios tio;
     termios_get(&tio);
     int canonical = (tio.c_lflag & ICANON) != 0;
+
+    /* SIGTTIN gate: background pgrp in our session reading from the
+     * controlling terminal must be stopped. If SIGTTIN is blocked or
+     * ignored, return EIO instead. */
+    struct pcb *me = current_proc();
+    int sess = termios_get_session();
+    int fg   = termios_get_fg_pgid();
+    if (me && me->is_user && sess && fg && me->sid == sess && me->pgid != fg) {
+        int blocked = (me->sig_blocked >> SIGTTIN) & 1;
+        int ignored = (me->sig_handlers[SIGTTIN].sa_handler == SIG_IGN);
+        if (blocked || ignored) return -EIO;
+        send_signal_pgrp(me->pgid, SIGTTIN);
+        return -EINTR;
+    }
 
     for (uint64_t i = 0; i < n; ) {
         char c;
@@ -99,17 +115,23 @@ static int console_ioctl(struct inode *ip, int cmd, unsigned long arg) {
             break;
         }
         case TIOCSPGRP: {
-            int pid;
-            if (copyin(&pid, (void *)arg, sizeof(pid)) < 0) {
+            int pgid;
+            if (copyin(&pgid, (void *)arg, sizeof(pgid)) < 0) {
                 rc = -EFAULT;
                 break;
             }
-            termios_set_fg_pid(pid);
+            struct pcb *me = current_proc();
+            if (me) {
+                int sess = termios_get_session();
+                if (sess == 0) termios_set_session(me->sid);
+                else if (sess != me->sid) { rc = -EPERM; break; }
+            }
+            termios_set_fg_pgid(pgid);
             break;
         }
         case TIOCGPGRP: {
-            int pid = termios_get_fg_pid();
-            if (copyout((void *)arg, &pid, sizeof(pid)) < 0) rc = -EFAULT;
+            int pgid = termios_get_fg_pgid();
+            if (copyout((void *)arg, &pgid, sizeof(pgid)) < 0) rc = -EFAULT;
             break;
         }
         default:
