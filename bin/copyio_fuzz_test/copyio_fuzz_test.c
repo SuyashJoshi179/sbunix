@@ -49,7 +49,7 @@ int main(void) {
     check(read(p[0], r + 2 * PAGE_SZ + 12, 8) == 8,
           "read into valid high mapped page succeeds");
 
-        check(getcwd(r + PAGE_SZ - 1, 32) == -1 && errno == EFAULT,
+        check(getcwd(r + PAGE_SZ - 1, 32) == 0 && errno == EFAULT,
           "getcwd straddle into unmapped page fails");
 
     check(open((const char *)(uintptr_t)KERNEL_BASE_VA, 0) == -1 && errno == EFAULT,
