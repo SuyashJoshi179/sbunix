@@ -4,6 +4,7 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <termios.h>
 #include <errno.h>
 #include "syscall_priv.h"
@@ -105,8 +106,24 @@ int chdir(const char *path) {
     return (int)syscall_ret(ecall1(19, (long)path));
 }
 
-long getcwd(char *buf, long n) {
-    return syscall_ret(ecall2(20, (long)buf, n));
+/* POSIX getcwd: returns buf on success, NULL on error.
+ * glibc extension: buf == NULL → allocate. With size==0 use PATH_MAX.
+ * BusyBox ash relies on this extension (`getcwd(NULL, 0)`). */
+char *getcwd(char *buf, size_t n) {
+    int allocated = 0;
+    if (!buf) {
+        if (n == 0) n = 4096;
+        buf = malloc(n);
+        if (!buf) { errno = ENOMEM; return 0; }
+        allocated = 1;
+    }
+    long r = ecall2(20, (long)buf, (long)n);
+    if (r < 0) {
+        if (allocated) free(buf);
+        errno = (int)-r;
+        return 0;
+    }
+    return buf;
 }
 
 int mkdir(const char *path, int mode) {

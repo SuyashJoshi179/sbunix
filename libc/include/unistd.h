@@ -27,7 +27,7 @@ int   fstat(int fd, struct stat *st);
 int   lstat(const char *path, struct stat *st);
 long  getdents64(int fd, void *buf, long n);
 int   chdir(const char *path);
-long  getcwd(char *buf, long n);
+char *getcwd(char *buf, size_t n);
 int   mkdir(const char *path, int mode);
 int   unlink(const char *path);
 int   pipe(int fds[2]);
