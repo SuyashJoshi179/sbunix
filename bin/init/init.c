@@ -117,7 +117,8 @@ int main(void) {
         printf("Starting /bin/sh\n");
         int pid = fork();
         if (pid == 0) {
-            execv("/bin/sh", 0);
+            char *sh_argv[] = { "/bin/sh", 0 };
+            execv("/bin/sh", sh_argv);
             printf("init: exec /bin/sh failed\n");
             exit(1);
         }

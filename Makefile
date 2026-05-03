@@ -71,8 +71,18 @@ $(RS_BIN): build/rootfs/bin/%: $$(wildcard bin/%/*.rs) build/libc/crt.S.o build/
 	@mkdir -p $(@D)
 	rustc $(RUSTFLAGS) -C link-arg=build/libc/crt.S.o -C link-arg=build/libc.a bin/$*/$*.rs -o $@
 
+BUSYBOX_BIN := third_party/busybox/busybox
+BUSYBOX_APPLETS := echo cat pwd sh true false
+
 build/tarfs.o: $(USER_BIN)
 	cp -a rootfs/. build/rootfs/
+	@if [ -x $(BUSYBOX_BIN) ]; then \
+		echo "  INSTALL  busybox + applet symlinks"; \
+		cp $(BUSYBOX_BIN) build/rootfs/bin/busybox; \
+		for a in $(BUSYBOX_APPLETS); do \
+			ln -sf busybox build/rootfs/bin/$$a; \
+		done; \
+	fi
 	tar cf build/rootfs.tar -C build/rootfs .
 	cd build && $(OBJCOPY) -I binary -O elf64-littleriscv -B riscv \
 		--rename-section .data=.tarfs \
