@@ -24,8 +24,14 @@ hello
 ash boots, runs synchronous fork+exec+wait, lists tarfs + sbfs, runs `mkdir`, `echo`, `cd`, `pwd`. Symlinks `/bin/{echo,cat,pwd,sh,true,false}` → `busybox` resolved by tarfs and dispatched by argv[0].
 
 **Active bug** (Stage 9 triage):
-- *(none — cat-argv duplicate fixed by glibc-style optind=0 reset in `libc/getopt.c`; see "Stage 9 — fixed" below.)*
+- *(none blocking — cat-argv FIXED, bg-jobs/`wait` FIXED via /dev/null + real sigsuspend.)*
 - Minor cosmetic: first input char after each `Starting /bin/sh` is dropped (`cat` parsed as `at`, `echo` parsed as `cho`). Subsequent commands fine. Looks like UART/console startup race during fork+exec of /bin/sh — not affecting correctness of any applet, deferred.
+
+**Confirmed working via triage**:
+- pipes (1-, 2-, 5-stage), `>` redirect, `<` redirect, here-doc
+- `&` background, `wait`, multiple parallel bg jobs
+- variable expansion, `$?`, `for`/`if`/`while`, command substitution, subshells
+- `sh -c`, fork+exec+wait of external applets
 
 ## Decisions locked in
 
@@ -87,11 +93,12 @@ rm -f build/tarfs.o build/rootfs.tar && make
 1=exit  2=write  3=exec  4=open  5=read  6=close  7=wait  8=getpid  9=fork
 10=spawn  11=getppid  12=yield  13=sleep  14=dup  15=dup2  16=lseek
 17=fstat  18=getdents64  19=chdir  20=getcwd  21=mkdir  22=unlink
-23=pipe  24=execv  25=link  26=rename
+23=pipe  24=execv  25=link  26=rename  27=sigsuspend
 70=sbrk  71=mmap  72=munmap
 80=clock_gettime  81=gettimeofday  82=nanosleep
 90=kill  91=sigaction  92=sigprocmask  93=sigreturn  94=pause
-100-105=uid/gid  110=ioctl  111=meminfo  112=readlink  113=lstat
+95-99=setpgid/getpgid/getpgrp/setsid/getsid (#45)
+100-105=uid/gid  106=wait4 (#45)  110=ioctl  111=meminfo  112=readlink  113=lstat
 ```
 Total: 48 cases.
 
@@ -99,9 +106,10 @@ Total: 48 cases.
 
 **Critical (Stage 7 reactive — surfaces when exercised)**:
 - ~~`waitpid` with WNOHANG~~ — **DONE via develop merge (#45)**. Real `wait4` syscall (106) with WUNTRACED/WCONTINUED/WNOHANG; libc waitpid routes through it.
-- `ppoll` — ash interactive `read`, pipe-driven applets. Currently libc returns `-ENOSYS`.
-- `ftruncate` — `>` redirect path. Open(O_TRUNC) already works for zero-truncate, so most BB usage may be OK.
-- `sigsuspend` — sh signal-safe pause. Currently libc uses `pause()` fallback (small race window).
+- `ppoll` — ash interactive `read`, pipe-driven applets. Currently libc returns `-ENOSYS`. Not yet hit by triage.
+- ~~`ftruncate`~~ — `>` redirect verified to work via existing `O_TRUNC` path; no syscall needed for current applets.
+- ~~`sigsuspend`~~ — **DONE**. Real `sys_sigsuspend` (27) with atomic mask install. Pause-fallback was hanging BB `wait` builtin; fixed.
+- `/dev/null` — **DONE**. Devfs entry added; required by ash background-job stdin redirect.
 
 **Done via develop merge (#45)**:
 - `setpgid`/`getpgid`/`getpgrp`/`setsid`/`getsid` — real syscalls 95-99; libc lie-stubs replaced.
@@ -137,8 +145,8 @@ Approach: complete guaranteed libc/fs gaps first, attempt BB build, let link-err
 | 5 | Libc glob/fnmatch | **DONE** | `libc/fnmatch.c` + `libc/glob.c`. POSIX shell wildcards. No GLOB_BRACE, no GLOB_TILDE |
 | 6 | tarfs symlink support | **DONE** | typeflag '2' → I_LNK inode, readlink op, DT_LNK in getdents. namei + sys_readlink already symlink-aware |
 | 8 | Build BusyBox against libc.a | **DONE** | BB 1.36.1 vendored. Wrapper, stub headers, allnoconfig+seed config. Boots into ash prompt. |
-| 9 | Runtime triage | **IN PROGRESS** | cat-argv FIXED. Merged develop (#45 job-control), waitpid/setpgid/setsid done. Next: surface ppoll/sigsuspend/ftruncate/time/vsnprintf via pipes/redirects/`read` builtin. |
-| 7 | Reactive kernel additions | partial | Done via develop: wait4(106), setpgid/getpgid/getpgrp/setsid/getsid (95-99). Pending: ppoll, sigsuspend, ftruncate. |
+| 9 | Runtime triage | **IN PROGRESS** | cat-argv FIXED. Merged develop (#45 job-control). bg jobs + `wait` builtin work after `/dev/null` + real `sys_sigsuspend(27)`. Pipes (5-stage), redirects, `sh -c`, `$?`, command-sub all clean. Next: enable more applets, exercise `read` builtin, drive ppoll. |
+| 7 | Reactive kernel additions | partial | Done: wait4(106) via develop, setpgid/getpgid/getpgrp/setsid/getsid (95-99) via develop, sigsuspend(27), /dev/null. Pending: ppoll. |
 | 3 | Libc time funcs | **DEFERRED** | Add only if `ls -l`/`date` matter |
 
 ## Branch / commit tree
