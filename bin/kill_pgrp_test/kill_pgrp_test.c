@@ -18,10 +18,9 @@ int main(void) {
             _exit(99);
         }
         if (target_pgid == 0) target_pgid = pid;
-        setpgid(pid, target_pgid);
     }
-    /* wait briefly for children to reach pause() */
-    for (volatile int i = 0; i < 200000; i++) {}
+    /* Yield long enough for every child to run its setpgid + reach pause(). */
+    sleep_ms(50);
 
     int rc = kill(-target_pgid, SIGTERM);
     int got = 0;
