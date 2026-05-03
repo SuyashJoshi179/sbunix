@@ -12,6 +12,7 @@
 #include <procfs.h>
 #include <vfs.h>
 #include <bio.h>
+#include <page_cache.h>
 #include <sbfs.h>
 #include <termios.h>
 #include <drivers/uart.h>
@@ -49,6 +50,7 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
 
     // Phase 5/10: buffer cache and VirtIO-PCI block device.
     binit();
+    pcache_init();
     pci_init();
     virtio_disk_init();
 
