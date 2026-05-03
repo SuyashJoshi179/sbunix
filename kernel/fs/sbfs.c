@@ -15,6 +15,7 @@
 #include <stat.h>
 #include <errno.h>
 #include <vfs.h>
+#include <page_cache.h>
 #include <printk.h>
 #include <string.h>
 #include <riscv.h>
@@ -47,6 +48,7 @@ static inline void fs_unlock(void) {
  * inode_ops forward declarations
  * ----------------------------------------------------------------------- */
 static int  sbfs_op_read(struct inode *, uint64_t, void *, uint64_t);
+static int  sbfs_readpage(struct inode *, uint64_t, void *);
 static int  sbfs_op_write(struct inode *, uint64_t, const void *, uint64_t);
 static int  sbfs_op_stat(struct inode *, struct stat *);
 static int  sbfs_op_lookup(struct inode *, const char *, struct inode **);
@@ -76,6 +78,7 @@ static const struct inode_ops sbfs_iops = {
     .unlink   = sbfs_op_unlink,
     .link     = sbfs_op_link,
     .rename   = sbfs_op_rename,
+    .readpage = sbfs_readpage,
 };
 
 /* -----------------------------------------------------------------------
@@ -207,6 +210,10 @@ static void sbfs_op_release(struct inode *ip) {
     }
     si->dirty = 0;
     si->valid = 0;
+    /* Flush page-cache entries keyed on this slot pointer BEFORE clearing
+     * the inum so that a subsequent iget reusing the same slot pointer does
+     * not pick up stale pages from the previous file occupant. */
+    pcache_flush_inode(ip);
     si->inum  = 0;
     /* refcnt is already 0; slot is now free for reuse. */
 }
@@ -569,8 +576,16 @@ int sbfs_unlink(struct inode *parent, const char *name) {
  * inode_ops implementations
  * ----------------------------------------------------------------------- */
 
+static int sbfs_readpage(struct inode *ip, uint64_t pgidx, void *page) {
+    uint64_t off = pgidx * 4096UL;
+    int n = sbfs_readi(ip, off, page, 4096);
+    if (n < 0) return n;
+    if (n < 4096) memset((char *)page + n, 0, 4096 - n);
+    return 0;
+}
+
 static int sbfs_op_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
-    return sbfs_readi(ip, off, buf, n);
+    return generic_file_read(ip, off, buf, n);
 }
 
 static int sbfs_op_write(struct inode *ip, uint64_t off, const void *buf, uint64_t n) {
@@ -578,6 +593,8 @@ static int sbfs_op_write(struct inode *ip, uint64_t off, const void *buf, uint64
     begin_op();
     ret = sbfs_writei(ip, off, buf, n);
     end_op();
+    if (ret > 0)
+        pcache_invalidate_range(ip, off, (uint64_t)ret);
     return ret;
 }
 

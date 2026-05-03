@@ -151,8 +151,35 @@ void pcache_put(struct pcache_page *p) {
     pcache_unlock();
 }
 
-int pcache_flush_inode(struct inode *ip) { (void)ip; return 0; }
+int pcache_flush_inode(struct inode *ip) {
+    if (!ip) return 0;
+    pcache_lock();
+    for (struct pcache_page *p = lru_head.next; p != &lru_head; p = p->next) {
+        if (p->ip == ip && p->refcnt == 0) {
+            p->ip    = 0;
+            p->pgidx = 0;
+            p->valid = 0;
+            p->dirty = 0;
+        }
+    }
+    pcache_unlock();
+    return 0;
+}
 
 void pcache_invalidate_range(struct inode *ip, uint64_t off, uint64_t len) {
-    (void)ip; (void)off; (void)len;
+    if (!ip || len == 0) return;
+    uint64_t first_pg = off / PCACHE_PGSZ;
+    uint64_t last_pg  = (off + len - 1) / PCACHE_PGSZ;
+    pcache_lock();
+    for (struct pcache_page *p = lru_head.next; p != &lru_head; p = p->next) {
+        if (p->ip == ip && p->valid &&
+            p->pgidx >= first_pg && p->pgidx <= last_pg &&
+            p->refcnt == 0) {
+            p->ip    = 0;
+            p->pgidx = 0;
+            p->valid = 0;
+            p->dirty = 0;
+        }
+    }
+    pcache_unlock();
 }
