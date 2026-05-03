@@ -187,13 +187,8 @@ long readlink(const char *path, char *buf, long n) {
 }
 
 int wait4(int pid, int *status, int options, void *rusage) {
-    (void)rusage;
-    register long _a7 asm("a7") = 106;
-    register long _a0 asm("a0") = (long)pid;
-    register long _a1 asm("a1") = (long)status;
-    register long _a2 asm("a2") = (long)options;
-    asm volatile("ecall" : "+r"(_a0) : "r"(_a7), "r"(_a1), "r"(_a2) : "memory");
-    return (int)syscall_ret(_a0);
+    (void)rusage;   /* kernel ignores it too */
+    return (int)syscall_ret(ecall3(106, (long)pid, (long)status, (long)options));
 }
 
 int waitpid(int pid, int *status, int options) {

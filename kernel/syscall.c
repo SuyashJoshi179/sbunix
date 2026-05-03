@@ -1001,12 +1001,20 @@ static struct pcb *pcb_target(int pid) {
 }
 
 static int64_t sys_setpgid(int pid, int pgid) {
+    if (pgid < 0) return -EINVAL;
     struct pcb *me = current_proc();
     struct pcb *p  = pcb_target(pid);
     if (!p) return -ESRCH;
+    /* Target must be the caller itself or a direct child of the caller.
+     * POSIX further restricts the child case to "before it has exec'd";
+     * we don't track exec state, so we allow it always — userland that
+     * cares (the shell) only calls setpgid pre-exec anyway. */
+    if (p != me && p->parent_pid != me->pid) return -EPERM;
     if (p->sid != me->sid) return -EPERM;
     if (p->pid == p->sid) return -EPERM;          // session leader
     if (pgid == 0) pgid = p->pid;
+    /* The target pgrp must already exist within the caller's session,
+     * unless the caller is making the target into its own leader. */
     if (pgid != p->pid) {
         struct pcb *leader = proc_find_by_pid(pgid);
         if (!leader || leader->sid != me->sid) return -EPERM;

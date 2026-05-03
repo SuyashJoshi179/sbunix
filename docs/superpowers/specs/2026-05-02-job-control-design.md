@@ -82,8 +82,12 @@ Signal delivery checkpoint stays the same — checked on return-to-user. PROC_ST
 `kernel/termios.c`:
 - Replace `console_fg_pid` with `console_fg_pgid`. Old getter/setter renamed (`termios_get_fg_pgid`, `termios_set_fg_pgid`). Compatibility helpers gone — call sites updated.
 - Add `console_session_sid` (assigned by `tcsetpgrp` from session leader, validated against caller's session).
-- `tcsetpgrp(fd, pgid)`: validates `fd` resolves to console inode; validates caller's session matches `console_session_sid` (or claims it if unset); writes pgid.
-- `tcgetpgrp(fd)`: returns pgid or -1/ENOTTY.
+- `tcsetpgrp` / `tcgetpgrp`: implemented via the existing `ioctl` path
+  (`TIOCSPGRP` / `TIOCGPGRP`) on the console fd. The `TIOCSPGRP` handler
+  validates that the caller's session matches `console_session_sid`
+  (claiming it if unset) before writing the pgid. We deliberately reused
+  the existing ioctl wire instead of adding dedicated syscalls — the
+  semantics are the same.
 
 `kernel/fs/devfs.c` — `console_read` SIGTTIN gate:
 - If caller `p->pgid != console_fg_pgid` and caller's session owns the console:
@@ -102,11 +106,13 @@ SYS_getpgrp    97   ()
 SYS_setsid     98   ()
 SYS_getsid     99   (pid)
 SYS_wait4     106   (pid, *status, options, *rusage)   // rusage ignored
-SYS_tcsetpgrp 114   (fd, pgid)
-SYS_tcgetpgrp 115   (fd)
 ```
 
-(`tcsetpgrp`/`tcgetpgrp` go through the new syscalls rather than `ioctl`. The existing `ioctl(0, TIOCSPGRP, &pid)` call site in `bin/sh/sh.c:185` is replaced.)
+`tcsetpgrp` / `tcgetpgrp` are *not* added as new syscalls — they go
+through the pre-existing `ioctl(TIOCSPGRP / TIOCGPGRP)` path on the
+console fd, which the kernel handler updates in lock-step with the
+session/pgid bookkeeping. The shell's existing
+`ioctl(0, TIOCSPGRP, &pid)` call site keeps working.
 
 `SYS_wait` (7) keeps working — implemented as `wait4(-1, status, 0, NULL)` for back-compat; once shell is migrated we keep both.
 
