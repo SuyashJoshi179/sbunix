@@ -181,6 +181,12 @@ static void on_sigint(int sig) {
     shell_interrupted = 1;
 }
 
+static volatile int sigchld_pending;
+static void on_sigchld(int sig) {
+    (void)sig;
+    sigchld_pending = 1;
+}
+
 static void set_console_fg(int pgid) {
     ioctl(0, TIOCSPGRP, &pgid);
 }
@@ -689,8 +695,9 @@ static int run_line(void) {
             slot = jobs_most_recent();
         if (slot < 0) { printf("%s: no such job\n", is_fg ? "fg" : "bg"); return 1; }
         struct job *j = &jobs_tbl[slot];
+        int was_stopped = (j->state == JOB_STOPPED);
         if (is_fg) set_console_fg(j->pgid);
-        kill(-j->pgid, SIGCONT);
+        if (was_stopped) kill(-j->pgid, SIGCONT);
         j->state = JOB_RUNNING;
         if (is_fg) {
             printf("%s\n", j->cmd);
@@ -750,6 +757,14 @@ int main(int argc, char **argv) {
     sigaction(SIGQUIT, &sa, 0);
     sa.sa_handler = on_sigint;
     sigaction(SIGINT, &sa, 0);
+
+    /* SIGCHLD handler: just sets a flag. Its presence makes the kernel
+     * treat SIGCHLD as actionable, so the read(0, ...) in readline()
+     * returns -EINTR when a background job changes state. The main loop
+     * then re-runs jobs_poll(1) and we get the Done/Stopped line printed
+     * before the next prompt instead of after the next command. */
+    sa.sa_handler = on_sigchld;
+    sigaction(SIGCHLD, &sa, 0);
 
     while (1) {
         jobs_poll(1);

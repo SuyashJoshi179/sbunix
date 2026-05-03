@@ -33,7 +33,10 @@ void send_signal(struct pcb *target, int sig) {
     }
 
     /* SIGCONT clears any pending stop signals (POSIX) and resumes a
-     * stopped process even if SIGCONT itself is blocked or ignored. */
+     * stopped process even if SIGCONT itself is blocked or ignored.
+     * If the target is not stopped and there is no user handler for
+     * SIGCONT, treat as default-ignore so we don't wake a timer-sleep
+     * via the "deliverable signal" wake check below. */
     if (sig == SIGCONT) {
         target->sig_pending &= ~((1ULL << SIGSTOP) | (1ULL << SIGTSTP) |
                                  (1ULL << SIGTTIN) | (1ULL << SIGTTOU));
@@ -44,6 +47,10 @@ void send_signal(struct pcb *target, int sig) {
             /* Wake parent waiting in wait4(WCONTINUED). */
             send_signal_by_pid(target->parent_pid, SIGCHLD);
             proc_wakeup(target->parent_pid);
+        }
+        if (target->sig_handlers[SIGCONT].sa_handler == SIG_DFL ||
+            target->sig_handlers[SIGCONT].sa_handler == SIG_IGN) {
+            return;
         }
     }
 
