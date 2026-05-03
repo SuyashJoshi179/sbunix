@@ -1,0 +1,4 @@
+[submodule "third_party/busybox"]
+	path = third_party/busybox
+	url = https://git.busybox.net/busybox
+	branch = 1_36_stable
