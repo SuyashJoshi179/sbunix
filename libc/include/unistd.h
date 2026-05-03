@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <getopt.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -10,7 +11,7 @@
 
 long  write(int fd, const void *buf, long len);
 long  read(int fd, void *buf, long len);
-int   open(const char *path, int flags);
+int   open(const char *path, int flags, ...);
 int   close(int fd);
 int   getpid(void);
 int   getppid(void);

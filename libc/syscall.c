@@ -41,7 +41,7 @@ long read(int fd, void *buf, long len) {
     return syscall_ret(ecall3(5, (long)fd, (long)buf, len));
 }
 
-int open(const char *path, int flags) {
+int open(const char *path, int flags, ...) {
     return (int)syscall_ret(ecall2(4, (long)path, (long)flags));
 }
 
