@@ -105,8 +105,34 @@ int pcache_get(struct inode *ip, uint64_t pgidx, struct pcache_page **out) {
     lru_unlink(p);
     lru_to_head(p);
     pcache_unlock();
-    /* readpage call deferred to Task 3; for now just zero the page. */
-    memset(p->page, 0, PCACHE_PGSZ);
+    /* Miss path: readpage if available, else zero-fill (for filesystems
+     * without readpage we still serve a zero page so callers can detect
+     * via valid flag; in practice generic_file_read only calls pcache
+     * for inodes with readpage set). */
+    int rc = 0;
+    if (ip->ops && ip->ops->readpage) {
+        rc = ip->ops->readpage(ip, pgidx, p->page);
+    } else {
+        memset(p->page, 0, PCACHE_PGSZ);
+    }
+    if (rc < 0) {
+        /* Drop the slot — leave it ip=0 so next get re-fetches.
+         * Refcnt stays 1 in the caller view; we instead treat this as
+         * an immediate failure and unwind. */
+        pcache_lock();
+        p->ip = 0;
+        p->pgidx = 0;
+        p->refcnt = 0;
+        p->valid = 0;
+        /* Move back to tail so it's preferred for next reuse. */
+        lru_unlink(p);
+        p->next = &lru_head;
+        p->prev = lru_head.prev;
+        lru_head.prev->next = p;
+        lru_head.prev = p;
+        pcache_unlock();
+        return rc;
+    }
     p->valid = 1;
     *out = p;
     return 0;

@@ -837,7 +837,7 @@ static void test_time_monotonic_basic(void) {
 static void test_pcache_basic(void) {
     printk("[SELFTEST] -- pcache basic --\n");
 
-    struct inode dummy_a, dummy_b;
+    struct inode dummy_a = {0}, dummy_b = {0};
     struct pcache_page *p1, *p2, *p3;
 
     int rc = pcache_get(&dummy_a, 0, &p1);

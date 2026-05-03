@@ -38,6 +38,15 @@ struct inode_ops {
      * directory cross-parent moves, and loop prevention. */
     int  (*rename)  (struct inode *old_parent, const char *old_name,
                      struct inode *new_parent, const char *new_name);
+    /* Fill `page` (PCACHE_PGSZ bytes) from inode at byte offset
+     * pgidx*PCACHE_PGSZ. Tail past EOF zero-filled. NULL on filesystems
+     * that do not participate in the page cache (devfs/procfs). */
+    int (*readpage) (struct inode *, uint64_t pgidx, void *page);
+
+    /* Write `page` (PCACHE_PGSZ bytes) back to inode at offset
+     * pgidx*PCACHE_PGSZ. Only bytes within current size persisted.
+     * NULL = read-only fs. Caller wraps begin_op for sbfs. */
+    int (*writepage)(struct inode *, uint64_t pgidx, const void *page);
 };
 
 #define I_REG  1
