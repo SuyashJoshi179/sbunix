@@ -114,12 +114,9 @@ int ppoll(struct pollfd *fds, nfds_t nfds, const struct timespec *tmo,
 }
 
 int sigsuspend(const sigset_t *mask) {
-    (void)mask;
-    /* Best-effort fallback: pause() until any signal arrives. Loses the
-     * atomic mask-swap that real sigsuspend provides — a signal arriving
-     * between mask install and pause would be missed. Acceptable for
-     * non-preemptive single-threaded callers; revisit in Stage 7. */
-    pause();
-    errno = EINTR;
-    return -1;
+    register long _a7 asm("a7") = 27;   /* SYS_sigsuspend */
+    register long _a0 asm("a0") = (long)mask;
+    asm volatile("ecall" : "+r"(_a0) : "r"(_a7) : "memory");
+    if (_a0 < 0) { errno = (int)-_a0; return -1; }
+    return (int)_a0;
 }
