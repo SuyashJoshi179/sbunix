@@ -2,6 +2,7 @@
 #include <exec.h>
 #include <file.h>
 #include <inode.h>
+#include <page_cache.h>
 #include <page_ref.h>
 #include <pipe.h>
 #include <log.h>
@@ -830,6 +831,38 @@ static void test_time_monotonic_basic(void) {
 }
 
 // ----------------------------------------------------------------------------
+// Page cache tests
+// ----------------------------------------------------------------------------
+
+static void test_pcache_basic(void) {
+    printk("[SELFTEST] -- pcache basic --\n");
+
+    struct inode dummy_a, dummy_b;
+    struct pcache_page *p1, *p2, *p3;
+
+    int rc = pcache_get(&dummy_a, 0, &p1);
+    st_check(rc == 0, "pcache_basic: first get returns 0");
+    if (rc < 0) return;
+
+    rc = pcache_get(&dummy_a, 0, &p2);
+    st_check(rc == 0, "pcache_basic: second get (same key) returns 0");
+    if (rc < 0) { pcache_put(p1); return; }
+
+    st_check(p1 == p2,        "pcache_basic: same key returns same slot");
+    st_check(p1->refcnt == 2, "pcache_basic: refcnt == 2 after two gets");
+
+    pcache_put(p1);
+    pcache_put(p2);
+
+    rc = pcache_get(&dummy_b, 0, &p3);
+    st_check(rc == 0, "pcache_basic: get with different inode returns 0");
+    if (rc < 0) return;
+
+    st_check(p3 != p1, "pcache_basic: different inode gets different slot");
+    pcache_put(p3);
+}
+
+// ----------------------------------------------------------------------------
 // Entry point
 // ----------------------------------------------------------------------------
 
@@ -865,6 +898,7 @@ void selftest_run(void) {
     test_signal_pending_bitops();
     test_termios_defaults();
     test_time_monotonic_basic();
+    test_pcache_basic();
 
     printk("========================================\n");
     printk("[SELFTEST] Results: %d passed, %d failed\n", st_pass, st_fails);
