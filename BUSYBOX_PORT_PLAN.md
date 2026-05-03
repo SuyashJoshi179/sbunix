@@ -24,9 +24,8 @@ hello
 ash boots, runs synchronous fork+exec+wait, lists tarfs + sbfs, runs `mkdir`, `echo`, `cd`, `pwd`. Symlinks `/bin/{echo,cat,pwd,sh,true,false}` → `busybox` resolved by tarfs and dispatched by argv[0].
 
 **Active bug** (Stage 9 triage):
-- `cat <file>` produces `cat: can't open 'cat': ...` then dumps file content. Suggests cat's argv-after-getopt has TWO entries: `["cat", "<file>"]`. Likely in BB getopt32 ↔ libc getopt interaction (optind not advancing past argv[0] correctly) OR in our exec stack layout.
-- Reproduce: `printf 'cat /data/trunc.txt\nexit\n' | tools/qemu-script.sh 60`
-- Quick verify path: `bin/argvdump/argvdump.c` (committed) — print `argc` + each `argv[i]`. Run as `argvdump foo bar` from BB sh; if it prints `argc=3 argv[0]=argvdump argv[1]=foo argv[2]=bar`, kernel exec is fine and bug is in BB getopt32/libc getopt.
+- *(none — cat-argv duplicate fixed by glibc-style optind=0 reset in `libc/getopt.c`; see "Stage 9 — fixed" below.)*
+- Minor cosmetic: first input char after each `Starting /bin/sh` is dropped (`cat` parsed as `at`, `echo` parsed as `cho`). Subsequent commands fine. Looks like UART/console startup race during fork+exec of /bin/sh — not affecting correctness of any applet, deferred.
 
 ## Decisions locked in
 
@@ -133,7 +132,7 @@ Approach: complete guaranteed libc/fs gaps first, attempt BB build, let link-err
 | 5 | Libc glob/fnmatch | **DONE** | `libc/fnmatch.c` + `libc/glob.c`. POSIX shell wildcards. No GLOB_BRACE, no GLOB_TILDE |
 | 6 | tarfs symlink support | **DONE** | typeflag '2' → I_LNK inode, readlink op, DT_LNK in getdents. namei + sys_readlink already symlink-aware |
 | 8 | Build BusyBox against libc.a | **DONE** | BB 1.36.1 vendored. Wrapper, stub headers, allnoconfig+seed config. Boots into ash prompt. |
-| 9 | Runtime triage | **IN PROGRESS** | First bug: cat sees duplicate argv. Active investigation. |
+| 9 | Runtime triage | **IN PROGRESS** | cat-argv bug fixed (libc/getopt.c optind=0 reset). Next: drive more applets to surface poll/waitpid/sigsuspend/time/vsnprintf gaps. |
 | 7 | Reactive kernel additions | pending | Only what Stage 9 proves needed. Likely waitpid/ppoll/ftruncate. |
 | 3 | Libc time funcs | **DEFERRED** | Add only if `ls -l`/`date` matter |
 
@@ -209,6 +208,19 @@ feat(libc): add string/path extensions for BusyBox port       792c00b
 
 ### Vendored
 - `third_party/busybox/` — entire BB 1.36.1 source tree (~2800 files, 360k LOC). Source-of-bloat in PR.
+
+## Stage 9 — fixed
+
+### cat-argv duplicate (resolved)
+
+**Root cause**: BB `GETOPT_RESET()` (in `include/libbb.h:1373`) sets `optind = 0` (glibc convention: "reset state, skip argv[0]"). Our libc `getopt`/`getopt_long` saw `optind == 0`, read `argv[0]` (program name), it didn't begin with `-`, returned `-1` with `optind` unchanged at `0`. BB then did `argc -= optind` (no-op) and applets did `argv += optind` (no-op), leaving `argv[0]` (the program name) as the first "positional" filename → cat tried to open `"cat"`.
+
+**Fix**: `libc/getopt.c` — both `getopt` and `getopt_long` now treat `optind == 0` as a reset request and bump it to `1` (glibc init behavior).
+
+**Verification**: `cat /data/trunc.txt` now prints just `BB` (file content), no `cat: can't open 'cat'` line.
+
+### Seed config relocation
+After Stage 8 BB-as-submodule conversion, `third_party/busybox/configs/sbunix_min.config` was wiped (lives inside submodule). Moved to `tools/busybox-min.config`; `tools/busybox-minconfig.sh` updated.
 
 ## Stage 9 — current investigation
 
@@ -305,6 +317,6 @@ Pattern as stages land:
 
 - Branch: `feat/busybox-port-libc`
 - Last working state: BB ash boots, `ls`/`echo`/`mkdir`/`cd`/`pwd` work
-- Active bug: cat sees duplicated argv (Stage 9 #1 in hypothesis tree above)
-- Test command: `printf 'echo hi\nexit\n' | tools/qemu-script.sh 30`
+- cat-argv bug FIXED (libc/getopt.c optind=0 reset). Next triage: exercise `read` builtin, pipes, `wait`, `>` redirect, `ls -l`, basic scripts to surface poll/waitpid/sigsuspend/ftruncate/time/vsnprintf gaps in that order.
+- Test command: `printf 'echo hi\nexit\n' | tools/qemu-script.sh 300` (init test suite + sh take ~250s)
 - After fresh session start, read this file then read commits in branch with `git log --oneline develop..HEAD`
