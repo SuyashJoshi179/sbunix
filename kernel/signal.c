@@ -351,3 +351,28 @@ int64_t sys_pause(void) {
     }
     return -EINTR;
 }
+
+/* ----------------------------------------------------------------
+ * sys_sigsuspend — install arg mask, sleep until actionable signal.
+ *
+ * Note: we deliberately do NOT restore the prior mask before returning.
+ * Restoration must happen after the handler runs (POSIX), and our handler
+ * delivery is driven by check_signals on trap-return; restoring here
+ * would re-block the very signal that woke us, preventing delivery.
+ * The natural flow: trap-return → check_signals → build_sigframe (saves
+ * current mask=arg) → handler → sigreturn restores arg mask. Callers
+ * (BB ash, etc.) follow up with sigprocmask to re-install their desired
+ * mask, which matches typical POSIX usage.
+ * ---------------------------------------------------------------- */
+int64_t sys_sigsuspend(const sigset_t *mask) {
+    struct pcb *p = current_proc();
+    if (!p || !mask) return -EINVAL;
+    sigset_t s;
+    if (copyin(&s, mask, sizeof(s)) < 0) return -EFAULT;
+    s &= ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
+    p->sig_blocked = s;
+    while (!sig_has_actionable(p)) {
+        proc_sleep(p);
+    }
+    return -EINTR;
+}
