@@ -136,7 +136,11 @@ time_t timegm(struct tm *tm) {
     /* Normalize month into 1..12 by shifting overflow into year. */
     while (mo > 12) { mo -= 12; y++; }
     while (mo < 1)  { mo += 12; y--; }
-    long days = days_from_civil(y, (unsigned)mo, (unsigned)tm->tm_mday);
+    /* Normalize tm_mday by anchoring at day 1 of the month and applying
+     * (mday - 1) as a signed offset, so values <= 0 roll into the previous
+     * month and large values roll forward — matches POSIX mktime. */
+    long days = days_from_civil(y, (unsigned)mo, 1)
+              + (long)tm->tm_mday - 1;
     long long secs = (long long)days * 86400
                    + (long long)tm->tm_hour * 3600
                    + (long long)tm->tm_min  * 60
@@ -165,14 +169,49 @@ static char *put_str(char *dst, char *end, const char *s) {
     return dst;
 }
 
+/* dst is advanced unconditionally; bytes written only while dst < end. The
+ * caller can detect overflow by comparing the returned dst to end. */
 static char *put_pad(char *dst, char *end, int v, int width, char pad) {
     char tmp[16];
     int n = 0;
-    if (v < 0) { if (dst < end) *dst++ = '-'; v = -v; }
+    if (v < 0) {
+        if (dst < end) *dst = '-';
+        dst++;
+        v = -v;
+    }
     if (v == 0) tmp[n++] = '0';
     while (v > 0) { tmp[n++] = (char)('0' + v % 10); v /= 10; }
     while (n < width) tmp[n++] = pad;
-    while (n > 0 && dst < end) *dst++ = tmp[--n];
+    while (n > 0) {
+        if (dst < end) *dst = tmp[n - 1];
+        dst++;
+        n--;
+    }
+    return dst;
+}
+
+static char *put1(char *dst, char *end, char c) {
+    if (dst < end) *dst = c;
+    return dst + 1;
+}
+
+static char *put_ll(char *dst, char *end, long long v) {
+    char tmp[24];
+    int n = 0;
+    unsigned long long uv;
+    if (v < 0) {
+        if (dst < end) *dst = '-';
+        dst++;
+        uv = (unsigned long long)-(v + 1) + 1ULL;
+    } else {
+        uv = (unsigned long long)v;
+    }
+    do { tmp[n++] = (char)('0' + uv % 10); uv /= 10; } while (uv);
+    while (n > 0) {
+        if (dst < end) *dst = tmp[n - 1];
+        dst++;
+        n--;
+    }
     return dst;
 }
 
@@ -251,7 +290,7 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm) {
     char *end = s + max - 1;   /* leave room for NUL */
     while (*fmt) {
         if (*fmt != '%') {
-            if (p < end) *p++ = *fmt;
+            p = put1(p, end, *fmt);
             fmt++;
             continue;
         }
@@ -263,9 +302,9 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm) {
         if (*fmt == 'E' || *fmt == 'O') fmt++;
         char c = *fmt++;
         switch (c) {
-        case '%': if (p < end) *p++ = '%'; break;
-        case 'n': if (p < end) *p++ = '\n'; break;
-        case 't': if (p < end) *p++ = '\t'; break;
+        case '%': p = put1(p, end, '%');  break;
+        case 'n': p = put1(p, end, '\n'); break;
+        case 't': p = put1(p, end, '\t'); break;
         case 'Y': emit_pad(&p, end, tm->tm_year + 1900, 4, '0'); break;
         case 'y': emit_pad(&p, end, (tm->tm_year + 1900) % 100, 2, '0'); break;
         case 'C': emit_pad(&p, end, (tm->tm_year + 1900) / 100, 2, '0'); break;
@@ -313,55 +352,57 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm) {
         case 's': {
             struct tm copy = *tm;
             time_t t = timegm(&copy);
-            emit_pad(&p, end, (int)t, 1, '0');
+            p = put_ll(p, end, (long long)t);
             break;
         }
-        case 'F': {
+        case 'F':
             emit_pad(&p, end, tm->tm_year + 1900, 4, '0');
-            if (p < end) *p++ = '-';
+            p = put1(p, end, '-');
             emit_pad(&p, end, tm->tm_mon + 1, 2, '0');
-            if (p < end) *p++ = '-';
+            p = put1(p, end, '-');
             emit_pad(&p, end, tm->tm_mday, 2, '0');
             break;
-        }
-        case 'T': {
+        case 'T':
             emit_pad(&p, end, tm->tm_hour, 2, '0');
-            if (p < end) *p++ = ':';
+            p = put1(p, end, ':');
             emit_pad(&p, end, tm->tm_min, 2, '0');
-            if (p < end) *p++ = ':';
+            p = put1(p, end, ':');
             emit_pad(&p, end, tm->tm_sec, 2, '0');
             break;
-        }
-        case 'R': {
+        case 'R':
             emit_pad(&p, end, tm->tm_hour, 2, '0');
-            if (p < end) *p++ = ':';
+            p = put1(p, end, ':');
             emit_pad(&p, end, tm->tm_min, 2, '0');
             break;
-        }
-        case 'D': {
+        case 'D':
             emit_pad(&p, end, tm->tm_mon + 1, 2, '0');
-            if (p < end) *p++ = '/';
+            p = put1(p, end, '/');
             emit_pad(&p, end, tm->tm_mday, 2, '0');
-            if (p < end) *p++ = '/';
+            p = put1(p, end, '/');
             emit_pad(&p, end, (tm->tm_year + 1900) % 100, 2, '0');
             break;
-        }
         case 'r': {
             int h = tm->tm_hour % 12; if (h == 0) h = 12;
             emit_pad(&p, end, h, 2, '0');
-            if (p < end) *p++ = ':';
+            p = put1(p, end, ':');
             emit_pad(&p, end, tm->tm_min, 2, '0');
-            if (p < end) *p++ = ':';
+            p = put1(p, end, ':');
             emit_pad(&p, end, tm->tm_sec, 2, '0');
-            if (p < end) *p++ = ' ';
+            p = put1(p, end, ' ');
             emit(&p, end, tm->tm_hour < 12 ? "AM" : "PM");
             break;
         }
         default:
-            if (p < end) *p++ = '%';
-            if (c && p < end) *p++ = c;
+            p = put1(p, end, '%');
+            if (c) p = put1(p, end, c);
             break;
         }
+    }
+    /* POSIX: return 0 (and leave contents indeterminate) when the result
+     * does not fit in `max` bytes including the terminating NUL. */
+    if (p > end) {
+        s[max - 1] = '\0';
+        return 0;
     }
     *p = '\0';
     return (size_t)(p - s);
