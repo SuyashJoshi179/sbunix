@@ -597,6 +597,15 @@ static int sbfs_writepage(struct inode *ip, uint64_t pgidx, const void *page) {
     return 0;
 }
 
+/* Public wrapper: takes the begin_op/end_op transaction itself.
+ * Used by page-cache eviction and msync/munmap flush paths. */
+int sbfs_writepage_locked(struct inode *ip, uint64_t pgidx, const void *page) {
+    begin_op();
+    int rc = sbfs_writepage(ip, pgidx, page);
+    end_op();
+    return rc;
+}
+
 static int sbfs_op_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
     return generic_file_read(ip, off, buf, n);
 }

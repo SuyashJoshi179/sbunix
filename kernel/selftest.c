@@ -862,6 +862,28 @@ static void test_pcache_basic(void) {
     pcache_put(p3);
 }
 
+static void test_pcache_evict(void) {
+    printk("\n[SELFTEST] -- pcache evict --\n");
+    /* Use NSLOTS+1 distinct dummy keys; release each immediately so
+     * eviction can recycle. */
+    static struct inode dummies[PCACHE_NSLOTS + 1];
+    for (int i = 0; i < PCACHE_NSLOTS + 1; i++)
+        dummies[i] = (struct inode){0};
+    int ok = 1;
+    for (int i = 0; i < PCACHE_NSLOTS + 1; i++) {
+        struct pcache_page *p;
+        if (pcache_get(&dummies[i], 0, &p) < 0) { ok = 0; break; }
+        pcache_put(p);
+    }
+    st_check(ok, "pcache_evict: NSLOTS+1 distinct gets all succeed");
+    /* Touch first dummy: should still resolve (eviction may have reaped
+     * an earlier slot, but pcache_get will simply re-fetch via miss path). */
+    struct pcache_page *p;
+    int rc = pcache_get(&dummies[0], 0, &p);
+    st_check(rc == 0, "pcache_evict: re-get after eviction succeeds");
+    if (rc == 0) pcache_put(p);
+}
+
 // ----------------------------------------------------------------------------
 // Entry point
 // ----------------------------------------------------------------------------
@@ -899,6 +921,7 @@ void selftest_run(void) {
     test_termios_defaults();
     test_time_monotonic_basic();
     test_pcache_basic();
+    test_pcache_evict();
 
     printk("========================================\n");
     printk("[SELFTEST] Results: %d passed, %d failed\n", st_pass, st_fails);

@@ -21,6 +21,7 @@
 #define ENAMETOOLONG 36
 #define ENOSYS       38
 #define EIO           5
+#define EBUSY        16
 #define EEXIST       17
 #define EFBIG        27
 #define ENOTEMPTY    39

@@ -70,13 +70,35 @@ static struct pcache_page *pcache_lookup(struct inode *ip, uint64_t pgidx) {
 }
 
 /* Find a victim slot to reuse. Returns NULL if all pinned/dirty.
- * Phase B writepage flushing of dirty victims is added in Task 7;
- * for now we only evict clean refcnt==0 pages. Caller holds lock. */
+ * Caller holds the lock on entry. We may drop and re-acquire it across
+ * the writepage call because sbfs_writepage_locked acquires the bio
+ * cache lock and the log lock — neither is reentrant under our IRQ-off
+ * section. */
 static struct pcache_page *pcache_evict(void) {
+    /* First pass: clean unpinned. */
     for (struct pcache_page *p = lru_head.prev; p != &lru_head; p = p->prev) {
-        if (p->refcnt == 0 && !p->dirty) {
+        if (p->refcnt == 0 && !p->dirty) return p;
+    }
+    /* Second pass: dirty unpinned — flush, then reuse. */
+    for (struct pcache_page *p = lru_head.prev; p != &lru_head; p = p->prev) {
+        if (p->refcnt != 0) continue;
+        if (!p->dirty) continue;
+        if (!p->ip || !p->ip->ops || !p->ip->ops->writepage) {
+            p->dirty = 0;
             return p;
         }
+        struct inode *ip = p->ip;
+        uint64_t pgidx = p->pgidx;
+        /* Pin during flush so a parallel pcache_get can't reuse it. */
+        p->refcnt++;
+        pcache_unlock();
+        extern int sbfs_writepage_locked(struct inode *, uint64_t,
+                                         const void *);
+        int rc = sbfs_writepage_locked(ip, pgidx, p->page);
+        pcache_lock();
+        p->refcnt--;
+        if (rc == 0) p->dirty = 0;
+        if (p->refcnt == 0 && !p->dirty) return p;
     }
     return 0;
 }
@@ -153,33 +175,48 @@ void pcache_put(struct pcache_page *p) {
 
 int pcache_flush_inode(struct inode *ip) {
     if (!ip) return 0;
+    int busy = 0;
     pcache_lock();
-    for (struct pcache_page *p = lru_head.next; p != &lru_head; p = p->next) {
-        if (p->ip == ip && p->refcnt == 0) {
-            p->ip    = 0;
-            p->pgidx = 0;
-            p->valid = 0;
+    for (int i = 0; i < PCACHE_NSLOTS; i++) {
+        struct pcache_page *p = &slots[i];
+        if (p->ip != ip) continue;
+        if (p->refcnt > 0) { busy = 1; continue; }
+        if (p->dirty && p->ip->ops && p->ip->ops->writepage) {
+            extern int sbfs_writepage_locked(struct inode *, uint64_t,
+                                             const void *);
+            p->refcnt++;
+            pcache_unlock();
+            sbfs_writepage_locked(p->ip, p->pgidx, p->page);
+            pcache_lock();
+            p->refcnt--;
             p->dirty = 0;
         }
+        p->ip = 0;
+        p->pgidx = 0;
+        p->valid = 0;
     }
     pcache_unlock();
-    return 0;
+    return busy ? -EBUSY : 0;
 }
 
 void pcache_invalidate_range(struct inode *ip, uint64_t off, uint64_t len) {
     if (!ip || len == 0) return;
-    uint64_t first_pg = off / PCACHE_PGSZ;
-    uint64_t last_pg  = (off + len - 1) / PCACHE_PGSZ;
+    uint64_t pg_start = off / PCACHE_PGSZ;
+    uint64_t pg_end   = (off + len + PCACHE_PGSZ - 1) / PCACHE_PGSZ;
     pcache_lock();
-    for (struct pcache_page *p = lru_head.next; p != &lru_head; p = p->next) {
-        if (p->ip == ip && p->valid &&
-            p->pgidx >= first_pg && p->pgidx <= last_pg &&
-            p->refcnt == 0) {
-            p->ip    = 0;
-            p->pgidx = 0;
-            p->valid = 0;
-            p->dirty = 0;
+    for (int i = 0; i < PCACHE_NSLOTS; i++) {
+        struct pcache_page *p = &slots[i];
+        if (p->ip != ip) continue;
+        if (p->pgidx < pg_start || p->pgidx >= pg_end) continue;
+        if (p->refcnt > 0) {
+            /* Mapped page — leave it; bounds check at fault path will
+             * surface SIGBUS for past-EOF accesses. */
+            continue;
         }
+        p->ip = 0;
+        p->pgidx = 0;
+        p->valid = 0;
+        p->dirty = 0;
     }
     pcache_unlock();
 }
