@@ -96,6 +96,7 @@ int main(void) {
         "/bin/sh_c_test",
         "/bin/usertests",
         "/bin/mmap_smoke_test",
+        "/bin/mmap_cow_test",
     };
     int ntests = (int)(sizeof(tests) / sizeof(tests[0]));
 

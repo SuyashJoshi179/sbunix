@@ -165,10 +165,33 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
         uint64_t file_pgidx  = file_pos / PAGE_SIZE;
         if (file_pos >= v->file->size) return -1;
 
-        /* Already-present PTE: write-fault upgrade paths handled in
-         * later tasks (T10 CoW, T11 SHARED). For now, defer. */
+        /* Already-present PTE: write-fault upgrade paths. */
         pte_t *pte_existing = get_pte(p->pagetable, fault_va, 0);
         if (pte_existing && (*pte_existing & PTE_V)) {
+            if (scause != 15) return -1;          /* read fault on present? bug */
+            unsigned long old_pa = pte_to_phyaddr(*pte_existing);
+
+            if (v->flags & VMA_FLAG_COW) {
+                /* MAP_PRIVATE writable: copy cache page to a fresh anon
+                 * page and remap. Drop both the cache refcnt acquired
+                 * here for re-lookup AND the original fault-time ref. */
+                void *np = page_alloc();
+                if (!np) return -1;
+                memmove(np, (void *)phys_to_virt(old_pa), PAGE_SIZE);
+                unsigned long new_pa = virt_to_phys((unsigned long)np);
+                unsigned long perm = PTE_U | PTE_V | PTE_R | PTE_W;
+                if (v->prot & VMA_PROT_X) perm |= PTE_X;
+                *pte_existing =
+                    phyaddr_to_pte(new_pa) | perm | PTE_LEAF_AD;
+                struct pcache_page *opp;
+                if (pcache_get(v->file, file_pgidx, &opp) == 0) {
+                    pcache_put(opp);   /* drop the lookup ref      */
+                    pcache_put(opp);   /* drop the fault-time ref  */
+                }
+                flush_tlb();
+                return 0;
+            }
+            /* MAP_SHARED write fault — Task 11. */
             return -1;
         }
 
