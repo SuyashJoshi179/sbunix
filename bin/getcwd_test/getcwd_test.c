@@ -26,16 +26,16 @@ int main(void) {
     char buf[256];
 
     // 1. Freshly spawned process — cwd should be "/".
-    long n = getcwd(buf, sizeof(buf));
-    chk(n >= 0, "getcwd returns >= 0");
+    char *r = getcwd(buf, sizeof(buf));
+    chk(r != 0, "getcwd returns non-NULL");
     chk(streq(buf, "/"), "initial cwd is '/'");
 
     // 2. After chdir("/bin"), getcwd should begin with "/bin".
     int rc = chdir("/bin");
     chk(rc == 0, "chdir /bin returns 0");
 
-    n = getcwd(buf, sizeof(buf));
-    chk(n >= 0, "getcwd after chdir /bin returns >= 0");
+    r = getcwd(buf, sizeof(buf));
+    chk(r != 0, "getcwd after chdir /bin returns non-NULL");
     // cwd_path is stored verbatim from the chdir argument, so it should be "/bin".
     chk(buf[0]=='/' && buf[1]=='b' && buf[2]=='i' && buf[3]=='n' &&
         (buf[4]=='\0' || buf[4]=='/'),
@@ -45,12 +45,12 @@ int main(void) {
     rc = chdir("/");
     chk(rc == 0, "chdir / returns 0");
 
-    n = getcwd(buf, sizeof(buf));
+    r = getcwd(buf, sizeof(buf));
     chk(streq(buf, "/"), "getcwd returns / after chdir /");
 
     // 4. Buffer too small: "/" needs 2 bytes (char + NUL); 1 byte is too small.
-    n = getcwd(buf, 1);
-    chk(n < 0, "getcwd with 1-byte buffer returns error");
+    r = getcwd(buf, 1);
+    chk(r == 0, "getcwd with 1-byte buffer returns error");
 
     if (fail_cnt == 0)
         printf("getcwd_test: PASS (%d tests)\n", pass_cnt);

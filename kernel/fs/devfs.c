@@ -61,6 +61,11 @@ static int console_write(struct inode *ip, uint64_t off, const void *buf,
     return (int)n;
 }
 
+/* Linux-canonical (major,minor) for our char devs so busybox's `ls -l`
+ * shows familiar numbers: console=(5,1), null=(1,3). Encoding matches
+ * libc's major()/minor() in <sys/sysmacros.h>: (major<<8) | minor. */
+#define MKDEV(maj, min) (((uint64_t)(maj) << 8) | (uint64_t)(min))
+
 static int console_stat(struct inode *ip, struct stat *st) {
     st->st_dev   = 2;
     st->st_ino   = (uint64_t)(uintptr_t)ip;
@@ -70,6 +75,7 @@ static int console_stat(struct inode *ip, struct stat *st) {
     st->st_gid   = 0;
     st->st_size  = 0;
     st->st_atime = st->st_mtime = st->st_ctime = 0;
+    st->st_rdev  = MKDEV(5, 1);
     return 0;
 }
 
@@ -191,6 +197,35 @@ static const struct inode_ops loop_ops = {
 
 static struct inode loop_inode;
 
+/* ----------------------------------------------------------------
+ * /dev/null — read returns EOF, write discards
+ * ---------------------------------------------------------------- */
+static int null_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
+    (void)ip; (void)off; (void)buf; (void)n;
+    return 0;
+}
+static int null_write(struct inode *ip, uint64_t off, const void *buf, uint64_t n) {
+    (void)ip; (void)off; (void)buf;
+    return (int)n;
+}
+static int null_stat(struct inode *ip, struct stat *st) {
+    st->st_dev   = 2;
+    st->st_ino   = (uint64_t)(uintptr_t)ip;
+    st->st_mode  = ip->mode;
+    st->st_nlink = 1;
+    st->st_uid   = st->st_gid = 0;
+    st->st_size  = 0;
+    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    st->st_rdev  = MKDEV(1, 3);
+    return 0;
+}
+static const struct inode_ops null_ops = {
+    .read  = null_read,
+    .write = null_write,
+    .stat  = null_stat,
+};
+static struct inode null_inode;
+
 static int devroot_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
     (void)ip; (void)off; (void)buf; (void)n;
     return -EISDIR;
@@ -225,6 +260,10 @@ static int devroot_lookup(struct inode *dir, const char *name,
         *out = inode_get(&loop_inode);
         return 0;
     }
+    if (streq(name, "null")) {
+        *out = inode_get(&null_inode);
+        return 0;
+    }
     return -ENOENT;
 }
 static int devroot_getdents(struct inode *dir, uint64_t off, void *buf,
@@ -237,7 +276,8 @@ static int devroot_getdents(struct inode *dir, uint64_t off, void *buf,
         uint8_t d_type;
     } ents[] = {
         { "console", &console_inode, DT_CHR },
-        { "loop",    &loop_inode,    DT_UNKNOWN },  /* DT_LNK not defined */
+        { "loop",    &loop_inode,    DT_LNK },
+        { "null",    &null_inode,    DT_CHR },
     };
     int nent = (int)(sizeof(ents) / sizeof(ents[0]));
 
@@ -320,6 +360,19 @@ void devfs_init(void) {
     loop_inode.fs_data     = 0;
     loop_inode.mount_child = 0;
     loop_inode.mount_parent = 0;
+
+    null_inode.type        = I_CHR;
+    null_inode.mode        = S_IFCHR | 0666;
+    null_inode.uid         = 0;
+    null_inode.gid         = 0;
+    null_inode.size        = 0;
+    null_inode.mtime       = 0;
+    null_inode.nlink       = 1;
+    null_inode.refcnt      = 1;
+    null_inode.ops         = &null_ops;
+    null_inode.fs_data     = 0;
+    null_inode.mount_child = 0;
+    null_inode.mount_parent = 0;
 
     // Mount devfs at /dev (requires tarfs "/" to already be mounted).
     mount_fs("/dev", &devroot_inode);

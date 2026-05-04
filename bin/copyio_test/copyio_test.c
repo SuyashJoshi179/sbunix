@@ -60,7 +60,7 @@ int main(void) {
 
     check(pipe((int *)(region + PAGE_SIZE_LOCAL - 4)) == -1 && errno == EFAULT,
           "straddling pipe fds rejected");
-    check(getcwd(region + PAGE_SIZE_LOCAL - 1, 16) == -1 && errno == EFAULT,
+    check(getcwd(region + PAGE_SIZE_LOCAL - 1, 16) == 0 && errno == EFAULT,
           "straddling getcwd pointer rejected");
 
     close(p[0]);
