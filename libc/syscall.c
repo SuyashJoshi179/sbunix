@@ -5,8 +5,10 @@
 #include <sys/wait.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <termios.h>
 #include <errno.h>
+#include <limits.h>
 #include "syscall_priv.h"
 
 // Generic ecall helpers (register-allocated per RISC-V calling convention).
@@ -91,10 +93,12 @@ long lseek(int fd, long off, int whence) {
 }
 
 int fstat(int fd, struct stat *st) {
+    if (st) memset(st, 0, sizeof(*st));   /* kernel writes the fields it knows; the rest stays zero */
     return (int)syscall_ret(ecall2(17, (long)fd, (long)st));
 }
 
 int lstat(const char *path, struct stat *st) {
+    if (st) memset(st, 0, sizeof(*st));
     return (int)syscall_ret(ecall2(113, (long)path, (long)st));
 }
 
@@ -112,7 +116,7 @@ int chdir(const char *path) {
 char *getcwd(char *buf, size_t n) {
     int allocated = 0;
     if (!buf) {
-        if (n == 0) n = 4096;
+        if (n == 0) n = PATH_MAX;
         buf = malloc(n);
         if (!buf) { errno = ENOMEM; return 0; }
         allocated = 1;

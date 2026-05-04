@@ -322,7 +322,7 @@ long ftell(FILE *stream) {
     if (!stream) return -1;
     long r = lseek(stream->fd, 0, SEEK_CUR);
     if (r < 0) return -1;
-    if (stream->unget >= 0) r--;
+    if (stream->unget >= 0 && r > 0) r--;
     return r;
 }
 
