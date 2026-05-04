@@ -1,5 +1,15 @@
 #include <netdb.h>
+#include <netinet/in.h>
 #include <errno.h>
+
+/* RISC-V is little-endian; network byte order is big-endian, so always swap. */
+uint16_t htons(uint16_t x) { return (uint16_t)((x << 8) | (x >> 8)); }
+uint16_t ntohs(uint16_t x) { return htons(x); }
+uint32_t htonl(uint32_t x) {
+    return ((x & 0x000000ffu) << 24) | ((x & 0x0000ff00u) << 8)
+         | ((x & 0x00ff0000u) >> 8)  | ((x & 0xff000000u) >> 24);
+}
+uint32_t ntohl(uint32_t x) { return htonl(x); }
 
 /* No networking stack. Resolution always fails. We export the symbols so
  * that ports linking against libresolv-style code at least produce a
