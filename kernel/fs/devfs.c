@@ -61,6 +61,11 @@ static int console_write(struct inode *ip, uint64_t off, const void *buf,
     return (int)n;
 }
 
+/* Linux-canonical (major,minor) for our char devs so busybox's `ls -l`
+ * shows familiar numbers: console=(5,1), null=(1,3). Encoding matches
+ * libc's major()/minor() in <sys/sysmacros.h>: (major<<8) | minor. */
+#define MKDEV(maj, min) (((uint64_t)(maj) << 8) | (uint64_t)(min))
+
 static int console_stat(struct inode *ip, struct stat *st) {
     st->st_dev   = 2;
     st->st_ino   = (uint64_t)(uintptr_t)ip;
@@ -70,6 +75,7 @@ static int console_stat(struct inode *ip, struct stat *st) {
     st->st_gid   = 0;
     st->st_size  = 0;
     st->st_atime = st->st_mtime = st->st_ctime = 0;
+    st->st_rdev  = MKDEV(5, 1);
     return 0;
 }
 
@@ -210,6 +216,7 @@ static int null_stat(struct inode *ip, struct stat *st) {
     st->st_uid   = st->st_gid = 0;
     st->st_size  = 0;
     st->st_atime = st->st_mtime = st->st_ctime = 0;
+    st->st_rdev  = MKDEV(1, 3);
     return 0;
 }
 static const struct inode_ops null_ops = {
