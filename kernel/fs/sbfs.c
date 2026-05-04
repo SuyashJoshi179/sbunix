@@ -627,6 +627,7 @@ static int sbfs_op_truncate(struct inode *ip) {
     begin_op();
     sbfs_itrunc(si);
     end_op();
+    pcache_invalidate_range(ip, 0, ~0ULL);
     return 0;
 }
 
