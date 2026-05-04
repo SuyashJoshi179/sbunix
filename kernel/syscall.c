@@ -190,7 +190,8 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     while (len > 1 && path[len - 1] == '/') {
         path[--len] = '\0';
     }
-    // After stripping, "/" alone has no leaf.
+    // After stripping, only absolute "/" alone has no leaf;
+    // single-char relative names (e.g. "a") are valid.
     if (len == 1 && path[0] == '/') return -EINVAL;
 
     // Find last '/'.
