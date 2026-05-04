@@ -49,6 +49,7 @@ static inline void fs_unlock(void) {
  * ----------------------------------------------------------------------- */
 static int  sbfs_op_read(struct inode *, uint64_t, void *, uint64_t);
 static int  sbfs_readpage(struct inode *, uint64_t, void *);
+static int  sbfs_writepage(struct inode *, uint64_t, const void *);
 static int  sbfs_op_write(struct inode *, uint64_t, const void *, uint64_t);
 static int  sbfs_op_stat(struct inode *, struct stat *);
 static int  sbfs_op_lookup(struct inode *, const char *, struct inode **);
@@ -78,7 +79,8 @@ static const struct inode_ops sbfs_iops = {
     .unlink   = sbfs_op_unlink,
     .link     = sbfs_op_link,
     .rename   = sbfs_op_rename,
-    .readpage = sbfs_readpage,
+    .readpage  = sbfs_readpage,
+    .writepage = sbfs_writepage,
 };
 
 /* -----------------------------------------------------------------------
@@ -581,6 +583,17 @@ static int sbfs_readpage(struct inode *ip, uint64_t pgidx, void *page) {
     int n = sbfs_readi(ip, off, page, 4096);
     if (n < 0) return n;
     if (n < 4096) memset((char *)page + n, 0, 4096 - n);
+    return 0;
+}
+
+/* Caller MUST be inside begin_op/end_op. */
+static int sbfs_writepage(struct inode *ip, uint64_t pgidx, const void *page) {
+    uint64_t off = pgidx * 4096UL;
+    uint64_t end = off + 4096UL;
+    if (end > ip->size) end = ip->size;
+    if (end <= off) return 0;
+    int n = sbfs_writei(ip, off, page, end - off);
+    if (n < 0) return n;
     return 0;
 }
 
