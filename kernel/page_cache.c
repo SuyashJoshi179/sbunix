@@ -5,6 +5,7 @@
 #include <string.h>
 #include <errno.h>
 #include <riscv.h>
+#include <proc.h>
 
 static struct pcache_page slots[PCACHE_NSLOTS];
 static struct pcache_page lru_head;          /* sentinel */
@@ -60,10 +61,14 @@ static void lru_to_head(struct pcache_page *p) {
     lru_head.next = p;
 }
 
-/* Find existing slot for (ip, pgidx). NULL if absent. Caller holds lock. */
+/* Find existing slot for (ip, pgidx). NULL if absent. Caller holds lock.
+ * Matches regardless of `valid`: a concurrent miss may have reserved the
+ * slot (ip/pgidx set, valid=0, refcnt>=1) and dropped the lock to run
+ * readpage. Returning that in-progress slot lets the caller wait for the
+ * fill instead of allocating a duplicate. */
 static struct pcache_page *pcache_lookup(struct inode *ip, uint64_t pgidx) {
     for (struct pcache_page *p = lru_head.next; p != &lru_head; p = p->next) {
-        if (p->ip == ip && p->pgidx == pgidx && p->valid)
+        if (p->ip == ip && p->pgidx == pgidx)
             return p;
     }
     return 0;
@@ -105,8 +110,23 @@ static struct pcache_page *pcache_evict(void) {
 
 int pcache_get(struct inode *ip, uint64_t pgidx, struct pcache_page **out) {
     pcache_lock();
+retry:;
     struct pcache_page *p = pcache_lookup(ip, pgidx);
     if (p) {
+        if (!p->valid) {
+            /* Another caller reserved this slot and is running readpage
+             * with the lock dropped. Pin so the slot can't be evicted or
+             * repurposed, drop our lock, yield, then re-check. The pin
+             * also covers the failure path: if the filler errors out and
+             * resets ip=0, our pin keeps the slot pinned but the lookup
+             * will then miss and we'll fall through to evict. */
+            p->refcnt++;
+            pcache_unlock();
+            yield();
+            pcache_lock();
+            p->refcnt--;
+            goto retry;
+        }
         p->refcnt++;
         lru_unlink(p);
         lru_to_head(p);
@@ -139,23 +159,29 @@ int pcache_get(struct inode *ip, uint64_t pgidx, struct pcache_page **out) {
     }
     if (rc < 0) {
         /* Drop the slot — leave it ip=0 so next get re-fetches.
-         * Refcnt stays 1 in the caller view; we instead treat this as
-         * an immediate failure and unwind. */
+         * Decrement (not zero) refcnt so any concurrent waiters that
+         * pinned the slot during their yield-loop retain their pins;
+         * they'll re-lookup and miss, then go evict for themselves. */
         pcache_lock();
         p->ip = 0;
         p->pgidx = 0;
-        p->refcnt = 0;
+        p->refcnt--;
         p->valid = 0;
-        /* Move back to tail so it's preferred for next reuse. */
-        lru_unlink(p);
-        p->next = &lru_head;
-        p->prev = lru_head.prev;
-        lru_head.prev->next = p;
-        lru_head.prev = p;
+        /* Move toward tail if no one is waiting so it's preferred for
+         * next reuse. If waiters are pinned (refcnt>0) leave it parked. */
+        if (p->refcnt == 0) {
+            lru_unlink(p);
+            p->next = &lru_head;
+            p->prev = lru_head.prev;
+            lru_head.prev->next = p;
+            lru_head.prev = p;
+        }
         pcache_unlock();
         return rc;
     }
+    pcache_lock();
     p->valid = 1;
+    pcache_unlock();
     *out = p;
     return 0;
 }
