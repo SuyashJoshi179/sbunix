@@ -210,7 +210,8 @@ void pcache_invalidate_range(struct inode *ip, uint64_t off, uint64_t len) {
         if (p->pgidx < pg_start || p->pgidx >= pg_end) continue;
         if (p->refcnt > 0) {
             /* Mapped page — leave it; bounds check at fault path will
-             * surface SIGBUS for past-EOF accesses. */
+             * surface SIGBUS for past-EOF accesses. Coherence with
+             * concurrent fd-writes deferred to Phase D. */
             continue;
         }
         p->ip = 0;
