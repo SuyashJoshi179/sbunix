@@ -69,16 +69,32 @@ static int parse_int(struct scan_src *s, int base, int width,
         if (width > 0) width--;
         c = s->get(s->cookie);
     }
-    /* %i auto-detect 0/0x/0X */
+    /* Helper test: is `ch` a digit valid in `b`? Only used for 0x lookahead. */
+    #define IS_HEX_DIGIT(ch) \
+        (((ch) >= '0' && (ch) <= '9') || \
+         ((ch) >= 'a' && (ch) <= 'f') || \
+         ((ch) >= 'A' && (ch) <= 'F'))
+
+    /* %i auto-detect 0/0x/0X. For 0x prefix we must peek one extra char to
+     * confirm a hex digit follows; if not, "0x" matches as octal 0 (POSIX:
+     * strtol with base 0 stops at 'x' in "0x"). With only one unget slot we
+     * keep the leading 0 as the matched value and lose the 'x'. */
     if (base == 0) {
         base = 10;
         if (c == '0') {
             saw = 1;
             int c2 = s->get(s->cookie);
-            if ((c2 == 'x' || c2 == 'X')) {
-                base = 16;
-                c = s->get(s->cookie);
-                if (width > 0) width -= 2;
+            if (c2 == 'x' || c2 == 'X') {
+                int c3 = s->get(s->cookie);
+                if (IS_HEX_DIGIT(c3)) {
+                    base = 16;
+                    c = c3;
+                    if (width > 0) width -= 2;
+                } else {
+                    base = 8;
+                    c = EOF;                       /* end the digit loop */
+                    if (c3 != EOF) s->unget(c3, s->cookie);
+                }
             } else {
                 base = 8;
                 if (c2 != EOF) s->unget(c2, s->cookie);
@@ -88,14 +104,23 @@ static int parse_int(struct scan_src *s, int base, int width,
         if (c == '0') {
             int c2 = s->get(s->cookie);
             if (c2 == 'x' || c2 == 'X') {
-                c = s->get(s->cookie);
-                if (width > 0) width -= 2;
+                int c3 = s->get(s->cookie);
+                if (IS_HEX_DIGIT(c3)) {
+                    c = c3;
+                    if (width > 0) width -= 2;
+                } else {
+                    /* "0x" without hex digit: keep leading 0 as matched value. */
+                    saw = 1;
+                    c = EOF;
+                    if (c3 != EOF) s->unget(c3, s->cookie);
+                }
             } else {
                 if (c2 != EOF) s->unget(c2, s->cookie);
                 /* leading '0' is a valid digit */
             }
         }
     }
+    #undef IS_HEX_DIGIT
     unsigned long long v = 0;
     while (c != EOF && width != 0) {
         int d;
