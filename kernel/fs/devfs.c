@@ -269,7 +269,7 @@ static int devroot_getdents(struct inode *dir, uint64_t off, void *buf,
         uint8_t d_type;
     } ents[] = {
         { "console", &console_inode, DT_CHR },
-        { "loop",    &loop_inode,    DT_UNKNOWN },  /* DT_LNK not defined */
+        { "loop",    &loop_inode,    DT_LNK },
         { "null",    &null_inode,    DT_CHR },
     };
     int nent = (int)(sizeof(ents) / sizeof(ents[0]));

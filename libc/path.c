@@ -8,7 +8,11 @@
 #include <time.h>
 
 /* Path manipulation and tempfile helpers. realpath does lexical
- * resolution only — no symlink follow until tarfs gains link support. */
+ * resolution only by design: it normalizes "./" and "../" but does not
+ * follow symlinks. The VFS already resolves symlinks during pathname
+ * lookup, so most callers see canonical contents without this layer
+ * walking the filesystem. Strict POSIX realpath also resolves
+ * symlinks per component — that upgrade is not implemented yet. */
 
 /* realpath: produce an absolute, normalized form of `path`. If `out` is
  * NULL, allocate PATH_MAX bytes; caller frees. Returns out (or new buf)
