@@ -268,3 +268,44 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
     flush_tlb();
     return 0;
 }
+
+/* For a VMA_TYPE_FILE vma, walk its faulted-in PTEs, flush dirty cache
+ * pages (MAP_SHARED only), drop pcache refcnts, and clear PTEs. Caller
+ * frees the VMA struct via vma_list_free or vma_split. */
+void vma_drop_file_pages(struct pcb *p, struct vma *v) {
+    if (v->type != VMA_TYPE_FILE) return;
+    for (uint64_t va = v->start; va < v->end; va += PAGE_SIZE) {
+        pte_t *pte = get_pte(p->pagetable, va, 0);
+        if (!pte || !(*pte & PTE_V)) continue;
+        unsigned long pa = pte_to_phyaddr(*pte);
+        uint64_t pgidx = (va - v->start + v->file_off) / PAGE_SIZE;
+
+        struct pcache_page *pp;
+        if (pcache_get(v->file, pgidx, &pp) == 0) {
+            unsigned long pcache_pa = virt_to_phys((unsigned long)pp->page);
+            if (pcache_pa == pa) {
+                /* PTE points at the cache page (T9 RO install or T11
+                 * shared-RW upgrade). */
+                if (pp->dirty && (v->flags & VMA_FLAG_SHARED)
+                    && v->file->ops && v->file->ops->writepage) {
+                    extern int sbfs_writepage_locked(struct inode *,
+                                                    uint64_t,
+                                                    const void *);
+                    sbfs_writepage_locked(v->file, pgidx, pp->page);
+                    pp->dirty = 0;
+                }
+                pcache_put(pp);   /* fault-time ref */
+                pcache_put(pp);   /* lookup ref     */
+            } else {
+                /* PTE points at a CoW anon page (T10). Cache page is
+                 * untouched by this PTE; just drop the lookup ref and
+                 * free the anon page. */
+                pcache_put(pp);   /* lookup ref only */
+                page_put(pa);
+            }
+        }
+        *pte = 0;
+    }
+    flush_tlb();
+    if (v->file) { inode_put(v->file); v->file = 0; }
+}

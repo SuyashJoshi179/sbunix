@@ -95,6 +95,10 @@ static void proc_destroy(struct pcb *p) {
     }
 
     // 3) free VMA metadata.
+    for (struct vma *vv = p->vma_list; vv; vv = vv->next) {
+        if (vv->type == VMA_TYPE_FILE)
+            vma_drop_file_pages(p, vv);
+    }
     vma_list_free(&p->vma_list);
     p->heap_vma = 0;
 

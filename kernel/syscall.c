@@ -872,6 +872,10 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     vma_insert(&vlist, stack_vma);
 
     // Free old VMAs and page table
+    for (struct vma *vv = p->vma_list; vv; vv = vv->next) {
+        if (vv->type == VMA_TYPE_FILE)
+            vma_drop_file_pages(p, vv);
+    }
     vma_list_free(&p->vma_list);
     pgtable_t old_pt = p->pagetable;
 
@@ -1034,6 +1038,10 @@ static int64_t sys_munmap(uint64_t addr, uint64_t len) {
     if (!v) return -EINVAL;
     if (addr + len > v->end) return -EINVAL;
 
+    if (v->type == VMA_TYPE_FILE && addr <= v->start && addr + len >= v->end) {
+        vma_drop_file_pages(p, v);
+    }
+    /* Phase D: partial file-VMA munmap is a known limitation. */
     uvmunmap_range(p->pagetable, addr, addr + len);
     vma_split(&p->vma_list, v, addr, addr + len);
     return 0;

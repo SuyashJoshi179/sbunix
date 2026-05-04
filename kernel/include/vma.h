@@ -41,3 +41,6 @@ struct vma *vma_list_dup(struct vma *src);
 
 int  vma_split(struct vma **list, struct vma *v, uint64_t start, uint64_t end);
 int  user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe);
+
+struct pcb;
+void vma_drop_file_pages(struct pcb *p, struct vma *v);
