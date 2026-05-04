@@ -95,6 +95,7 @@ int main(void) {
         "/bin/headers_compile_gate",
         "/bin/sh_c_test",
         "/bin/usertests",
+        "/bin/mmap_smoke_test",
     };
     int ntests = (int)(sizeof(tests) / sizeof(tests[0]));
 

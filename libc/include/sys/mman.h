@@ -5,6 +5,7 @@
 #define PROT_WRITE  0x2
 #define PROT_EXEC   0x4
 
+#define MAP_SHARED  0x01
 #define MAP_PRIVATE 0x02
 #define MAP_ANON    0x20
 #define MAP_ANONYMOUS MAP_ANON

@@ -1,3 +1,4 @@
+#include <page_cache.h>
 #include <page_ref.h>
 #include <pmem.h>
 #include <printk.h>
@@ -156,6 +157,36 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
         return -1;
     if (scause == 12 && !(v->prot & VMA_PROT_X))
         return -1;
+
+    if (v->type == VMA_TYPE_FILE) {
+        /* Bounds against file size: faulting past EOF → SIGBUS (return -1). */
+        uint64_t mapping_off = (fault_va - v->start);
+        uint64_t file_pos    = v->file_off + mapping_off;
+        uint64_t file_pgidx  = file_pos / PAGE_SIZE;
+        if (file_pos >= v->file->size) return -1;
+
+        /* Already-present PTE: write-fault upgrade paths handled in
+         * later tasks (T10 CoW, T11 SHARED). For now, defer. */
+        pte_t *pte_existing = get_pte(p->pagetable, fault_va, 0);
+        if (pte_existing && (*pte_existing & PTE_V)) {
+            return -1;
+        }
+
+        struct pcache_page *pp;
+        int rc = pcache_get(v->file, file_pgidx, &pp);
+        if (rc < 0) return -1;
+
+        unsigned long perm = PTE_U | PTE_V;
+        if (v->prot & VMA_PROT_R) perm |= PTE_R;
+        if (v->prot & VMA_PROT_X) perm |= PTE_X;
+        /* RO install: writable mappings handled by T10 / T11 via the
+         * present-PTE branch above. We never install PTE_W here in T9. */
+        unsigned long pa = virt_to_phys((unsigned long)pp->page);
+        vmem_map(p->pagetable, fault_va, pa, PAGE_SIZE, perm);
+        flush_tlb();
+        /* refcnt remains held; released in vma teardown (Task 12). */
+        return 0;
+    }
 
     // Check if PTE already exists
     pte_t *pte = get_pte(p->pagetable, fault_va, 0);
