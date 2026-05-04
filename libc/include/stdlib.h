@@ -8,9 +8,9 @@
 
 #define RAND_MAX 0x7fffffff
 
-void  exit(int status);
-void  _Exit(int status);
-void  abort(void);
+void  exit(int status)  __attribute__((noreturn));
+void  _Exit(int status) __attribute__((noreturn));
+void  abort(void)       __attribute__((noreturn));
 int   atexit(void (*func)(void));
 
 void *malloc(size_t size);
