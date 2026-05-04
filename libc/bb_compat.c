@@ -32,8 +32,10 @@ int vdprintf(int fd, const char *fmt, va_list ap) {
         int w = (int)write(fd, buf + total, (unsigned)(n - total));
         if (w < 0) {
             if (errno == EINTR) continue;
+            int saved = errno;
             free(buf);
-            return total > 0 ? total : -1;
+            errno = saved;
+            return -1;
         }
         if (w == 0) break;
         total += w;
