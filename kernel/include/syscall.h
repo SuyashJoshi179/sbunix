@@ -54,6 +54,7 @@
 #define SYS_sigprocmask    92   // (how, const sigset_t *set, sigset_t *oldset)
 #define SYS_sigreturn      93   // ()
 #define SYS_pause          94   // ()
+#define SYS_sigsuspend     27   // (const sigset_t *mask)
 
 // Phase 8a: uid/gid stubs
 #define SYS_getuid        100

@@ -84,6 +84,7 @@ struct dirent64 {
 #define DT_CHR      2
 #define DT_DIR      4
 #define DT_REG      8
+#define DT_LNK      10
 
 /* offset of d_name in struct dirent64 (8+8+2+1 = 19) */
 #define DIRENT64_FIXED_LEN  19

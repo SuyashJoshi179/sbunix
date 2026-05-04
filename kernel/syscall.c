@@ -191,7 +191,8 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
     while (len > 1 && path[len - 1] == '/') {
         path[--len] = '\0';
     }
-    // After stripping, "/" alone has no leaf.
+    // After stripping, only absolute "/" alone has no leaf;
+    // single-char relative names (e.g. "a") are valid.
     if (len == 1 && path[0] == '/') return -EINVAL;
 
     // Find last '/'.
@@ -541,6 +542,7 @@ static int64_t sys_fstat(int fd, struct stat *st) {
     struct pcb *p = current_proc();
     if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
     struct stat kst;
+    memset(&kst, 0, sizeof(kst));   /* fs ops only set the fields they care about */
     int rc = filestat(p->ofile[fd], &kst);
     if (rc < 0) return rc;
     if (copyout(st, &kst, (unsigned long)sizeof(kst)) < 0) return -EFAULT;
@@ -595,6 +597,7 @@ static int64_t sys_lstat(const char *path, struct stat *st) {
     }
 
     struct stat kst;
+    memset(&kst, 0, sizeof(kst));
     rc = ip->ops->stat(ip, &kst);
     inode_put(ip);
     if (rc < 0) return rc;
@@ -1466,6 +1469,9 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_pause:
             return sys_pause();
+
+        case SYS_sigsuspend:
+            return sys_sigsuspend((const sigset_t *)(uintptr_t)trapframe[TF_A0]);
 
         case SYS_getuid:  return sys_getuid();
         case SYS_geteuid: return sys_geteuid();

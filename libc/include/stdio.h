@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdarg.h>
+#include <sys/types.h>
 
 #ifndef EOF
 #define EOF (-1)
@@ -39,6 +40,30 @@ int   getc(FILE *stream);
 int   fgetc(FILE *stream);
 char *fgets(char *buf, int n, FILE *stream);
 long  getline(char **lineptr, unsigned long *n, FILE *stream);
+long  getdelim(char **lineptr, unsigned long *n, int delim, FILE *stream);
+
+int   sscanf(const char *str, const char *fmt, ...);
+int   fscanf(FILE *stream, const char *fmt, ...);
+int   scanf(const char *fmt, ...);
+int   vsscanf(const char *str, const char *fmt, va_list ap);
+int   vfscanf(FILE *stream, const char *fmt, va_list ap);
+int   vscanf(const char *fmt, va_list ap);
+
+int   asprintf(char **strp, const char *fmt, ...);
+int   vasprintf(char **strp, const char *fmt, va_list ap);
+int   dprintf(int fd, const char *fmt, ...);
+int   vdprintf(int fd, const char *fmt, va_list ap);
+
+/* glibc stdio _unlocked variants — single-threaded SBUnix has no locks,
+ * so these are simple aliases for the locked forms. */
+int   fputs_unlocked(const char *s, FILE *stream);
+int   putc_unlocked(int c, FILE *stream);
+int   getc_unlocked(FILE *stream);
+int   fgetc_unlocked(FILE *stream);
+int   fputc_unlocked(int c, FILE *stream);
+int   feof_unlocked(FILE *stream);
+int   ferror_unlocked(FILE *stream);
+int   fileno_unlocked(FILE *stream);
 
 FILE  *fopen(const char *path, const char *mode);
 int    fclose(FILE *stream);
@@ -47,6 +72,8 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream);
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);
 int    fseek(FILE *stream, long off, int whence);
 long   ftell(FILE *stream);
+int    fseeko(FILE *stream, off_t off, int whence);
+off_t  ftello(FILE *stream);
 void   rewind(FILE *stream);
 int    feof(FILE *stream);
 int    ferror(FILE *stream);

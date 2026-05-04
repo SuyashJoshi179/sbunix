@@ -8,9 +8,9 @@
 
 #define RAND_MAX 0x7fffffff
 
-void  exit(int status);
-void  _Exit(int status);
-void  abort(void);
+void  exit(int status)  __attribute__((noreturn));
+void  _Exit(int status) __attribute__((noreturn));
+void  abort(void)       __attribute__((noreturn));
 int   atexit(void (*func)(void));
 
 void *malloc(size_t size);
@@ -55,6 +55,10 @@ div_t   div(int num, int den);
 ldiv_t  ldiv(long num, long den);
 lldiv_t lldiv(long long num, long long den);
 
+char  *realpath(const char *path, char *out);
+int    mkstemp(char *tmpl);
+char  *mkdtemp(char *tmpl);
+
 int    mblen(const char *s, size_t n);
 int    mbtowc(int *pwc, const char *s, size_t n);
 int    wctomb(char *s, int wc);
@@ -62,5 +66,11 @@ size_t mbstowcs(int *pwcs, const char *s, size_t n);
 size_t wcstombs(char *s, const int *pwcs, size_t n);
 
 #define MB_CUR_MAX 1
+
+/* alloca: glibc exposes this through stdlib.h indirectly. Foreign code
+ * (BusyBox) calls alloca() without including <alloca.h>. Provide the
+ * builtin macro here so it resolves at compile time — a real function
+ * call cannot work because the stack frame would be freed on return. */
+#define alloca(size) __builtin_alloca(size)
 
 #endif

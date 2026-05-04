@@ -19,6 +19,7 @@
 #include <printk.h>
 #include <string.h>
 #include <riscv.h>
+#include <drivers/rtc.h>
 
 /* -----------------------------------------------------------------------
  * Module-level state
@@ -42,6 +43,15 @@ static inline void fs_lock(void) {
 static inline void fs_unlock(void) {
     if (--fs_depth == 0 && fs_saved_sie)
         write_sstatus(read_sstatus() | SSTATUS_SIE);
+}
+
+/* Wall-clock seconds since the Unix epoch, sourced from Goldfish RTC.
+ * sbfs v1's on-disk inode has only one timestamp (mtime); we report
+ * it as st_atime/st_mtime/st_ctime alike. Read access does not bump
+ * mtime — equivalent to mounting Linux with "noatime", which is the
+ * right tradeoff for a teaching kernel without writeback batching. */
+static inline uint64_t sbfs_now(void) {
+    return rtc_read_ns() / 1000000000ULL;
 }
 
 /* -----------------------------------------------------------------------
@@ -143,6 +153,7 @@ static void sbfs_ilock(struct sbfs_inode *si) {
                    : 0;
     si->vnode.size   = si->d.size;
     si->vnode.nlink  = si->d.nlink;
+    si->vnode.mtime  = si->d.mtime;
 }
 
 /* Write si->d back to the inode block (must be inside a transaction). */
@@ -233,6 +244,7 @@ struct inode *sbfs_ialloc(uint16_t type) {
             /* Free inode — claim it. */
             memset(d, 0, sizeof(*d));
             d->type = type;
+            d->mtime = sbfs_now();
             log_write(bp);
             brelse(bp);
             return sbfs_iget(inum);
@@ -357,6 +369,13 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
         si->vnode.size = si->d.size;
         si->dirty = 1;
     }
+    /* Bump mtime on any actual write (covers file content + dirent
+     * mutations, since dirlink/dirunlink ride sbfs_writei). */
+    if (total > 0) {
+        si->d.mtime = sbfs_now();
+        si->vnode.mtime = si->d.mtime;
+        si->dirty = 1;
+    }
     /* Always persist the inode before returning — this covers the partial-
      * write ENOSPC path where we've allocated blocks but not yet recorded
      * them in the on-disk inode. */
@@ -392,6 +411,8 @@ static void sbfs_itrunc(struct sbfs_inode *si) {
     }
     si->d.size  = 0;
     si->vnode.size = 0;
+    si->d.mtime = sbfs_now();
+    si->vnode.mtime = si->d.mtime;
     si->dirty = 1;
     sbfs_iupdate(si);
 }
@@ -560,6 +581,8 @@ int sbfs_unlink(struct inode *parent, const char *name) {
 
     si->d.nlink--;
     si->vnode.nlink--;
+    si->d.mtime = sbfs_now();
+    si->vnode.mtime = si->d.mtime;
     si->dirty = 1;
     sbfs_iupdate(si);
 
@@ -644,6 +667,11 @@ static int sbfs_op_stat(struct inode *ip, struct stat *st) {
     } else {
         st->st_mode = 0;
     }
+    /* sbfs v1 has a single on-disk timestamp; report it as all three
+     * stat fields. Documented deviation from POSIX. */
+    st->st_atime = si->d.mtime;
+    st->st_mtime = si->d.mtime;
+    st->st_ctime = si->d.mtime;
     return 0;
 }
 
@@ -752,6 +780,8 @@ static int sbfs_link(struct inode *parent, struct inode *target, const char *nam
 
     si->d.nlink++;
     si->vnode.nlink++;
+    si->d.mtime = sbfs_now();
+    si->vnode.mtime = si->d.mtime;
     si->dirty = 1;
     sbfs_iupdate(si);
     return 0;
@@ -893,13 +923,19 @@ static int sbfs_rename(struct inode *old_p, const char *old_name,
         }
 
         /* ".." update committed — now safe to adjust parent nlinks. */
+        uint64_t now = sbfs_now();
+
         old_p_si->d.nlink--;
         old_p_si->vnode.nlink--;
+        old_p_si->d.mtime = now;
+        old_p_si->vnode.mtime = now;
         old_p_si->dirty = 1;
         sbfs_iupdate(old_p_si);
 
         new_p_si->d.nlink++;
         new_p_si->vnode.nlink++;
+        new_p_si->d.mtime = now;
+        new_p_si->vnode.mtime = now;
         new_p_si->dirty = 1;
         sbfs_iupdate(new_p_si);
     }

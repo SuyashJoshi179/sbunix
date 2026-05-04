@@ -42,6 +42,7 @@ int main(void) {
         "/bin/mkdir_test",
         "/bin/link_test",
         "/bin/rename_test",
+        "/bin/timestamp_test",
         "/bin/pipe_test",
         "/bin/sbrk_test",
         "/bin/malloc_test",
@@ -58,6 +59,7 @@ int main(void) {
         "/bin/comprehensive_test",
         /* Phase 8a: time + uid/gid */
         "/bin/time_test",
+        "/bin/time_posix_test",
         "/bin/date",
         "/bin/uid_test",
         /* Phase 8b/8c: signals + termios */

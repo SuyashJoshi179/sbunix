@@ -4,8 +4,11 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include <termios.h>
 #include <errno.h>
+#include <limits.h>
 #include "syscall_priv.h"
 
 // Generic ecall helpers (register-allocated per RISC-V calling convention).
@@ -41,7 +44,7 @@ long read(int fd, void *buf, long len) {
     return syscall_ret(ecall3(5, (long)fd, (long)buf, len));
 }
 
-int open(const char *path, int flags) {
+int open(const char *path, int flags, ...) {
     return (int)syscall_ret(ecall2(4, (long)path, (long)flags));
 }
 
@@ -90,10 +93,12 @@ long lseek(int fd, long off, int whence) {
 }
 
 int fstat(int fd, struct stat *st) {
+    if (st) memset(st, 0, sizeof(*st));   /* kernel writes the fields it knows; the rest stays zero */
     return (int)syscall_ret(ecall2(17, (long)fd, (long)st));
 }
 
 int lstat(const char *path, struct stat *st) {
+    if (st) memset(st, 0, sizeof(*st));
     return (int)syscall_ret(ecall2(113, (long)path, (long)st));
 }
 
@@ -105,8 +110,24 @@ int chdir(const char *path) {
     return (int)syscall_ret(ecall1(19, (long)path));
 }
 
-long getcwd(char *buf, long n) {
-    return syscall_ret(ecall2(20, (long)buf, n));
+/* POSIX getcwd: returns buf on success, NULL on error.
+ * glibc extension: buf == NULL → allocate. With size==0 use PATH_MAX.
+ * BusyBox ash relies on this extension (`getcwd(NULL, 0)`). */
+char *getcwd(char *buf, size_t n) {
+    int allocated = 0;
+    if (!buf) {
+        if (n == 0) n = PATH_MAX;
+        buf = malloc(n);
+        if (!buf) { errno = ENOMEM; return 0; }
+        allocated = 1;
+    }
+    long r = ecall2(20, (long)buf, (long)n);
+    if (r < 0) {
+        if (allocated) free(buf);
+        errno = (int)-r;
+        return 0;
+    }
+    return buf;
 }
 
 int mkdir(const char *path, int mode) {
@@ -119,11 +140,11 @@ int unlink(const char *path) {
 }
 
 int link(const char *oldpath, const char *newpath) {
-    return (int)ecall2(25, (long)oldpath, (long)newpath);
+    return (int)syscall_ret(ecall2(25, (long)oldpath, (long)newpath));
 }
 
 int rename(const char *oldpath, const char *newpath) {
-    return (int)ecall2(26, (long)oldpath, (long)newpath);
+    return (int)syscall_ret(ecall2(26, (long)oldpath, (long)newpath));
 }
 
 int pipe(int fds[2]) {
