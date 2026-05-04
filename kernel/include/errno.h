@@ -2,6 +2,8 @@
 
 #define EPERM         1
 #define ENOENT        2
+#define EACCES       13
+#define ENODEV       19
 #define ESRCH         3
 #define EINTR         4
 #define EBADF         9

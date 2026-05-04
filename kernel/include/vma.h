@@ -12,7 +12,8 @@ struct inode;
 #define VMA_TYPE_STACK 3
 #define VMA_TYPE_HEAP  4
 
-#define VMA_FLAG_COW   0x1
+#define VMA_FLAG_COW    0x1
+#define VMA_FLAG_SHARED 0x2
 
 #define MAX_STACK_PAGES 256
 #define MMAP_START      0x20000000UL

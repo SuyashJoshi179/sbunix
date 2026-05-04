@@ -60,7 +60,7 @@ static int proc_open_fd_count(const struct pcb *p) {
     return n;
 }
 
-static int proc_vma_count(const struct pcb *p) {
+static int __attribute__((unused)) proc_vma_count(const struct pcb *p) {
     int n = 0;
     if (!p) return 0;
     for (struct vma *v = p->vma_list; v; v = v->next)
@@ -941,49 +941,82 @@ static int64_t sys_sbrk(int64_t incr) {
 // ---------------------------------------------------------------------------
 // sys_mmap
 // ---------------------------------------------------------------------------
+#define MAP_PRIVATE 0x02
+#define MAP_SHARED  0x01
 #define MAP_ANON    0x20
-#define PROT_READ   0x1
-#define PROT_WRITE  0x2
 
 static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
-                        int fd, int64_t off) {
-    (void)addr;
-    struct pcb *p = current_proc();
-    if (!p) return -1;
+                        int fd, uint64_t off) {
+    (void)addr;  /* always anonymous-style placement for now */
     if (len == 0) return -EINVAL;
-    if (!(flags & MAP_ANON) || fd != -1 || off != 0) return -EINVAL;
+    len = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if ((flags & (MAP_PRIVATE | MAP_SHARED)) == 0) return -EINVAL;
+    if ((flags & MAP_PRIVATE) && (flags & MAP_SHARED)) return -EINVAL;
 
-    len = page_round_up(len);
-    if (proc_vma_count(p) >= p->rlim_nvma) return -ENOMEM;
-    if (proc_vma_total_pages(p) + (len / PAGE_SIZE) > (uint64_t)p->rlim_npages)
-        return -ENOMEM;
+    struct inode *fip = 0;
+    uint64_t      file_off = 0;
 
+    if (!(flags & MAP_ANON)) {
+        if (fd < 0) return -EINVAL;
+        if (off & (PAGE_SIZE - 1)) return -EINVAL;
+        struct pcb *pp = current_proc();
+        if (!pp) return -EINVAL;
+        if (fd >= NOFILE) return -EBADF;
+        struct file *f = pp->ofile[fd];
+        if (!f) return -EBADF;
+        if (f->type != FD_INODE) return -EACCES;
+        if (!f->ip || f->ip->type != I_REG) return -EACCES;
+        if (!f->ip->ops || !f->ip->ops->readpage) return -ENODEV;
+        if ((prot & VMA_PROT_W) && (flags & MAP_SHARED)) {
+            if (!f->ip->ops->writepage) return -EROFS;
+            if (!f->writable) return -EACCES;
+        }
+        if ((prot & VMA_PROT_R) && !f->readable) return -EACCES;
+        fip = inode_get(f->ip);
+        file_off = off;
+    } else {
+        if (fd != -1 || off != 0) return -EINVAL;
+    }
+
+    /* Top-down search for an empty range — preserve existing logic. */
+    struct pcb *proc = current_proc();
     uint64_t search = MMAP_END - len;
     while (search >= MMAP_START) {
         int overlap = 0;
-        for (struct vma *v = p->vma_list; v; v = v->next) {
-            if (v->start < search + len && v->end > search) {
-                if (v->start < MMAP_START) { overlap = 1; break; }
-                search = (v->start >= len) ? v->start - len : 0;
+        for (struct vma *v = proc->vma_list; v; v = v->next) {
+            if (search < v->end && search + len > v->start) {
                 overlap = 1;
+                if (v->start < MMAP_START) { overlap = 1; break; }
+                search = v->start - len;
+                search &= ~(PAGE_SIZE - 1);
                 break;
             }
         }
         if (!overlap) break;
-        if (search < MMAP_START) return -ENOMEM;
+        if (search < MMAP_START) { if (fip) inode_put(fip); return -ENOMEM; }
     }
-    if (search < MMAP_START) return -ENOMEM;
+    if (search < MMAP_START) { if (fip) inode_put(fip); return -ENOMEM; }
 
     struct vma *v = vma_alloc();
-    if (!v) return -ENOMEM;
-    v->start = search;
-    v->end   = search + len;
-    v->prot  = 0;
-    if (prot & PROT_READ)  v->prot |= VMA_PROT_R;
-    if (prot & PROT_WRITE) v->prot |= VMA_PROT_W;
-    v->type = VMA_TYPE_ANON;
-    vma_insert(&p->vma_list, v);
-
+    if (!v) { if (fip) inode_put(fip); return -ENOMEM; }
+    v->start    = search;
+    v->end      = search + len;
+    v->prot     = (uint32_t)prot;
+    v->flags    = 0;
+    v->file     = 0;
+    v->file_off = 0;
+    if (fip) {
+        v->type     = VMA_TYPE_FILE;
+        v->file     = fip;
+        v->file_off = file_off;
+        if (flags & MAP_SHARED) v->flags |= VMA_FLAG_SHARED;
+        if ((flags & MAP_PRIVATE) && (prot & VMA_PROT_W)) {
+            v->flags |= VMA_FLAG_COW;
+        }
+    } else {
+        v->type = VMA_TYPE_ANON;
+    }
+    vma_insert(&proc->vma_list, v);
     return (int64_t)search;
 }
 
@@ -1345,7 +1378,7 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
                             (int)(int64_t)trapframe[TF_A2],
                             (int)(int64_t)trapframe[TF_A3],
                             (int)(int64_t)trapframe[TF_A4],
-                            (int64_t)trapframe[TF_A5]);
+                            (uint64_t)trapframe[TF_A5]);
 
         case SYS_munmap:
             return sys_munmap(trapframe[TF_A0], trapframe[TF_A1]);
