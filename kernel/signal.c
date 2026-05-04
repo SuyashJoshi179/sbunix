@@ -126,7 +126,12 @@ static void build_sigframe_and_redirect(struct pcb *p, uint64_t *tf,
     struct sigframe fr;
     memset(&fr, 0, sizeof(fr));
     fr.magic      = SIGFRAME_MAGIC;
-    fr.saved_mask = p->sig_blocked;
+    /* If we got here via sigsuspend, the mask sigreturn must restore is the
+     * caller's mask from before sigsuspend (POSIX), not the temporary
+     * suspend mask currently in p->sig_blocked. */
+    fr.saved_mask = p->sig_suspend_active ? p->sig_suspend_saved_mask
+                                          : p->sig_blocked;
+    p->sig_suspend_active = 0;
     memcpy(fr.saved_trapframe, tf, 288);
 
     /* Write frame to user stack — faults in lazy/COW pages as needed. */
@@ -159,7 +164,15 @@ void check_signals(uint64_t *trapframe) {
     if (!p || !p->is_user) return;
 
     uint64_t deliverable = p->sig_pending & ~p->sig_blocked;
-    if (deliverable == 0) return;
+    if (deliverable == 0) {
+        /* sigsuspend wakeup with no deliverable left (race / spurious): still
+         * restore the caller's mask so we satisfy POSIX. */
+        if (p->sig_suspend_active) {
+            p->sig_blocked = p->sig_suspend_saved_mask;
+            p->sig_suspend_active = 0;
+        }
+        return;
+    }
 
     /* Pick lowest-numbered deliverable signal. */
     int sig = 0;
@@ -188,11 +201,20 @@ void check_signals(uint64_t *trapframe) {
 
     sighandler_t h = p->sig_handlers[sig].sa_handler;
 
-    if (h == SIG_IGN) return;
+    /* Helper: restore caller's mask if sigsuspend wakeup landed on a path
+     * that returns without invoking build_sigframe. */
+#define SIGSUSPEND_FALLBACK_RESTORE() do { \
+        if (p->sig_suspend_active) { \
+            p->sig_blocked = p->sig_suspend_saved_mask; \
+            p->sig_suspend_active = 0; \
+        } \
+    } while (0)
+
+    if (h == SIG_IGN) { SIGSUSPEND_FALLBACK_RESTORE(); return; }
 
     if (h == SIG_DFL) {
         uint8_t act = (sig < NSIG) ? default_action[sig] : ACT_TERM;
-        if (act == ACT_IGN || act == ACT_CONT) return;
+        if (act == ACT_IGN || act == ACT_CONT) { SIGSUSPEND_FALLBACK_RESTORE(); return; }
         if (act == ACT_STOP) {
             p->state = PROC_STOPPED;
             p->last_signal = sig;
@@ -353,16 +375,18 @@ int64_t sys_pause(void) {
 }
 
 /* ----------------------------------------------------------------
- * sys_sigsuspend — install arg mask, sleep until actionable signal.
+ * sys_sigsuspend — install arg mask, sleep until actionable signal,
+ * arrange for the prior mask to be restored after the handler runs.
  *
- * Note: we deliberately do NOT restore the prior mask before returning.
- * Restoration must happen after the handler runs (POSIX), and our handler
- * delivery is driven by check_signals on trap-return; restoring here
- * would re-block the very signal that woke us, preventing delivery.
- * The natural flow: trap-return → check_signals → build_sigframe (saves
- * current mask=arg) → handler → sigreturn restores arg mask. Callers
- * (BB ash, etc.) follow up with sigprocmask to re-install their desired
- * mask, which matches typical POSIX usage.
+ * POSIX requires the caller's mask to be restored before sigsuspend
+ * returns to user code. We can't simply restore here because handler
+ * delivery happens in check_signals on trap-return; restoring before
+ * that would re-block the very signal that woke us. Instead we stash
+ * the caller's mask in p->sig_suspend_saved_mask and set
+ * sig_suspend_active. build_sigframe_and_redirect uses that saved
+ * mask in fr.saved_mask (so sigreturn restores it). check_signals
+ * also clears the flag and restores the saved mask if no handler was
+ * actually delivered (default-action paths).
  * ---------------------------------------------------------------- */
 int64_t sys_sigsuspend(const sigset_t *mask) {
     struct pcb *p = current_proc();
@@ -370,7 +394,9 @@ int64_t sys_sigsuspend(const sigset_t *mask) {
     sigset_t s;
     if (copyin(&s, mask, sizeof(s)) < 0) return -EFAULT;
     s &= ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
-    p->sig_blocked = s;
+    p->sig_suspend_saved_mask = p->sig_blocked;
+    p->sig_suspend_active     = 1;
+    p->sig_blocked            = s;
     while (!sig_has_actionable(p)) {
         proc_sleep(p);
     }
