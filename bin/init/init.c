@@ -42,6 +42,7 @@ int main(void) {
         "/bin/mkdir_test",
         "/bin/link_test",
         "/bin/rename_test",
+        "/bin/timestamp_test",
         "/bin/pipe_test",
         "/bin/sbrk_test",
         "/bin/malloc_test",
