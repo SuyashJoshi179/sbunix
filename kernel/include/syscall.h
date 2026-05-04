@@ -70,6 +70,7 @@
 #define SYS_meminfo       111   // () -> free physical pages
 #define SYS_readlink      112
 #define SYS_lstat         113
+#define SYS_msync         115
 
 #define SYS_wait4         106   // (pid, *status, options, *rusage)
 

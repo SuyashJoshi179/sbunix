@@ -12,5 +12,10 @@
 
 #define MAP_FAILED ((void *)-1)
 
+#ifndef MS_SYNC
+#define MS_SYNC 0x4
+#endif
+
 void *mmap(void *addr, long len, int prot, int flags, int fd, long off);
 int   munmap(void *addr, long len);
+int   msync(void *addr, long len, int flags);

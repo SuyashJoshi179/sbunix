@@ -20,6 +20,7 @@
 #include <vma.h>
 #include <vmem.h>
 #include <log.h>
+#include <page_cache.h>
 #include <drivers/uart.h>
 
 // ---------------------------------------------------------------------------
@@ -1048,6 +1049,45 @@ static int64_t sys_munmap(uint64_t addr, uint64_t len) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_msync
+// ---------------------------------------------------------------------------
+#define MS_SYNC 0x4
+
+static int64_t sys_msync(uint64_t addr, uint64_t len, int flags) {
+    if (flags != MS_SYNC) return -EINVAL;
+    if (len == 0) return 0;
+    if (addr & (PAGE_SIZE - 1)) return -EINVAL;
+    uint64_t end = addr + len;
+    end = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+    struct pcb *p = current_proc();
+    if (!p) return -EINVAL;
+    for (struct vma *v = p->vma_list; v; v = v->next) {
+        if (v->type != VMA_TYPE_FILE) continue;
+        if (!(v->flags & VMA_FLAG_SHARED)) continue;
+        uint64_t s = (addr > v->start) ? addr : v->start;
+        uint64_t e = (end < v->end) ? end : v->end;
+        if (s >= e) continue;
+        for (uint64_t va = s; va < e; va += PAGE_SIZE) {
+            pte_t *pte = get_pte(p->pagetable, va, 0);
+            if (!pte || !(*pte & PTE_V)) continue;
+            uint64_t pgidx =
+                (va - v->start + v->file_off) / PAGE_SIZE;
+            struct pcache_page *pp;
+            if (pcache_get(v->file, pgidx, &pp) < 0) continue;
+            if (pp->dirty && v->file->ops && v->file->ops->writepage) {
+                extern int sbfs_writepage_locked(struct inode *,
+                                                 uint64_t, const void *);
+                sbfs_writepage_locked(v->file, pgidx, pp->page);
+                pp->dirty = 0;
+            }
+            pcache_put(pp);
+        }
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // sys_pipe
 // ---------------------------------------------------------------------------
 static int64_t sys_pipe(int *fds) {
@@ -1390,6 +1430,10 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_munmap:
             return sys_munmap(trapframe[TF_A0], trapframe[TF_A1]);
+
+        case SYS_msync:
+            return sys_msync(trapframe[TF_A0], trapframe[TF_A1],
+                             (int)trapframe[TF_A2]);
 
         case SYS_clock_gettime:
             return sys_clock_gettime((int)(int64_t)trapframe[TF_A0],
