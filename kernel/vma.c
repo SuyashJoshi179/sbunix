@@ -191,7 +191,23 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
                 flush_tlb();
                 return 0;
             }
-            /* MAP_SHARED write fault — Task 11. */
+            if (v->flags & VMA_FLAG_SHARED) {
+                /* Upgrade RO → RW. Mark the cache page dirty so the
+                 * msync/munmap flush path writes it back. */
+                struct pcache_page *pp;
+                if (pcache_get(v->file, file_pgidx, &pp) < 0) return -1;
+                pp->dirty = 1;
+                /* Drop the lookup ref; the long-lived fault-time ref still pins. */
+                pcache_put(pp);
+
+                unsigned long perm = PTE_U | PTE_V | PTE_R | PTE_W;
+                if (v->prot & VMA_PROT_X) perm |= PTE_X;
+                unsigned long pa = pte_to_phyaddr(*pte_existing);
+                *pte_existing =
+                    phyaddr_to_pte(pa) | perm | PTE_LEAF_AD;
+                flush_tlb();
+                return 0;
+            }
             return -1;
         }
 
