@@ -21,14 +21,25 @@ int feof_unlocked(FILE *stream)                  { return feof(stream); }
 int ferror_unlocked(FILE *stream)                { return ferror(stream); }
 int fileno_unlocked(FILE *stream)                { return fileno(stream); }
 
-/* dprintf: format directly to a file descriptor without going through FILE. */
+/* dprintf: format directly to a file descriptor without going through FILE.
+ * Loops over write() because pipes, ttys, and EINTR can yield short writes. */
 int vdprintf(int fd, const char *fmt, va_list ap) {
     char *buf = 0;
     int n = vasprintf(&buf, fmt, ap);
     if (n < 0) return -1;
-    int written = (int)write(fd, buf, n);
+    int total = 0;
+    while (total < n) {
+        int w = (int)write(fd, buf + total, (unsigned)(n - total));
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            free(buf);
+            return total > 0 ? total : -1;
+        }
+        if (w == 0) break;
+        total += w;
+    }
     free(buf);
-    return written;
+    return total;
 }
 
 int dprintf(int fd, const char *fmt, ...) {
@@ -95,11 +106,11 @@ char *strsignal(int sig) {
     return _strsig_buf;
 }
 
-/* poll, ppoll, sigsuspend: not yet supported by the kernel. Surface
- * ENOSYS rather than silently returning success — callers will know
- * the feature is unavailable. Real implementations land when runtime
- * triage shows actual call paths exercise them (Stage 7 of the BB
- * port plan). */
+/* poll, ppoll: not yet supported by the kernel. Surface ENOSYS rather
+ * than silently returning success — callers will know the feature is
+ * unavailable. Real implementations land when runtime triage shows
+ * actual call paths exercise them. sigsuspend is implemented below
+ * via SYS_sigsuspend (27). */
 int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     (void)fds; (void)nfds; (void)timeout;
     errno = ENOSYS;

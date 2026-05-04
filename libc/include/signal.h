@@ -36,8 +36,11 @@
 #define SIGPWR  30
 #define SIGSYS  31
 
-#define SIGRTMIN 32
-#define SIGRTMAX 64
+/* Real-time signals are not supported by SBUnix. NSIG == 32 above and a
+ * 64-bit sigset_t mean SIGRTMIN/SIGRTMAX values would shift past the end
+ * of the mask and break the sigaddset/sigdelset/sigismember helpers
+ * (which do `(sigset_t)1 << sig`). Intentionally omitted; ports needing
+ * RT signals will need NSIG widened and the helpers reworked. */
 
 /* sigaction flags. SBUnix honors none of these meaningfully — handlers
  * always run on the same stack, signals always restart, etc. — but the
