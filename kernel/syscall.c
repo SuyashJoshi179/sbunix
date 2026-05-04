@@ -20,6 +20,7 @@
 #include <vma.h>
 #include <vmem.h>
 #include <log.h>
+#include <drivers/rtc.h>
 #include <drivers/uart.h>
 
 // ---------------------------------------------------------------------------
@@ -1072,9 +1073,15 @@ static int64_t sys_clock_gettime(int clockid, struct timespec *ts) {
     if (!ts) return -EFAULT;
     if (clockid != CLOCK_REALTIME && clockid != CLOCK_MONOTONIC) return -EINVAL;
     struct timespec kts;
-    uint64_t ticks = timer_ticks();
-    kts.tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
-    kts.tv_nsec = (int64_t)((ticks % TICKS_PER_SEC) * (1000000000UL / TICKS_PER_SEC));
+    if (clockid == CLOCK_REALTIME) {
+        uint64_t ns = rtc_read_ns();
+        kts.tv_sec  = (int64_t)(ns / NSEC_PER_SEC);
+        kts.tv_nsec = (int64_t)(ns % NSEC_PER_SEC);
+    } else {
+        uint64_t ticks = timer_ticks();
+        kts.tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
+        kts.tv_nsec = (int64_t)((ticks % TICKS_PER_SEC) * (NSEC_PER_SEC / TICKS_PER_SEC));
+    }
     if (copyout(ts, &kts, sizeof(kts)) < 0) return -EFAULT;
     return 0;
 }
@@ -1086,9 +1093,9 @@ static int64_t sys_gettimeofday(struct timeval *tv, void *tz) {
     (void)tz;
     if (!tv) return -EFAULT;
     struct timeval ktv;
-    uint64_t ticks = timer_ticks();
-    ktv.tv_sec  = (int64_t)(ticks / TICKS_PER_SEC);
-    ktv.tv_usec = (int64_t)((ticks % TICKS_PER_SEC) * (1000000UL / TICKS_PER_SEC));
+    uint64_t ns = rtc_read_ns();
+    ktv.tv_sec  = (int64_t)(ns / NSEC_PER_SEC);
+    ktv.tv_usec = (int64_t)((ns / NSEC_PER_USEC) % USEC_PER_SEC);
     if (copyout(tv, &ktv, sizeof(ktv)) < 0) return -EFAULT;
     return 0;
 }
