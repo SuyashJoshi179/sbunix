@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-/* Must match kernel/include/stat.h byte-for-byte. */
+/* The initial fields must match kernel/include/stat.h byte-for-byte. */
 struct stat {
     uint64_t st_dev;
     uint64_t st_ino;
@@ -14,6 +14,7 @@ struct stat {
     uint64_t st_atime;
     uint64_t st_mtime;
     uint64_t st_ctime;
+    uint64_t st_rdev;
 };
 
 #define S_IFMT   0170000

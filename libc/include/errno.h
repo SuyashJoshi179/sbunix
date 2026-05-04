@@ -44,6 +44,12 @@
 #define ENOMSG       42
 #define EILSEQ       84
 #define ENOTSOCK     88
+#define EDESTADDRREQ 89
+#define EMSGSIZE     90
+#define EPROTOTYPE   91
+#define ENOPROTOOPT  92
+#define EPROTONOSUPPORT 93
+#define EAFNOSUPPORT 97
 #define EADDRINUSE   98
 #define ENETDOWN    100
 #define ECONNRESET  104

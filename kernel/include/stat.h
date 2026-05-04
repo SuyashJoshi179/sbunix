@@ -12,6 +12,7 @@ struct stat {
     uint64_t st_atime;
     uint64_t st_mtime;
     uint64_t st_ctime;
+    uint64_t st_rdev;       /* device id for char/block special files */
 };
 
 #define S_IFMT   0170000

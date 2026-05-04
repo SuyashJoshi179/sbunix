@@ -82,6 +82,8 @@ struct pcb {
     sigset_t       sig_pending;     // bitmap of pending signals
     sigset_t       sig_blocked;     // bitmap of blocked signals (never has SIGKILL/SIGSTOP)
     sigset_t       sig_saved_mask;  // mask saved by signal delivery, restored by sigreturn
+    sigset_t       sig_suspend_saved_mask;  // mask to restore when sigsuspend returns (POSIX)
+    uint8_t        sig_suspend_active;      // 1 while inside sigsuspend → restore saved_mask
     struct sigaction sig_handlers[NSIG];
     uint8_t        in_sighandler;   // 1 while a user signal handler is running
     uint8_t        delivering_segv; // guard against recursive SIGSEGV default-kill

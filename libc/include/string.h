@@ -21,9 +21,19 @@ char   *strtok_r(char *s, const char *delim, char **saveptr);
 char   *strdup(const char *s);
 char   *strndup(const char *s, size_t n);
 char   *strerror(int errnum);
+char   *strsignal(int sig);
 
 void   *memset(void *dst, int c, size_t n);
 void   *memcpy(void *dst, const void *src, size_t n);
 void   *memmove(void *dst, const void *src, size_t n);
 int     memcmp(const void *a, const void *b, size_t n);
 void   *memchr(const void *s, int c, size_t n);
+void   *memrchr(const void *s, int c, size_t n);
+void   *mempcpy(void *dst, const void *src, size_t n);
+
+char   *strsep(char **stringp, const char *delim);
+char   *strchrnul(const char *s, int c);
+char   *stpcpy(char *dst, const char *src);
+char   *stpncpy(char *dst, const char *src, size_t n);
+char   *strcasestr(const char *hay, const char *needle);
+int     strverscmp(const char *a, const char *b);
