@@ -220,6 +220,11 @@ static const vp_t g_fns[] = {
     (vp_t)imaxabs, (vp_t)imaxdiv, (vp_t)strtoimax, (vp_t)strtoumax,
     /* time */
     (vp_t)clock_gettime, (vp_t)gettimeofday, (vp_t)nanosleep, (vp_t)time,
+    (vp_t)clock, (vp_t)difftime,
+    (vp_t)gmtime, (vp_t)gmtime_r, (vp_t)localtime, (vp_t)localtime_r,
+    (vp_t)mktime, (vp_t)timegm,
+    (vp_t)asctime, (vp_t)asctime_r, (vp_t)ctime, (vp_t)ctime_r,
+    (vp_t)strftime, (vp_t)tzset,
     /* signal */
     (vp_t)kill, (vp_t)sigaction, (vp_t)signal, (vp_t)sigprocmask,
     (vp_t)raise, (vp_t)pause,
