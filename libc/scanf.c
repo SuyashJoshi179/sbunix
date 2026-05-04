@@ -4,10 +4,11 @@
 #include <string.h>
 #include <ctype.h>
 
-/* scanf family — string and stream sources. Handles %d %i %u %o %x %X %s %c %n
+/* scanf family — string and stream sources. Handles %d %i %u %o %x %X %s %c
  * with optional length modifier (h, hh, l, ll, z) and field width. Supports
- * suppression with '*'. No %f / %e / %g (no float support). No %[ class set
- * (rarely needed by BusyBox).
+ * suppression with '*'. No %f / %e / %g (no float support). No %[ class set.
+ * No %n — a real character counter would need to thread through every
+ * get/unget path; callers that need it should compute offsets themselves.
  *
  * Source abstraction: caller supplies get/unget callbacks plus a cookie.
  * Used for sscanf (string cookie) and fscanf (FILE cookie). */
@@ -53,7 +54,7 @@ static int file_unget(int c, void *cookie) {
 static int skip_ws(struct scan_src *s) {
     int c;
     do { c = s->get(s->cookie); } while (c != EOF && isspace(c));
-    if (c == EOF) return EOF;
+    if (c == EOF) { s->eof_or_err = 1; return EOF; }
     s->unget(c, s->cookie);
     return 0;
 }
@@ -109,7 +110,7 @@ static int parse_int(struct scan_src *s, int base, int width,
         c = s->get(s->cookie);
     }
     if (c != EOF) s->unget(c, s->cookie);
-    if (!saw) return -1;
+    if (!saw) { if (c == EOF) s->eof_or_err = 1; return -1; }
     *out = v;
     return 0;
 }
@@ -127,7 +128,8 @@ static int do_scanf(struct scan_src *s, const char *fmt, va_list ap) {
         if (*p != '%') {
             int c = s->get(s->cookie);
             if (c != *p) {
-                if (c != EOF) s->unget(c, s->cookie);
+                if (c == EOF) s->eof_or_err = 1;
+                else s->unget(c, s->cookie);
                 goto done;
             }
             continue;
@@ -157,14 +159,25 @@ static int do_scanf(struct scan_src *s, const char *fmt, va_list ap) {
             int neg = 0;
             if (parse_int(s, base, width, &v, &neg) < 0) goto done;
             if (neg) v = (unsigned long long)-(long long)v;
+            int is_signed = (*p == 'd' || *p == 'i');
             if (!suppress) {
-                if (*p == 'p') { *va_arg(ap, void **) = (void *)(uintptr_t)v; }
-                else if (len_mod == 5) *va_arg(ap, signed char *) = (signed char)v;
-                else if (len_mod == 1) *va_arg(ap, short *) = (short)v;
-                else if (len_mod == 2) *va_arg(ap, long *) = (long)v;
-                else if (len_mod == 3) *va_arg(ap, long long *) = (long long)v;
-                else if (len_mod == 4) *va_arg(ap, size_t *) = (size_t)v;
-                else *va_arg(ap, int *) = (int)v;
+                if (*p == 'p') {
+                    *va_arg(ap, void **) = (void *)(uintptr_t)v;
+                } else if (is_signed) {
+                    if      (len_mod == 5) *va_arg(ap, signed char *)  = (signed char)v;
+                    else if (len_mod == 1) *va_arg(ap, short *)        = (short)v;
+                    else if (len_mod == 2) *va_arg(ap, long *)         = (long)v;
+                    else if (len_mod == 3) *va_arg(ap, long long *)    = (long long)v;
+                    else if (len_mod == 4) *va_arg(ap, size_t *)       = (size_t)v;  /* %zd – signed view of size_t */
+                    else                   *va_arg(ap, int *)          = (int)v;
+                } else {
+                    if      (len_mod == 5) *va_arg(ap, unsigned char *)      = (unsigned char)v;
+                    else if (len_mod == 1) *va_arg(ap, unsigned short *)     = (unsigned short)v;
+                    else if (len_mod == 2) *va_arg(ap, unsigned long *)      = (unsigned long)v;
+                    else if (len_mod == 3) *va_arg(ap, unsigned long long *) = (unsigned long long)v;
+                    else if (len_mod == 4) *va_arg(ap, size_t *)             = (size_t)v;
+                    else                   *va_arg(ap, unsigned int *)       = (unsigned int)v;
+                }
                 matched++;
             }
             break;
@@ -179,7 +192,7 @@ static int do_scanf(struct scan_src *s, const char *fmt, va_list ap) {
                 if (out) out[n] = (char)c;
                 n++;
             }
-            if (c == EOF && n == 0) goto done;
+            if (c == EOF && n == 0) { s->eof_or_err = 1; goto done; }
             if (c != EOF && (width < 0 || n < width)) s->unget(c, s->cookie);
             if (out) out[n] = 0;
             if (!suppress) matched++;
@@ -191,7 +204,7 @@ static int do_scanf(struct scan_src *s, const char *fmt, va_list ap) {
             for (int i = 0; i < n; i++) {
                 int c = s->get(s->cookie);
                 if (c == EOF) {
-                    if (i == 0) goto done;
+                    if (i == 0) { s->eof_or_err = 1; goto done; }
                     break;
                 }
                 if (out) out[i] = (char)c;
@@ -202,15 +215,16 @@ static int do_scanf(struct scan_src *s, const char *fmt, va_list ap) {
         case '%': {
             int c = s->get(s->cookie);
             if (c != '%') {
-                if (c != EOF) s->unget(c, s->cookie);
+                if (c == EOF) s->eof_or_err = 1;
+                else s->unget(c, s->cookie);
                 goto done;
             }
             break;
         }
-        case 'n':
-            /* No char counter wired — set 0 to satisfy callers that read it. */
-            if (!suppress) *va_arg(ap, int *) = 0;
-            break;
+        /* %n intentionally not implemented: a real char counter would have to
+         * thread through every get/unget path. Fall through to default so a
+         * caller using %n gets a clear "format failure" instead of silent
+         * zeros. */
         default:
             goto done;
         }
