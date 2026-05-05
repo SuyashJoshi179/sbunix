@@ -10,6 +10,105 @@
 
 ---
 
+## Conversation context (carry-over for any agent picking this up)
+
+This plan came out of a discussion comparing `develop` (our work) to `master` (professor's evaluation baseline). Key facts established during that discussion — preserved here so a fresh agent has full context without scrolling chat history.
+
+### Diff that started the discussion
+
+`git diff master..develop -- rootfs/etc/rc`:
+
+```diff
+-#!/bin/sh
++# SBUnix init script
+ echo Running $0
+-mount -t proc proc /proc
+-mount -t disk virtio /mnt
+ exec /bin/sh
+```
+
+Two things on master we lost: `mount -t proc proc /proc` and `mount -t disk virtio /mnt`. Mount target on master is `/mnt`, on develop sbfs is mounted at `/data`.
+
+### Current develop state (verified by recon)
+
+- `kernel/kernel.c` calls `procfs_init()` (which internally `mount_fs("/proc", &proc_root_inode)`) and `mount_fs("/data", sbfs_root)`. Both happen at boot, before any userspace runs.
+- No `mount` syscall: `grep -nE "SYS_mount|sys_mount" kernel/include/syscall.h kernel/syscall.c` returns nothing. Existing syscall numbers reach `SYS_meminfo 111` and signals up to `SYS_setpgid 95`. #83 is free (between `SYS_nanosleep 82` and `SYS_kill 90`).
+- No `bin/mount/` directory. No `mount` userspace binary anywhere.
+- `rootfs/proc/` exists empty. `rootfs/mnt/` does not exist. `rootfs/data/` does not exist (the dir is created at boot by `tarfs_ensure_dir("data")` in `kernel/fs/tarfs.c:343`).
+- 13 files reference `/data` literals: `bin/{pagecache_stress,link_test,rename_test,timestamp_test,sbfs_basic_test,usertests,bigfile_pcache_test,mkdir_test,truncate_mmap_test,pagecache_test,mmap_share_test,header_test}/*.c` and `libc/mntent.c`.
+- Selftest runs **before** init/shell/rc. `kernel/selftest.c` does `namei("/data", ...)` directly. Any change that defers sbfs mounting to userspace will break selftests unless they pre-mount themselves.
+
+### Piazza posts that drove the decision (verbatim)
+
+**Post 1 — "creating dev, proc and mnt subdirectories in rootfs"**
+
+Student: "Can we create the dev, proc and mnt subdirectories in the rootfs directory so that devfs and procfs have somewhere to latch onto so they can be mounted? Since tarfs is supposed to be readonly I assume we aren't supposed to be able to create new inodes for it. Besides when mounting on Linux you usually need to have that directory created anyways. Also for all these filesystems should we automount them on boot? Should we create an fstab file in etc, so that the init process can mount them or leave it for the agent?"
+
+Prof: "yes, you should create proc/ and mnt/ in rootfs/ (you're welcome to create dev/ also, but it's not required). it also contains etc/rc which should mount the filesystems on boot."
+
+**Post 2 — "Disk filesystems"**
+
+Student: "Can we change mkfs or add stuff to the tools directory to set up the disk with a filesystem so that it can be mounted later? For mounting the disk, I saw on an earlier thread that we should allow mounting from user space - is that necessary? If it is, should we implement it similar to Linux? Allow mounting a device on /dev/xyz to a directory?"
+
+Prof: "You should change mkfs to correspond to your own filesystem implementation. Yes, you should support a 'mount' command which mounts on a /mnt directory. You do not need to support a /dev filesystem, specifying the filesystem type (e.g., 'mount -t proc /proc' and 'mount -t disk /mnt') is sufficient."
+
+### Decision taken — Option B (full mount syscall)
+
+Three options were weighed during chat:
+
+- **Option A (rejected):** keep kernel-side auto-mount, change path `/data` → `/mnt`, ship `bin/mount` as a no-op stub that exits 0 so rc doesn't fail.
+- **Option B (chosen):** real `sys_mount(target, fstype)` + real `bin/mount`. rc actually drives mounting. Idempotent so the kernel selftest can pre-attach without conflicting.
+- **Option C (out of scope):** full Linux-style mount with source/dev (e.g. `/dev/vda`). Prof explicitly said source isn't needed; type alone is sufficient. Skipped.
+
+Option B was chosen because Post 2's prof answer is unambiguous that `mount` must be a userspace command that actually mounts. A stubbed `mount` would fake the rc line but not satisfy "support a 'mount' command which mounts on /mnt".
+
+### Tarfs is read-only — why creating the mountpoint dirs is non-trivial
+
+Tarfs is bundled into the kernel ELF as a read-only blob (`build/tarfs.o` from `tar cf build/rootfs.tar -C build/rootfs .`). Files/dirs that are not in the tar at link time cannot be created at runtime. Hence:
+
+- `rootfs/proc/` and `rootfs/mnt/` must exist in the source tree before tarfs is built.
+- `tarfs_ensure_dir("mnt")` in `kernel/fs/tarfs.c` (currently `tarfs_ensure_dir("data")`) creates the in-memory dir even if the tar didn't carry it, but the source-tree dir is still expected by prof and conventional.
+- Tar archives ignore truly empty directories on some configurations, so `.keep` placeholder files are added to guarantee inclusion. Once procfs/sbfs mount on top, the placeholders are shadowed by `mount_child` traversal and never user-visible.
+
+### Selftest interaction (the subtle one)
+
+Selftest runs in kernel context at boot, well before any userspace. It currently does `namei("/data", ...)` for sbfs tests and `namei("/proc/...", ...)` for procfs tests. If we strip kernel auto-mount, those calls return -ENOENT.
+
+Two options were considered:
+
+- **(rejected)** move sbfs/procfs tests out of selftest into userspace tests so they only run after rc has mounted.
+- **(chosen)** selftest calls `procfs_attach()` and `sbfs_attach()` itself before running its tests. rc later calls `mount` again via the syscall; the second call hits idempotency in `mount_fs` and returns 0 silently. Net effect: tests pass, rc behaves as prof expects, no double-mount damage.
+
+The idempotency check has to be byte-wise (`strcmp`-style on `path`) not pointer-equality, because the second call comes from `copyinstr`'d userspace strings whose pointers differ from the kernel literal `"/proc"` used by selftest. The plan's Task 3 implements this correctly.
+
+### Ranges that informed the plan
+
+- `kernel/fs/procfs.c:650-700` — `procfs_init` body. The two lines `mount_fs("/proc", &proc_root_inode); printk(...)` are extracted to a new `procfs_attach`.
+- `kernel/fs/sbfs.c:958-983` — `sbfs_mount` becomes `sbfs_init` + `sbfs_attach`. `sbfs_ready` flag is reused; `sbfs_attach` refuses to attach if init failed (`-ENODEV`).
+- `kernel/fs/vfs.c:26-53` — `mount_fs`. Idempotency loop added at top.
+- `kernel/kernel.c:48,57-69` — boot sequence. `procfs_init()` keeps its name (semantics changed), `sbfs_mount(...)` block replaced with `sbfs_init()` only.
+- `kernel/syscall.c:~1340` — dispatch switch. New `case SYS_mount`.
+- `kernel/include/syscall.h:49` — slot #83 chosen because it sits in the time-block gap and is currently unused.
+
+### What this plan does NOT do (deferred / out-of-scope)
+
+- `umount` syscall. Prof did not ask for it. Mounts in this kernel are permanent for the life of the process.
+- `/dev` filesystem-style mounting. Prof explicitly said not required.
+- Source argument support. `mount -t TYPE SOURCE TARGET` is accepted at the CLI layer (so `mount -t disk virtio /mnt` parses), but `SOURCE` is discarded — `mount(target, fstype)` is the syscall surface.
+- Multiple sbfs instances or multiple disks. One virtio block device, one sbfs.
+- `mkfs` changes. Prof's Post 2 says "change mkfs to correspond to your own filesystem implementation"; ours already does. If grading reveals it doesn't, follow up separately.
+- `fstab`. Student asked, prof did not require — rc invokes `mount` directly.
+
+### Quick verification checklist for reviewer
+
+- [ ] Does the plan keep selftest passing? (Tasks 5 + 3 together: selftest pre-attaches, mount_fs idempotent.)
+- [ ] Does rc still work the way prof wrote it? (Task 9 restores it verbatim; `bin/mount` accepts the 4-arg form.)
+- [ ] Are `/proc/` and `/mnt/` real directories in the tarball? (Task 9 `.keep` files; Task 6 `tarfs_ensure_dir("mnt")`.)
+- [ ] Are all `/data` literals migrated? (Task 10 uses an exact file list verified by `grep -rln '/data' bin/ libc/`.)
+- [ ] Is `SYS_mount` slot #83 actually free? (Confirmed during recon; gap between 82 and 90.)
+
+---
+
 ## Background — Why this change
 
 Professor's master `rootfs/etc/rc` reads:
