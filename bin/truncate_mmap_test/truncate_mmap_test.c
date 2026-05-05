@@ -6,7 +6,7 @@
 #include <sys/wait.h>
 
 int main(void) {
-    const char *path = "/data/trunc_mmap.txt";
+    const char *path = "/mnt/trunc_mmap.txt";
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC);
     if (fd < 0) { printf("truncate_mmap: open failed\n"); return 1; }
     char buf[8192];

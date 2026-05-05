@@ -2,15 +2,15 @@
  * sbfs_basic_test — Phase 5 end-to-end filesystem tests
  *
  * Tests:
- *  1. open O_CREAT | O_WRONLY on /data/hello.txt → succeeds
+ *  1. open O_CREAT | O_WRONLY on /mnt/hello.txt → succeeds
  *  2. write "hello sbfs" → returns 10
  *  3. close → 0
  *  4. open O_RDONLY, read back, compare → "hello sbfs"
  *  5. lseek SEEK_SET 0, read again → same data
- *  6. mkdir /data/subdir → 0
- *  7. create /data/subdir/nested.txt, write, read back
- *  8. unlink /data/hello.txt → 0; re-open → -ENOENT
- *  9. open O_WRONLY|O_CREAT|O_TRUNC on /data/trunc.txt, write "AAAA",
+ *  6. mkdir /mnt/subdir → 0
+ *  7. create /mnt/subdir/nested.txt, write, read back
+ *  8. unlink /mnt/hello.txt → 0; re-open → -ENOENT
+ *  9. open O_WRONLY|O_CREAT|O_TRUNC on /mnt/trunc.txt, write "AAAA",
  *     close; reopen O_TRUNC, write "BB", close; read → "BB" (truncated)
  * 10. write to /etc/rc (tarfs) with O_WRONLY → negative (EROFS)
  */
@@ -31,14 +31,14 @@ int main(void) {
     long n;
 
     /* Pre-clean from any prior run (sbfs persists across reboots). */
-    (void)unlink("/data/subdir/nested.txt");
-    (void)unlink("/data/subdir");
-    (void)unlink("/data/hello.txt");
-    (void)unlink("/data/trunc.txt");
+    (void)unlink("/mnt/subdir/nested.txt");
+    (void)unlink("/mnt/subdir");
+    (void)unlink("/mnt/hello.txt");
+    (void)unlink("/mnt/trunc.txt");
 
     /* ---- 1. Create and write a file ---- */
-    fd = open("/data/hello.txt", O_WRONLY | O_CREAT);
-    chk(fd >= 0, "open O_CREAT /data/hello.txt");
+    fd = open("/mnt/hello.txt", O_WRONLY | O_CREAT);
+    chk(fd >= 0, "open O_CREAT /mnt/hello.txt");
     if (fd >= 0) {
         n = write(fd, "hello sbfs", 10);
         chk(n == 10, "write 10 bytes");
@@ -46,8 +46,8 @@ int main(void) {
     }
 
     /* ---- 2. Read back ---- */
-    fd = open("/data/hello.txt", O_RDONLY);
-    chk(fd >= 0, "open O_RDONLY /data/hello.txt");
+    fd = open("/mnt/hello.txt", O_RDONLY);
+    chk(fd >= 0, "open O_RDONLY /mnt/hello.txt");
     if (fd >= 0) {
         n = read(fd, buf, 10);
         chk(n == 10, "read 10 bytes");
@@ -65,17 +65,17 @@ int main(void) {
     }
 
     /* ---- 4. mkdir ---- */
-    int rc = mkdir("/data/subdir", 0755);
-    chk(rc == 0, "mkdir /data/subdir");
+    int rc = mkdir("/mnt/subdir", 0755);
+    chk(rc == 0, "mkdir /mnt/subdir");
 
     /* ---- 5. File in subdirectory ---- */
-    fd = open("/data/subdir/nested.txt", O_WRONLY | O_CREAT);
-    chk(fd >= 0, "create /data/subdir/nested.txt");
+    fd = open("/mnt/subdir/nested.txt", O_WRONLY | O_CREAT);
+    chk(fd >= 0, "create /mnt/subdir/nested.txt");
     if (fd >= 0) {
         write(fd, "nested", 6);
         close(fd);
     }
-    fd = open("/data/subdir/nested.txt", O_RDONLY);
+    fd = open("/mnt/subdir/nested.txt", O_RDONLY);
     chk(fd >= 0, "open nested.txt for read");
     if (fd >= 0) {
         n = read(fd, buf, 6);
@@ -84,19 +84,19 @@ int main(void) {
     }
 
     /* ---- 6. unlink ---- */
-    rc = unlink("/data/hello.txt");
-    chk(rc == 0, "unlink /data/hello.txt");
-    fd = open("/data/hello.txt", O_RDONLY);
+    rc = unlink("/mnt/hello.txt");
+    chk(rc == 0, "unlink /mnt/hello.txt");
+    fd = open("/mnt/hello.txt", O_RDONLY);
     chk(fd < 0, "open after unlink returns negative (ENOENT)");
     if (fd >= 0) close(fd);
 
     /* ---- 7. O_TRUNC ---- */
-    fd = open("/data/trunc.txt", O_WRONLY | O_CREAT);
+    fd = open("/mnt/trunc.txt", O_WRONLY | O_CREAT);
     if (fd >= 0) { write(fd, "AAAA", 4); close(fd); }
-    fd = open("/data/trunc.txt", O_WRONLY | O_CREAT | O_TRUNC);
+    fd = open("/mnt/trunc.txt", O_WRONLY | O_CREAT | O_TRUNC);
     chk(fd >= 0, "open O_TRUNC");
     if (fd >= 0) { write(fd, "BB", 2); close(fd); }
-    fd = open("/data/trunc.txt", O_RDONLY);
+    fd = open("/mnt/trunc.txt", O_RDONLY);
     if (fd >= 0) {
         n = read(fd, buf, 10);
         chk(n == 2 && buf[0] == 'B' && buf[1] == 'B',

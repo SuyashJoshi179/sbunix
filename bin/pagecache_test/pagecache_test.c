@@ -5,7 +5,7 @@
 #include <sys/mman.h>
 
 int main(void) {
-    const char *path = "/data/pcache.txt";
+    const char *path = "/mnt/pcache.txt";
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC);
     if (fd < 0) { printf("pagecache_test: open failed\n"); return 1; }
 
