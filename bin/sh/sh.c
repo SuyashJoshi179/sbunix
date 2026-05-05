@@ -375,6 +375,27 @@ static void tokenize(void) {
                    && *p != ';' && *p != '&') p++;
             if (*p) { *p = 0; p++; }
             ntokens++;
+
+            int next_type = -1;
+            switch (term) {
+            case '|':  next_type = T_PIPE;        break;
+            case '<':  next_type = T_REDIR_IN;    break;
+            case '>':
+                if (*p == '>') { next_type = T_REDIR_APPEND; p++; }
+                else           { next_type = T_REDIR_OUT; }
+                break;
+            case ';':  next_type = T_SEMI;        break;
+            case '&':
+                if (*p == '&') { next_type = T_AND; p++; }
+                else           { next_type = T_BG; }
+                break;
+            }
+            if (next_type >= 0 && ntokens < MAXTOK - 1) {
+                tokens[ntokens].type   = next_type;
+                tokens[ntokens].val    = 0;
+                tokens[ntokens].quoted = 0;
+                ntokens++;
+            }
         }
     }
     /* Hitting the cap with non-whitespace remaining means we silently
@@ -760,8 +781,9 @@ static int run_line(void) {
         int has_redir = 0;
         for (int i = 1; i < ntokens; i++) {
             if (tokens[i].type == T_REDIR_OUT || tokens[i].type == T_REDIR_APPEND ||
-                tokens[i].type == T_PIPE) {
-                has_redir = 1;
+                tokens[i].type == T_PIPE || tokens[i].type == T_SEMI ||
+                tokens[i].type == T_AND || tokens[i].type == T_BG) {
+                has_redir = 1;   /* compound — fall through to fork+exec path */
                 break;
             }
         }
@@ -820,6 +842,8 @@ static int run_line(void) {
             tokens[i].type = saved;
 
             if (saved == T_END) break;
+            /* T_AND short-circuits on failure ("&&"). T_SEMI and T_BG
+             * always continue regardless of last_status. */
             if (saved == T_AND && last_status != 0) break;
             cmd_start = i + 1;
             if (cmd_start >= ntokens) break;
