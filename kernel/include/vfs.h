@@ -30,7 +30,3 @@ int generic_file_read(struct inode *ip, uint64_t off,
 int generic_file_write(struct inode *ip, uint64_t off,
                        const void *buf, uint64_t n);
 
-struct vma;
-/* Page-fault path for VMA_TYPE_FILE. Returns 0 on success, -1 on failure
- * (caller raises SIGBUS / kills process). */
-int generic_file_fault(struct vma *v, uint64_t fault_va);

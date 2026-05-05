@@ -960,6 +960,11 @@ static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
     len = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     if ((flags & (MAP_PRIVATE | MAP_SHARED)) == 0) return -EINVAL;
     if ((flags & MAP_PRIVATE) && (flags & MAP_SHARED)) return -EINVAL;
+    /* RISC-V reserves W-only PTE encoding; the fault handler installs
+     * PTE_W only alongside PTE_R, so reject mmap requests that would
+     * grant write without read. Aligns the syscall's permission contract
+     * with what user_page_fault will actually program. */
+    if ((prot & VMA_PROT_W) && !(prot & VMA_PROT_R)) return -EINVAL;
 
     struct inode *fip = 0;
     uint64_t      file_off = 0;
@@ -1042,10 +1047,19 @@ static int64_t sys_munmap(uint64_t addr, uint64_t len) {
     if (!v) return -EINVAL;
     if (addr + len > v->end) return -EINVAL;
 
-    if (v->type == VMA_TYPE_FILE && addr <= v->start && addr + len >= v->end) {
+    if (v->type == VMA_TYPE_FILE) {
+        /* Partial unmap of a file VMA is unsafe: uvmunmap_range below
+         * would page_put() pcache slot pages (ref=1 from pcache_init),
+         * dropping their refs to zero and returning them to the page
+         * allocator while pcache still owns the slot. vma_split also
+         * does not propagate file/file_off into a middle-cut right
+         * half, leaving a null-file VMA that would deref on next
+         * fault. Until a range-aware file teardown lands (Phase D),
+         * reject anything that isn't a whole-VMA unmap. */
+        int whole_vma = (addr <= v->start && addr + len >= v->end);
+        if (!whole_vma) return -EINVAL;
         vma_drop_file_pages(p, v);
     }
-    /* Phase D: partial file-VMA munmap is a known limitation. */
     uvmunmap_range(p->pagetable, addr, addr + len);
     vma_split(&p->vma_list, v, addr, addr + len);
     return 0;
@@ -1078,10 +1092,9 @@ static int64_t sys_msync(uint64_t addr, uint64_t len, int flags) {
                 (va - v->start + v->file_off) / PAGE_SIZE;
             struct pcache_page *pp;
             if (pcache_get(v->file, pgidx, &pp) < 0) continue;
-            if (pp->dirty && v->file->ops && v->file->ops->writepage) {
-                extern int sbfs_writepage_locked(struct inode *,
-                                                 uint64_t, const void *);
-                sbfs_writepage_locked(v->file, pgidx, pp->page);
+            if (pp->dirty && v->file->ops &&
+                v->file->ops->writepage_locked) {
+                v->file->ops->writepage_locked(v->file, pgidx, pp->page);
                 pp->dirty = 0;
             }
             pcache_put(pp);

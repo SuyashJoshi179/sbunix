@@ -60,6 +60,7 @@ static inline uint64_t sbfs_now(void) {
 static int  sbfs_op_read(struct inode *, uint64_t, void *, uint64_t);
 static int  sbfs_readpage(struct inode *, uint64_t, void *);
 static int  sbfs_writepage(struct inode *, uint64_t, const void *);
+int         sbfs_writepage_locked(struct inode *, uint64_t, const void *);
 static int  sbfs_op_write(struct inode *, uint64_t, const void *, uint64_t);
 static int  sbfs_op_stat(struct inode *, struct stat *);
 static int  sbfs_op_lookup(struct inode *, const char *, struct inode **);
@@ -91,6 +92,7 @@ static const struct inode_ops sbfs_iops = {
     .rename   = sbfs_op_rename,
     .readpage  = sbfs_readpage,
     .writepage = sbfs_writepage,
+    .writepage_locked = sbfs_writepage_locked,
 };
 
 /* -----------------------------------------------------------------------

@@ -837,7 +837,11 @@ static void test_time_monotonic_basic(void) {
 static void test_pcache_basic(void) {
     printk("[SELFTEST] -- pcache basic --\n");
 
-    struct inode dummy_a = {0}, dummy_b = {0};
+    /* Static so the slot's retained ip pointer doesn't alias a future
+     * stack frame and produce a phantom cache hit in a later test. */
+    static struct inode dummy_a, dummy_b;
+    dummy_a = (struct inode){0};
+    dummy_b = (struct inode){0};
     struct pcache_page *p1, *p2, *p3;
 
     int rc = pcache_get(&dummy_a, 0, &p1);
@@ -860,6 +864,11 @@ static void test_pcache_basic(void) {
 
     st_check(p3 != p1, "pcache_basic: different inode gets different slot");
     pcache_put(p3);
+
+    /* Drop slot tracking for the dummy keys so subsequent tests that
+     * happen to address-alias a real inode don't observe a stale hit. */
+    pcache_flush_inode(&dummy_a);
+    pcache_flush_inode(&dummy_b);
 }
 
 static void test_pcache_evict(void) {

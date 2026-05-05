@@ -74,10 +74,25 @@ static struct pcache_page *pcache_lookup(struct inode *ip, uint64_t pgidx) {
     return 0;
 }
 
+/* Dispatch the transaction-wrapped writeback for a slot. The fs's
+ * writepage_locked op acquires whatever per-filesystem locks (bio cache,
+ * log) are needed; neither is reentrant under our IRQ-off section, so
+ * callers drop the pcache lock around this. Returns 0 on success or a
+ * negative errno; if no op is registered, treat as a clean discard. */
+static int pcache_writeback(struct inode *ip, uint64_t pgidx,
+                            const void *page) {
+    if (!ip || !ip->ops) return 0;
+    if (ip->ops->writepage_locked)
+        return ip->ops->writepage_locked(ip, pgidx, page);
+    if (ip->ops->writepage)
+        return ip->ops->writepage(ip, pgidx, page);
+    return 0;
+}
+
 /* Find a victim slot to reuse. Returns NULL if all pinned/dirty.
  * Caller holds the lock on entry. We may drop and re-acquire it across
- * the writepage call because sbfs_writepage_locked acquires the bio
- * cache lock and the log lock — neither is reentrant under our IRQ-off
+ * the writeback call because the fs's writepage_locked acquires
+ * filesystem-internal locks that are not reentrant under our IRQ-off
  * section. */
 static struct pcache_page *pcache_evict(void) {
     /* First pass: clean unpinned. */
@@ -88,7 +103,8 @@ static struct pcache_page *pcache_evict(void) {
     for (struct pcache_page *p = lru_head.prev; p != &lru_head; p = p->prev) {
         if (p->refcnt != 0) continue;
         if (!p->dirty) continue;
-        if (!p->ip || !p->ip->ops || !p->ip->ops->writepage) {
+        if (!p->ip || !p->ip->ops ||
+            (!p->ip->ops->writepage_locked && !p->ip->ops->writepage)) {
             p->dirty = 0;
             return p;
         }
@@ -97,9 +113,7 @@ static struct pcache_page *pcache_evict(void) {
         /* Pin during flush so a parallel pcache_get can't reuse it. */
         p->refcnt++;
         pcache_unlock();
-        extern int sbfs_writepage_locked(struct inode *, uint64_t,
-                                         const void *);
-        int rc = sbfs_writepage_locked(ip, pgidx, p->page);
+        int rc = pcache_writeback(ip, pgidx, p->page);
         pcache_lock();
         p->refcnt--;
         if (rc == 0) p->dirty = 0;
@@ -207,12 +221,11 @@ int pcache_flush_inode(struct inode *ip) {
         struct pcache_page *p = &slots[i];
         if (p->ip != ip) continue;
         if (p->refcnt > 0) { busy = 1; continue; }
-        if (p->dirty && p->ip->ops && p->ip->ops->writepage) {
-            extern int sbfs_writepage_locked(struct inode *, uint64_t,
-                                             const void *);
+        if (p->dirty && p->ip->ops &&
+            (p->ip->ops->writepage_locked || p->ip->ops->writepage)) {
             p->refcnt++;
             pcache_unlock();
-            sbfs_writepage_locked(p->ip, p->pgidx, p->page);
+            pcache_writeback(p->ip, p->pgidx, p->page);
             pcache_lock();
             p->refcnt--;
             p->dirty = 0;
@@ -228,12 +241,32 @@ int pcache_flush_inode(struct inode *ip) {
 void pcache_invalidate_range(struct inode *ip, uint64_t off, uint64_t len) {
     if (!ip || len == 0) return;
     uint64_t pg_start = off / PCACHE_PGSZ;
-    uint64_t pg_end   = (off + len + PCACHE_PGSZ - 1) / PCACHE_PGSZ;
+    /* Saturating end-of-range arithmetic. Callers like sbfs_op_truncate
+     * pass len = ~0ULL to mean "invalidate to EOF"; the naive
+     * (off + len + PCACHE_PGSZ - 1) wraps and would skip every slot. */
+    uint64_t pg_end = 0;
+    int to_eof = 0;
+    if (len == ~0ULL) {
+        to_eof = 1;
+    } else {
+        uint64_t end = off + len;
+        if (end < off) {
+            to_eof = 1;
+        } else {
+            uint64_t rounded_end = end + PCACHE_PGSZ - 1;
+            if (rounded_end < end) {
+                to_eof = 1;
+            } else {
+                pg_end = rounded_end / PCACHE_PGSZ;
+            }
+        }
+    }
     pcache_lock();
     for (int i = 0; i < PCACHE_NSLOTS; i++) {
         struct pcache_page *p = &slots[i];
         if (p->ip != ip) continue;
-        if (p->pgidx < pg_start || p->pgidx >= pg_end) continue;
+        if (p->pgidx < pg_start) continue;
+        if (!to_eof && p->pgidx >= pg_end) continue;
         if (p->refcnt > 0) {
             /* Mapped page — leave it; bounds check at fault path will
              * surface SIGBUS for past-EOF accesses. Coherence with

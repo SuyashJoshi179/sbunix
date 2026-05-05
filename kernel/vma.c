@@ -1,3 +1,4 @@
+#include <inode.h>
 #include <page_cache.h>
 #include <page_ref.h>
 #include <pmem.h>
@@ -85,6 +86,12 @@ struct vma *vma_list_dup(struct vma *src) {
         }
         *copy = *v;
         copy->next = 0;
+        /* File VMAs hold an inode ref balanced by inode_put in
+         * vma_drop_file_pages. The child needs its own ref so both
+         * parent and child can release independently on teardown. */
+        if (copy->type == VMA_TYPE_FILE && copy->file) {
+            inode_get(copy->file);
+        }
         *pp = copy;
         pp = &copy->next;
     }
@@ -179,7 +186,12 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
                 if (!np) return -1;
                 memmove(np, (void *)phys_to_virt(old_pa), PAGE_SIZE);
                 unsigned long new_pa = virt_to_phys((unsigned long)np);
-                unsigned long perm = PTE_U | PTE_V | PTE_R | PTE_W;
+                /* Derive perms from v->prot so PROT-clearances aren't
+                 * silently widened on upgrade. sys_mmap requires
+                 * VMA_PROT_R whenever VMA_PROT_W is set (RISC-V W-only
+                 * is reserved), so PTE_R will be present here. */
+                unsigned long perm = PTE_U | PTE_V | PTE_W;
+                if (v->prot & VMA_PROT_R) perm |= PTE_R;
                 if (v->prot & VMA_PROT_X) perm |= PTE_X;
                 *pte_existing =
                     phyaddr_to_pte(new_pa) | perm | PTE_LEAF_AD;
@@ -200,7 +212,10 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
                 /* Drop the lookup ref; the long-lived fault-time ref still pins. */
                 pcache_put(pp);
 
-                unsigned long perm = PTE_U | PTE_V | PTE_R | PTE_W;
+                /* Derive perms from v->prot; sys_mmap guarantees
+                 * VMA_PROT_R when VMA_PROT_W is set. */
+                unsigned long perm = PTE_U | PTE_V | PTE_W;
+                if (v->prot & VMA_PROT_R) perm |= PTE_R;
                 if (v->prot & VMA_PROT_X) perm |= PTE_X;
                 unsigned long pa = pte_to_phyaddr(*pte_existing);
                 *pte_existing =
@@ -287,11 +302,9 @@ void vma_drop_file_pages(struct pcb *p, struct vma *v) {
                 /* PTE points at the cache page (T9 RO install or T11
                  * shared-RW upgrade). */
                 if (pp->dirty && (v->flags & VMA_FLAG_SHARED)
-                    && v->file->ops && v->file->ops->writepage) {
-                    extern int sbfs_writepage_locked(struct inode *,
-                                                    uint64_t,
-                                                    const void *);
-                    sbfs_writepage_locked(v->file, pgidx, pp->page);
+                    && v->file->ops && v->file->ops->writepage_locked) {
+                    v->file->ops->writepage_locked(v->file, pgidx,
+                                                   pp->page);
                     pp->dirty = 0;
                 }
                 pcache_put(pp);   /* fault-time ref */
@@ -308,4 +321,32 @@ void vma_drop_file_pages(struct pcb *p, struct vma *v) {
     }
     flush_tlb();
     if (v->file) { inode_put(v->file); v->file = 0; }
+}
+
+/* fork() inherits PTEs via uvmcow_share, which only bumps anon page_get
+ * refs. For VMA_TYPE_FILE PTEs that point at pcache slots, the child
+ * needs its own fault-time pcache ref so parent and child can release
+ * independently. Walk the child's page table for this VMA; for each
+ * inherited PTE that targets a pcache page, bump the slot's refcnt. */
+int vma_dup_file_pages(struct pcb *child, struct vma *v) {
+    if (v->type != VMA_TYPE_FILE || !v->file) return 0;
+    for (uint64_t va = v->start; va < v->end; va += PAGE_SIZE) {
+        pte_t *pte = get_pte(child->pagetable, va, 0);
+        if (!pte || !(*pte & PTE_V)) continue;
+        unsigned long pa = pte_to_phyaddr(*pte);
+        uint64_t pgidx = (va - v->start + v->file_off) / PAGE_SIZE;
+        struct pcache_page *pp;
+        if (pcache_get(v->file, pgidx, &pp) < 0) return -1;
+        unsigned long pcache_pa = virt_to_phys((unsigned long)pp->page);
+        if (pcache_pa == pa) {
+            /* The pcache_get bump itself becomes the child's fault-time
+             * ref. Don't release it here. */
+        } else {
+            /* PTE points at a CoW anon page (write already taken in
+             * parent before fork). uvmcow_share already bumped the anon
+             * page_ref. Release the lookup ref we just acquired. */
+            pcache_put(pp);
+        }
+    }
+    return 0;
 }

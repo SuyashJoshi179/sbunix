@@ -312,6 +312,15 @@ int proc_fork_current(void) {
         proc_destroy(child);
         return -ENOMEM;
     }
+    /* Bump pcache refs for file-backed PTEs inherited via uvmcow_share so
+     * the child holds its own fault-time refs (uvmcow_share only bumps
+     * anon page_ref, not pcache slot refcnts). */
+    for (struct vma *v = child->vma_list; v; v = v->next) {
+        if (v->type == VMA_TYPE_FILE && vma_dup_file_pages(child, v) < 0) {
+            proc_destroy(child);
+            return -ENOMEM;
+        }
+    }
     child->heap_vma = 0;
     for (struct vma *v = child->vma_list; v; v = v->next) {
         if (v->type == VMA_TYPE_HEAP) {

@@ -47,6 +47,14 @@ struct inode_ops {
      * pgidx*PCACHE_PGSZ. Only bytes within current size persisted.
      * NULL = read-only fs. Caller wraps begin_op for sbfs. */
     int (*writepage)(struct inode *, uint64_t pgidx, const void *page);
+
+    /* Same semantics as writepage, but the filesystem wraps the call in
+     * its own transaction (e.g. begin_op/end_op for sbfs). The page
+     * cache and mmap teardown paths invoke this when they cannot hold
+     * a higher-level lock spanning the writeback. NULL means the fs
+     * does not require transaction wrapping (writepage is sufficient). */
+    int (*writepage_locked)(struct inode *, uint64_t pgidx,
+                            const void *page);
 };
 
 #define I_REG  1
