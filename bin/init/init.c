@@ -14,6 +14,28 @@ int main(void) {
     int shell_pgid = getpgrp();
     ioctl(0, 0x5410 /* TIOCSPGRP */, &shell_pgid);
 
+    /* Run /etc/rc once at boot — prof's rc invokes `mount -t proc … /proc`
+     * and `mount -t disk … /mnt`. Selftest already pre-attached both, so
+     * these calls hit mount_fs idempotency and return 0. Failures are
+     * non-fatal: tests below still run. */
+    {
+        int rc_pid = fork();
+        if (rc_pid == 0) {
+            char *args[] = {"/bin/sh", "/etc/rc", 0};
+            execv("/bin/sh", args);
+            printf("init: exec /bin/sh /etc/rc failed\n");
+            exit(1);
+        }
+        if (rc_pid > 0) {
+            int rc_st;
+            while (1) {
+                int got = wait(&rc_st);
+                if (got == rc_pid) break;
+                if (got < 0 && errno != EINTR) break;
+            }
+        }
+    }
+
     char *tests[] = {
         /* libc surface tests — kept first so a libc regression fails
          * fast, before any of the longer-running kernel tests. */

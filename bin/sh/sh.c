@@ -731,7 +731,53 @@ static int run_line(void) {
     return WEXITSTATUS(last_status);
 }
 
+/* Run a /etc/rc-style script: read once, iterate lines, tokenize and
+ * run each. Comments (# ...) and shebang lines are skipped. The POSIX
+ * `exec` builtin is not implemented; lines starting with `exec ` are
+ * treated as no-ops so a trailing `exec /bin/sh` ends the script
+ * cleanly and lets init re-spawn an interactive shell on its own. */
+static int run_script(const char *path) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        printf("sh: cannot open '%s'\n", path);
+        return 1;
+    }
+    static char buf[4096];
+    long n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n < 0) return 1;
+    buf[n] = 0;
+
+    int last = 0;
+    char *p = buf;
+    while (*p) {
+        char *eol = p;
+        while (*eol && *eol != '\n') eol++;
+        char saved = *eol;
+        *eol = 0;
+        char *q = p;
+        while (*q == ' ' || *q == '\t') q++;
+        int is_exec = q[0]=='e' && q[1]=='x' && q[2]=='e' && q[3]=='c' &&
+                      (q[4]==' ' || q[4]=='\t' || q[4]==0);
+        if (*q && *q != '#' && !is_exec) {
+            size_t len = strlen(q);
+            if (len >= sizeof(linebuf)) len = sizeof(linebuf) - 1;
+            memcpy(linebuf, q, len);
+            linebuf[len] = 0;
+            tokenize();
+            expand_globs();
+            last = run_line();
+        }
+        if (!saved) break;
+        p = eol + 1;
+    }
+    return last;
+}
+
 int main(int argc, char **argv) {
+    if (argc == 2 && argv[1][0] != '-') {
+        return run_script(argv[1]) & 0xff;
+    }
     if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
         size_t n = strlen(argv[2]);
         if (n >= sizeof(linebuf)) n = sizeof(linebuf) - 1;
