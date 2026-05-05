@@ -731,11 +731,36 @@ static int run_line(void) {
     return WEXITSTATUS(last_status);
 }
 
+/* Substitute `$0` in `src` with `arg0`, writing into `dst` (capacity
+ * `cap`, including NUL). Returns 0 on success, -1 if the result would
+ * not fit. Only `$0` is recognised (no `$1`..`$9`, no `${var}`); that
+ * matches what /etc/rc actually uses today. */
+static int subst_dollar0(char *dst, size_t cap, const char *src,
+                         const char *arg0) {
+    size_t alen = strlen(arg0);
+    size_t di = 0;
+    for (size_t si = 0; src[si]; si++) {
+        if (src[si] == '$' && src[si + 1] == '0') {
+            if (di + alen >= cap) return -1;
+            memcpy(dst + di, arg0, alen);
+            di += alen;
+            si++;  /* skip the '0' */
+            continue;
+        }
+        if (di + 1 >= cap) return -1;
+        dst[di++] = src[si];
+    }
+    dst[di] = 0;
+    return 0;
+}
+
 /* Run a /etc/rc-style script: read once, iterate lines, tokenize and
  * run each. Comments (# ...) and shebang lines are skipped. The POSIX
  * `exec` builtin is not implemented; lines starting with `exec ` are
  * treated as no-ops so a trailing `exec /bin/sh` ends the script
- * cleanly and lets init re-spawn an interactive shell on its own. */
+ * cleanly and lets init re-spawn an interactive shell on its own.
+ * `$0` in script lines expands to the script path so that the
+ * conventional `echo Running $0` produces the expected output. */
 static int run_script(const char *path) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
@@ -760,10 +785,12 @@ static int run_script(const char *path) {
         int is_exec = q[0]=='e' && q[1]=='x' && q[2]=='e' && q[3]=='c' &&
                       (q[4]==' ' || q[4]=='\t' || q[4]==0);
         if (*q && *q != '#' && !is_exec) {
-            size_t len = strlen(q);
-            if (len >= sizeof(linebuf)) len = sizeof(linebuf) - 1;
-            memcpy(linebuf, q, len);
-            linebuf[len] = 0;
+            if (subst_dollar0(linebuf, sizeof(linebuf), q, path) < 0) {
+                size_t len = strlen(q);
+                if (len >= sizeof(linebuf)) len = sizeof(linebuf) - 1;
+                memcpy(linebuf, q, len);
+                linebuf[len] = 0;
+            }
             tokenize();
             expand_globs();
             last = run_line();
