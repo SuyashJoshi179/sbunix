@@ -12,7 +12,8 @@ Give SBUnix just enough of the POSIX process model to make our own shell feel re
 
 - **Ctrl-C kills the foreground child; the shell survives.**
 - `sleep 2 && echo done` works end-to-end under `/bin/sh`.
-- `date` (a tiny new user binary) prints uptime.
+- `date` (a tiny new user binary) prints the wall-clock date/time
+  read from the Goldfish RTC.
 - User programs can install handlers (`sigaction`), block signals (`sigprocmask`), and send signals to other processes (`kill`).
 - `clock_gettime`, `gettimeofday`, `nanosleep` exist and are tick-accurate.
 - Processes running with a termios that has `ECHO` off don't echo input; with `ICANON` off, reads return per-byte.
@@ -149,7 +150,7 @@ struct timeval  { int64_t tv_sec; int64_t tv_usec; };
 #define CLOCK_MONOTONIC 1
 ```
 
-Both clocks are currently aliased: `tv_sec = ticks/100`, `tv_nsec = (ticks % 100) * 10_000_000`. `CLOCK_REALTIME` starts from epoch 0 — document the deviation.
+`CLOCK_MONOTONIC` is tick-based: `tv_sec = ticks/100`, `tv_nsec = (ticks % 100) * 10_000_000`. `CLOCK_REALTIME` and `gettimeofday` read nanoseconds since the Unix epoch from the Goldfish RTC (`drivers/rtc.c`, `rtc_read_ns`) and split into `tv_sec`/`tv_nsec` (or `tv_sec`/`tv_usec`). The two clocks are no longer aliased.
 
 ### 3.6 Termios
 
@@ -716,7 +717,7 @@ This section complements the top-level roadmap gotchas — phase-specific traps 
 
 23. **`ONLCR` on output.** Currently `write_char` sends bytes raw. With `ONLCR` (default), `\n` written to console should emit `\r\n`. Implement in `console_write` (devfs) or leave as-is and document. Leave as-is for now — tools like less that want pure raw output shouldn't see our `\r\n` either; our shell already writes `\r\n` explicitly when it needs to.
 
-24. **Clock_gettime(CLOCK_REALTIME) starts at 0.** Any user program that does `if (time(NULL) > ONE_DAY_AGO) …` will be confused. MicroPython's `time.time()` reports tiny values. Document and move on.
+24. **`CLOCK_REALTIME` source.** Backed by the Goldfish RTC, so `time(NULL)` returns true wall-clock seconds since 1970-01-01 UTC. `CLOCK_MONOTONIC` stays tick-based. Earlier drafts of this doc had REALTIME aliased to MONOTONIC starting at epoch 0; that aliasing has been removed.
 
 25. **`ticks * 10ms` overflow.** At 10 ms/tick, a 64-bit tick counter overflows in ~5.8 billion years. `tv_sec = ticks/100` is fine for any realistic uptime. No worry.
 
@@ -752,7 +753,7 @@ This section complements the top-level roadmap gotchas — phase-specific traps 
 
 - [ ] All new kernel selftests pass (signal defaults, termios defaults, time monotonic).
 - [ ] `bin/time_test` passes: monotonic clock, nanosleep timing, bounds checking.
-- [ ] `bin/date` prints uptime.
+- [ ] `bin/date` prints wall-clock date/time read from the Goldfish RTC.
 - [ ] `bin/signal_test` passes: kill, sigaction, sigprocmask, SIGKILL uncatchable, nested signals.
 - [ ] `bin/sigchld_test` passes: parent gets SIGCHLD on child exit.
 - [ ] `bin/sigpipe_test` passes: default-kill and caught cases.

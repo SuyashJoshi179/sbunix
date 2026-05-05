@@ -506,9 +506,11 @@ agreed BusyBox is aspirational.
   `SIGKILL`. Syscalls: `kill`, `sigaction`, `sigprocmask`,
   `sigreturn`. Signal trampoline in libc. **No real-time signals,
   no `sigtimedwait`, no job control.**
-- **Time:** `clock_gettime(CLOCK_MONOTONIC | CLOCK_REALTIME)` (REALTIME
-  = MONOTONIC + epoch 0), `gettimeofday`, `nanosleep`. All backed by
-  our existing tick counter.
+- **Time:** `clock_gettime(CLOCK_MONOTONIC | CLOCK_REALTIME)`,
+  `gettimeofday`, `nanosleep`. `CLOCK_MONOTONIC` is backed by the tick
+  counter (uptime); `CLOCK_REALTIME` and `gettimeofday` are wall-clock,
+  read directly from the Goldfish RTC (`drivers/rtc.c`,
+  `rtc_read_ns`), so user space sees real Unix-epoch timestamps.
 - **Termios (minimal):** a single termios struct on `/dev/console`.
   `TCGETS`/`TCSETS` ioctls. Line discipline honors `ICANON`, `ECHO`,
   `ISIG` (the last one makes Ctrl-C actually raise `SIGINT`).
@@ -519,7 +521,8 @@ agreed BusyBox is aspirational.
 
 Exit: Ctrl-C kills the foreground child of our shell and the shell
 survives. `sleep 2 &&  echo done` works via our `sh`. `date` (a tiny
-user binary we write) prints the uptime.
+user binary we write) prints the wall-clock date/time read from the
+Goldfish RTC.
 
 ### Gotchas
 
@@ -546,9 +549,11 @@ user binary we write) prints the uptime.
   "foreground" because the shell set it via an ioctl or the console
   tracks "last forked child of init-of-shell-tree." Document the
   cheat.
-- **`clock_gettime(CLOCK_REALTIME)` with epoch = 0** will confuse
-  anything that expects post-1970 timestamps. Fine for our shell;
-  note it for MicroPython tests.
+- **Wall-clock source.** `CLOCK_REALTIME` and `gettimeofday` read
+  the Goldfish RTC at `0x101000` on every call (no caching, no
+  monotonicity guarantee against host clock changes). `CLOCK_MONOTONIC`
+  stays tick-based. Earlier drafts had REALTIME aliased to MONOTONIC
+  with epoch 0; that's been removed.
 
 ---
 
