@@ -17,7 +17,7 @@
 #define MAXARG  64
 
 // Token types
-enum { T_WORD, T_PIPE, T_REDIR_IN, T_REDIR_OUT, T_REDIR_APPEND, T_AND, T_BG, T_END };
+enum { T_WORD, T_PIPE, T_REDIR_IN, T_REDIR_OUT, T_REDIR_APPEND, T_AND, T_BG, T_SEMI, T_END };
 
 struct token {
     int  type;
@@ -308,6 +308,10 @@ static void tokenize(void) {
             tokens[ntokens].type = T_BG;
             tokens[ntokens].val = 0;
             ntokens++; p++;
+        } else if (*p == ';') {
+            tokens[ntokens].type = T_SEMI;
+            tokens[ntokens].val = 0;
+            ntokens++; p++;
         } else if (*p == '<') {
             tokens[ntokens].type = T_REDIR_IN;
             tokens[ntokens].val = 0;
@@ -334,9 +338,39 @@ static void tokenize(void) {
             tokens[ntokens].type = T_WORD;
             tokens[ntokens].quoted = 0;
             tokens[ntokens].val = p;
-            while (*p && !is_space(*p) && *p != '|' && *p != '<' && *p != '>') p++;
-            if (*p) { *p = 0; p++; }
+            while (*p && !is_space(*p) &&
+                   *p != '|' && *p != '<' && *p != '>' &&
+                   *p != ';' && *p != '&')
+                p++;
+            /* The word string and the input buffer share storage, so
+             * NUL-terminating the word overwrites the stopping char.
+             * If that char was structural (not whitespace) we re-emit
+             * it as the next token here, since the outer loop won't
+             * see it anymore. */
+            char term = *p;
+            if (term) { *p = 0; p++; }
             ntokens++;
+
+            int next_type = -1;
+            switch (term) {
+            case '|':  next_type = T_PIPE;        break;
+            case '<':  next_type = T_REDIR_IN;    break;
+            case '>':
+                if (*p == '>') { next_type = T_REDIR_APPEND; p++; }
+                else           { next_type = T_REDIR_OUT; }
+                break;
+            case ';':  next_type = T_SEMI;        break;
+            case '&':
+                if (*p == '&') { next_type = T_AND; p++; }
+                else           { next_type = T_BG; }
+                break;
+            }
+            if (next_type >= 0 && ntokens < MAXTOK - 1) {
+                tokens[ntokens].type   = next_type;
+                tokens[ntokens].val    = 0;
+                tokens[ntokens].quoted = 0;
+                ntokens++;
+            }
         }
     }
     tokens[ntokens].type = T_END;
@@ -353,7 +387,8 @@ static int parse_cmd(int start, char **argv, int *argc_out,
 
     int i = start;
     while (i < ntokens && tokens[i].type != T_PIPE && tokens[i].type != T_END &&
-           tokens[i].type != T_BG && tokens[i].type != T_AND) {
+           tokens[i].type != T_BG && tokens[i].type != T_AND &&
+           tokens[i].type != T_SEMI) {
         if (tokens[i].type == T_REDIR_IN) {
             i++;
             if (i < ntokens && tokens[i].type == T_WORD)
@@ -663,8 +698,9 @@ static int run_line(void) {
         int has_redir = 0;
         for (int i = 1; i < ntokens; i++) {
             if (tokens[i].type == T_REDIR_OUT || tokens[i].type == T_REDIR_APPEND ||
-                tokens[i].type == T_PIPE) {
-                has_redir = 1;
+                tokens[i].type == T_PIPE || tokens[i].type == T_SEMI ||
+                tokens[i].type == T_AND || tokens[i].type == T_BG) {
+                has_redir = 1;   /* compound — fall through to fork+exec path */
                 break;
             }
         }
@@ -715,7 +751,7 @@ static int run_line(void) {
     int last_status = 0;
     for (int i = 0;; i++) {
         if (tokens[i].type == T_AND || tokens[i].type == T_END ||
-            tokens[i].type == T_BG) {
+            tokens[i].type == T_BG  || tokens[i].type == T_SEMI) {
             int saved = tokens[i].type;
             int bg = (saved == T_BG);
             tokens[i].type = T_END;
@@ -723,6 +759,8 @@ static int run_line(void) {
             tokens[i].type = saved;
 
             if (saved == T_END) break;
+            /* T_AND short-circuits on failure ("&&"). T_SEMI and T_BG
+             * always continue regardless of last_status. */
             if (saved == T_AND && last_status != 0) break;
             cmd_start = i + 1;
             if (cmd_start >= ntokens) break;
