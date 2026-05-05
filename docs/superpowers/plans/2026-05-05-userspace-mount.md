@@ -27,7 +27,7 @@
 | Task 7: SYS_mount syscall | pending | — |
 | Task 8: bin/mount userspace binary | pending | — |
 | Task 9: rootfs dirs + restore etc/rc | pending | — |
-| Task 10: rename /data→/mnt across 13 user files | pending | — |
+| Task 10: rename /data→/mnt across 13 user files | done | `cca06ef` tests+libc: rename /data to /mnt to match new mountpoint |
 | Task 11: end-to-end QEMU verify | pending | — |
 
 ### Notable deviations from the plan as written
