@@ -110,6 +110,10 @@ int chdir(const char *path) {
     return (int)syscall_ret(ecall1(19, (long)path));
 }
 
+int mount(const char *target, const char *fstype) {
+    return (int)syscall_ret(ecall2(83, (long)target, (long)fstype));
+}
+
 /* POSIX getcwd: returns buf on success, NULL on error.
  * glibc extension: buf == NULL → allocate. With size==0 use PATH_MAX.
  * BusyBox ash relies on this extension (`getcwd(NULL, 0)`). */

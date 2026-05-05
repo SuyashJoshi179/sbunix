@@ -54,20 +54,11 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
     pci_init();
     virtio_disk_init();
 
-    // Mount sbfs at /data.
-    struct inode *sbfs_root = sbfs_mount();
-    if (sbfs_root) {
-        int rc = mount_fs("/data", sbfs_root);
-        if (rc < 0) {
-            printk("kernel: mount /data failed (%d)\n", rc);
-            inode_put(sbfs_root);   /* mount failed; release our ref */
-        } else {
-            printk("kernel: /data mounted (sbfs v1)\n");
-            /* mount_child holds the ref — do NOT inode_put here */
-        }
-    } else {
-        printk("kernel: sbfs_mount failed — /data unavailable\n");
-    }
+    // Initialise sbfs in-memory state and replay the log. Attach is
+    // deferred to userspace `mount -t disk … /mnt` (and to selftest's
+    // internal pre-attach for kernel-side tests).
+    if (sbfs_init() < 0)
+        printk("kernel: sbfs_init failed — /mnt unavailable\n");
 
     trap_init();
     timer_init();

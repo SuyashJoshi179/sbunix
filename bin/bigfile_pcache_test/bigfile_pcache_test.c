@@ -3,7 +3,7 @@
 #include <fcntl.h>
 
 int main(void) {
-    const char *path = "/data/bigfile.bin";
+    const char *path = "/mnt/bigfile.bin";
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC);
     if (fd < 0) { printf("bigfile: open failed\n"); return 1; }
     /* Cache pool = 256 KB. Use 512 KB to force eviction. */

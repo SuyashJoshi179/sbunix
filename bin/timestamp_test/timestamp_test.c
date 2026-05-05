@@ -38,18 +38,18 @@ static void try_unlink(const char *p) { (void)unlink(p); }
 
 int main(void) {
     /* Pre-clean from any prior run. */
-    try_unlink("/data/ts_a");
-    try_unlink("/data/ts_b");
-    try_unlink("/data/ts_renamed");
-    try_unlink("/data/ts_dir");
+    try_unlink("/mnt/ts_a");
+    try_unlink("/mnt/ts_b");
+    try_unlink("/mnt/ts_renamed");
+    try_unlink("/mnt/ts_dir");
 
     /* ---- 1. Newly created file has a non-zero, recent mtime ---- */
-    int fd = open("/data/ts_a", O_WRONLY | O_CREAT);
-    chk(fd >= 0, "create /data/ts_a");
+    int fd = open("/mnt/ts_a", O_WRONLY | O_CREAT);
+    chk(fd >= 0, "create /mnt/ts_a");
     if (fd >= 0) close(fd);
 
     struct stat st1;
-    chk(stat("/data/ts_a", &st1) == 0, "stat /data/ts_a");
+    chk(stat("/mnt/ts_a", &st1) == 0, "stat /mnt/ts_a");
     chk(st1.st_mtime > 0, "mtime is non-zero (RTC sourced, not stale 0)");
     chk(st1.st_mtime > EPOCH_FLOOR,
         "mtime is post-2020 epoch (RTC returns real wall-clock)");
@@ -60,72 +60,72 @@ int main(void) {
 
     /* ---- 3. Write advances mtime ---- */
     sleep_ms(1100);
-    fd = open("/data/ts_a", O_WRONLY);
+    fd = open("/mnt/ts_a", O_WRONLY);
     if (fd >= 0) { write(fd, "data", 4); close(fd); }
 
     struct stat st2;
-    stat("/data/ts_a", &st2);
+    stat("/mnt/ts_a", &st2);
     chk(st2.st_mtime > st1.st_mtime, "mtime advanced after write");
 
     /* ---- 4. Truncate (O_TRUNC re-open) advances mtime ---- */
     sleep_ms(1100);
-    fd = open("/data/ts_a", O_WRONLY | O_TRUNC);
+    fd = open("/mnt/ts_a", O_WRONLY | O_TRUNC);
     if (fd >= 0) close(fd);
 
     struct stat st3;
-    stat("/data/ts_a", &st3);
+    stat("/mnt/ts_a", &st3);
     chk(st3.st_mtime > st2.st_mtime, "mtime advanced after truncate");
 
     /* ---- 5. Hard link bumps target's mtime (nlink change) ---- */
     sleep_ms(1100);
-    int rc = link("/data/ts_a", "/data/ts_b");
+    int rc = link("/mnt/ts_a", "/mnt/ts_b");
     chk(rc == 0, "link ts_a -> ts_b");
 
     struct stat st4;
-    stat("/data/ts_a", &st4);
+    stat("/mnt/ts_a", &st4);
     chk(st4.st_mtime > st3.st_mtime,
         "target mtime advanced after link (metadata change)");
 
     /* Both names share the inode → both names see the bumped mtime. */
     struct stat st4b;
-    stat("/data/ts_b", &st4b);
+    stat("/mnt/ts_b", &st4b);
     chk(st4b.st_mtime == st4.st_mtime,
         "linked alias sees same mtime (shared inode)");
 
     /* ---- 6. mkdir advances parent dir's mtime ---- */
     struct stat dir1;
-    chk(stat("/data", &dir1) == 0, "stat /data");
+    chk(stat("/mnt", &dir1) == 0, "stat /mnt");
     sleep_ms(1100);
-    rc = mkdir("/data/ts_dir", 0755);
-    chk(rc == 0, "mkdir /data/ts_dir");
+    rc = mkdir("/mnt/ts_dir", 0755);
+    chk(rc == 0, "mkdir /mnt/ts_dir");
 
     struct stat dir2;
-    stat("/data", &dir2);
+    stat("/mnt", &dir2);
     chk(dir2.st_mtime > dir1.st_mtime,
-        "/data mtime advanced after mkdir adds child");
+        "/mnt mtime advanced after mkdir adds child");
 
     /* ---- 7. rename advances source-dir mtime ---- */
     struct stat dir3;
-    stat("/data", &dir3);
+    stat("/mnt", &dir3);
     sleep_ms(1100);
-    rc = rename("/data/ts_a", "/data/ts_renamed");
+    rc = rename("/mnt/ts_a", "/mnt/ts_renamed");
     chk(rc == 0, "rename ts_a -> ts_renamed");
 
     struct stat dir4;
-    stat("/data", &dir4);
+    stat("/mnt", &dir4);
     chk(dir4.st_mtime > dir3.st_mtime,
-        "/data mtime advanced after rename (dirent rewrite)");
+        "/mnt mtime advanced after rename (dirent rewrite)");
 
     /* The renamed file's own mtime should not regress. */
     struct stat st_ren;
-    chk(stat("/data/ts_renamed", &st_ren) == 0, "stat /data/ts_renamed");
+    chk(stat("/mnt/ts_renamed", &st_ren) == 0, "stat /mnt/ts_renamed");
     chk(st_ren.st_mtime >= st4.st_mtime,
         "renamed file's own mtime preserved (not zeroed)");
 
     /* Final cleanup. */
-    try_unlink("/data/ts_b");
-    try_unlink("/data/ts_renamed");
-    try_unlink("/data/ts_dir");
+    try_unlink("/mnt/ts_b");
+    try_unlink("/mnt/ts_renamed");
+    try_unlink("/mnt/ts_dir");
 
     if (fail == 0) printf("timestamp_test: PASS (%d tests)\n", pass);
     else           printf("timestamp_test: FAIL (%d/%d failed)\n", fail, pass + fail);

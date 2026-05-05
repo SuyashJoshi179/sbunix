@@ -54,7 +54,7 @@ int main(void) {
     fputs("header_test: fputs ok\n", stdout);
 
     /* file I/O: log-and-replay scenario */
-    const char *path = "/data/htest.txt";
+    const char *path = "/mnt/htest.txt";
 
     FILE *fw = fopen(path, "w");
     CHECK(fw != NULL);
@@ -137,12 +137,12 @@ int main(void) {
     CHECK(fr == NULL);
 
     /* fopen on nonexistent path returns NULL */
-    CHECK(fopen("/data/does_not_exist_xyz", "r") == NULL);
+    CHECK(fopen("/mnt/does_not_exist_xyz", "r") == NULL);
 
     /* rename: write src, rename to dst, verify old gone + dst content intact */
     {
-        const char *src = "/data/ren_a.txt";
-        const char *dst = "/data/ren_b.txt";
+        const char *src = "/mnt/ren_a.txt";
+        const char *dst = "/mnt/ren_b.txt";
         FILE *fp = fopen(src, "w");
         CHECK(fp != NULL);
         if (fp) { fputs("renamed payload\n", fp); fclose(fp); }
@@ -172,14 +172,14 @@ int main(void) {
         }
 
         /* rename of nonexistent source fails (libc returns -errno) */
-        CHECK(rename("/data/no_such.x", dst) < 0);
+        CHECK(rename("/mnt/no_such.x", dst) < 0);
 
         remove(dst);
     }
 
     /* qsort/bsearch real-world: write numbers to file, read back, sort, search */
     {
-        const char *npath = "/data/nums.txt";
+        const char *npath = "/mnt/nums.txt";
         FILE *fp = fopen(npath, "w");
         CHECK(fp != NULL);
         if (fp) {

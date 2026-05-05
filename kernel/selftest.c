@@ -10,6 +10,7 @@
 #include <pmem.h>
 #include <printk.h>
 #include <proc.h>
+#include <procfs.h>
 #include <sbfs.h>
 #include <selftest.h>
 #include <signal.h>
@@ -482,22 +483,22 @@ static void test_bio_basic(void) {
 }
 
 static void test_sbfs_namei(void) {
-    printk("[SELFTEST] -- sbfs namei /data --\n");
+    printk("[SELFTEST] -- sbfs namei /mnt --\n");
 
     struct inode *ip = 0;
-    int rc = namei("/data", &ip);
-    st_check(rc == 0,        "namei '/data' returns 0");
-    st_check(ip != 0,        "namei '/data' non-null");
+    int rc = namei("/mnt", &ip);
+    st_check(rc == 0,        "namei '/mnt' returns 0");
+    st_check(ip != 0,        "namei '/mnt' non-null");
     if (ip) {
-        st_check(ip->type == I_DIR, "namei '/data' is I_DIR");
+        st_check(ip->type == I_DIR, "namei '/mnt' is I_DIR");
         inode_put(ip); ip = 0;
     }
 
-    // /data itself must be writable (sbfs ops have write != NULL)
-    rc = namei("/data", &ip);
+    // /mnt itself must be writable (sbfs ops have write != NULL)
+    rc = namei("/mnt", &ip);
     if (ip) {
         st_check(ip->ops != 0 && ip->ops->write != 0,
-                 "sbfs: /data inode has write op (not EROFS)");
+                 "sbfs: /mnt inode has write op (not EROFS)");
         inode_put(ip);
     }
 }
@@ -507,8 +508,8 @@ static void test_sbfs_rw(void) {
 
     // Open the root data inode and do a simple directory listing
     struct inode *root = 0;
-    if (namei("/data", &root) < 0 || !root) {
-        st_check(0, "sbfs_rw: /data not available");
+    if (namei("/mnt", &root) < 0 || !root) {
+        st_check(0, "sbfs_rw: /mnt not available");
         return;
     }
 
@@ -919,6 +920,14 @@ void selftest_run(void) {
     printk("========================================\n");
     printk("[SELFTEST] Kernel self-tests starting\n");
     printk("========================================\n");
+
+    /* Pre-attach procfs and sbfs so kernel-side tests can resolve
+     * paths under /proc and /mnt. Userspace `mount` calls in /etc/rc
+     * later hit mount_fs idempotency and return 0. */
+    if (procfs_attach("/proc") < 0)
+        printk("[SELFTEST] WARN: procfs_attach('/proc') failed\n");
+    if (sbfs_attach("/mnt") < 0)
+        printk("[SELFTEST] WARN: sbfs_attach('/mnt') failed\n");
 
     test_tarfs();
     test_alloc_free_proc();

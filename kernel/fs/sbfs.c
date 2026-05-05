@@ -955,9 +955,10 @@ static int sbfs_op_rename(struct inode *old_p, const char *old_name,
 }
 
 /* -----------------------------------------------------------------------
- * sbfs_mount — read superblock, init, recover, return root inode
+ * sbfs_init — read superblock, replay log. Does NOT register a mount.
+ * Use sbfs_attach(target) after init to make sbfs visible at a path.
  * ----------------------------------------------------------------------- */
-struct inode *sbfs_mount(void) {
+int sbfs_init(void) {
     /* Read superblock. */
     struct buf *bp = bread(1);   /* block 1 = superblock */
     memcpy(&sb, bp->data, sizeof(sb));
@@ -965,10 +966,10 @@ struct inode *sbfs_mount(void) {
 
     if (sb.magic != SBFS_MAGIC) {
         printk("sbfs: bad magic 0x%x (want 0x%x)\n", sb.magic, SBFS_MAGIC);
-        return 0;
+        return -EINVAL;
     }
 
-    printk("sbfs: mounted (size=%u nblocks=%u ninodes=%u logstart=%u)\n",
+    printk("sbfs: superblock ok (size=%u nblocks=%u ninodes=%u logstart=%u)\n",
            sb.size, sb.nblocks, sb.ninodes, sb.logstart);
 
     /* Initialise log and replay any crashed transaction. */
@@ -976,7 +977,20 @@ struct inode *sbfs_mount(void) {
     recover_from_log();
 
     sbfs_ready = 1;
+    return 0;
+}
 
-    /* Return the root inode. */
-    return sbfs_iget(SBFS_ROOTINUM);
+/* Register sbfs root at `target`. Must be called after sbfs_init().
+ * Idempotent via mount_fs same-root detection (Task 3). */
+int sbfs_attach(const char *target) {
+    if (!sbfs_ready) return -ENODEV;
+    struct inode *root = sbfs_iget(SBFS_ROOTINUM);
+    if (!root) return -ENOMEM;
+    int rc = mount_fs(target, root);
+    if (rc < 0) {
+        inode_put(root);
+        return rc;
+    }
+    printk("sbfs: mounted %s\n", target);
+    return 0;
 }

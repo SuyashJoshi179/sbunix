@@ -23,8 +23,8 @@ int main(void) {
     // Look for known magic string in /etc/rc.
     int found = 0;
     for (int i = 0; buf[i]; i++) {
-        if (buf[i] == 'S' && buf[i+1] == 'B' && buf[i+2] == 'U' && buf[i+3] == 'n' &&
-            buf[i+4] == 'i' && buf[i+5] == 'x') {
+        if (buf[i] == 'm' && buf[i+1] == 'o' && buf[i+2] == 'u' && buf[i+3] == 'n' &&
+            buf[i+4] == 't') {
             found = 1; break;
         }
     }

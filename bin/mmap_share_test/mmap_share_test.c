@@ -5,7 +5,7 @@
 #include <sys/wait.h>
 
 int main(void) {
-    const char *path = "/data/share.txt";
+    const char *path = "/mnt/share.txt";
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC);
     if (fd < 0) { printf("mmap_share: open failed\n"); return 1; }
     char buf[4096];

@@ -66,26 +66,26 @@ static int scan_dir(const char *path, const char **wanted, int *seen,
 
 int main(void) {
     /* Pre-clean from any prior run (sbfs persists across reboots). */
-    try_unlink("/data/mkd_a/inside.txt");
-    try_unlink("/data/mkd_a/sub");
-    try_unlink("/data/mkd_a");
-    try_unlink("/data/mkd_b");
-    try_unlink("/data/mkd_c");
-    try_unlink("/data/mkd_file");
-    try_unlink("/data/mkd_ts");
-    try_unlink("/data/mkd_ts2");
+    try_unlink("/mnt/mkd_a/inside.txt");
+    try_unlink("/mnt/mkd_a/sub");
+    try_unlink("/mnt/mkd_a");
+    try_unlink("/mnt/mkd_b");
+    try_unlink("/mnt/mkd_c");
+    try_unlink("/mnt/mkd_file");
+    try_unlink("/mnt/mkd_ts");
+    try_unlink("/mnt/mkd_ts2");
 
     /* ---- 1. Basic mkdir succeeds ---- */
-    int rc = mkdir("/data/mkd_a", 0755);
-    chk(rc == 0, "mkdir /data/mkd_a returns 0");
+    int rc = mkdir("/mnt/mkd_a", 0755);
+    chk(rc == 0, "mkdir /mnt/mkd_a returns 0");
 
     /* ---- 2. fstat reports S_IFDIR with nlink == 2 ---- */
-    int fd = open("/data/mkd_a", O_RDONLY);
-    chk(fd >= 0, "open /data/mkd_a");
+    int fd = open("/mnt/mkd_a", O_RDONLY);
+    chk(fd >= 0, "open /mnt/mkd_a");
     if (fd >= 0) {
         struct stat st;
         int sr = fstat(fd, &st);
-        chk(sr == 0, "fstat /data/mkd_a returns 0");
+        chk(sr == 0, "fstat /mnt/mkd_a returns 0");
         chk(S_ISDIR(st.st_mode), "stat: mode is S_IFDIR");
         chk(st.st_nlink == 2, "stat: nlink == 2 (\".\"  + parent's \"..\")");
         close(fd);
@@ -96,7 +96,7 @@ int main(void) {
         const char *want[] = { ".", "..", 0 };
         int seen[] = { 0, 0 };
         int extras = 0;
-        int total = scan_dir("/data/mkd_a", want, seen, &extras);
+        int total = scan_dir("/mnt/mkd_a", want, seen, &extras);
         chk(total >= 2, "getdents on new dir returns >= 2 entries");
         chk(seen[0] == 1, "new dir contains \".\"");
         chk(seen[1] == 1, "new dir contains \"..\"");
@@ -107,27 +107,27 @@ int main(void) {
     {
         const char *want[] = { "mkd_a", 0 };
         int seen[] = { 0 };
-        int total = scan_dir("/data", want, seen, 0);
-        chk(total > 0, "getdents on /data returns entries");
-        chk(seen[0] == 1, "/data listing contains \"mkd_a\"");
+        int total = scan_dir("/mnt", want, seen, 0);
+        chk(total > 0, "getdents on /mnt returns entries");
+        chk(seen[0] == 1, "/mnt listing contains \"mkd_a\"");
     }
 
     /* ---- 5. Re-create same path: EEXIST (rc < 0) ---- */
-    rc = mkdir("/data/mkd_a", 0755);
+    rc = mkdir("/mnt/mkd_a", 0755);
     chk(rc < 0, "mkdir over existing dir returns negative");
 
     /* ---- 6. mkdir over an existing regular file fails ---- */
-    fd = open("/data/mkd_file", O_WRONLY | O_CREAT);
+    fd = open("/mnt/mkd_file", O_WRONLY | O_CREAT);
     if (fd >= 0) { write(fd, "x", 1); close(fd); }
-    rc = mkdir("/data/mkd_file", 0755);
+    rc = mkdir("/mnt/mkd_file", 0755);
     chk(rc < 0, "mkdir over existing regular file returns negative");
 
     /* ---- 7. mkdir under a regular file: parent is not a dir → fails ---- */
-    rc = mkdir("/data/mkd_file/child", 0755);
+    rc = mkdir("/mnt/mkd_file/child", 0755);
     chk(rc < 0, "mkdir under regular file returns negative (ENOTDIR)");
 
     /* ---- 8. mkdir under nonexistent parent: ENOENT ---- */
-    rc = mkdir("/data/no_such_dir/child", 0755);
+    rc = mkdir("/mnt/no_such_dir/child", 0755);
     chk(rc < 0, "mkdir under nonexistent parent returns negative (ENOENT)");
 
     /* ---- 9. mkdir on tarfs (read-only): EROFS ---- */
@@ -135,11 +135,11 @@ int main(void) {
     chk(rc < 0, "mkdir on read-only tarfs returns negative (EROFS)");
 
     /* ---- 10. Nested mkdir: parent must already exist ---- */
-    rc = mkdir("/data/mkd_a/sub", 0755);
-    chk(rc == 0, "mkdir nested /data/mkd_a/sub returns 0");
+    rc = mkdir("/mnt/mkd_a/sub", 0755);
+    chk(rc == 0, "mkdir nested /mnt/mkd_a/sub returns 0");
 
     /* ---- 11. After nesting, parent's nlink is bumped to 3 ---- */
-    fd = open("/data/mkd_a", O_RDONLY);
+    fd = open("/mnt/mkd_a", O_RDONLY);
     if (fd >= 0) {
         struct stat st;
         if (fstat(fd, &st) == 0) {
@@ -150,14 +150,14 @@ int main(void) {
     }
 
     /* ---- 12. File inside the new dir works ---- */
-    fd = open("/data/mkd_a/inside.txt", O_WRONLY | O_CREAT);
+    fd = open("/mnt/mkd_a/inside.txt", O_WRONLY | O_CREAT);
     chk(fd >= 0, "create file inside new dir");
     if (fd >= 0) {
         long n = write(fd, "hello", 5);
         chk(n == 5, "write inside new dir");
         close(fd);
     }
-    fd = open("/data/mkd_a/inside.txt", O_RDONLY);
+    fd = open("/mnt/mkd_a/inside.txt", O_RDONLY);
     if (fd >= 0) {
         char b[8] = {0};
         long n = read(fd, b, 5);
@@ -166,44 +166,44 @@ int main(void) {
     }
 
     /* ---- 13. unlink the non-empty dir must fail ---- */
-    rc = unlink("/data/mkd_a");
+    rc = unlink("/mnt/mkd_a");
     chk(rc < 0, "unlink non-empty dir returns negative (ENOTEMPTY)");
 
     /* ---- 14. Cleanup, then re-mkdir the same path succeeds ---- */
-    try_unlink("/data/mkd_a/inside.txt");
-    try_unlink("/data/mkd_a/sub");
-    rc = unlink("/data/mkd_a");
+    try_unlink("/mnt/mkd_a/inside.txt");
+    try_unlink("/mnt/mkd_a/sub");
+    rc = unlink("/mnt/mkd_a");
     chk(rc == 0, "unlink empty dir succeeds");
-    rc = mkdir("/data/mkd_a", 0755);
+    rc = mkdir("/mnt/mkd_a", 0755);
     chk(rc == 0, "re-mkdir same path after unlink succeeds");
 
     /* ---- 15. Trailing-slash handling (POSIX: "/foo/" == "/foo") ---- */
-    rc = mkdir("/data/mkd_ts/", 0755);
+    rc = mkdir("/mnt/mkd_ts/", 0755);
     chk(rc == 0, "mkdir with trailing slash succeeds");
 
     /* The resulting dir must be reachable at the no-slash path. */
-    fd = open("/data/mkd_ts", O_RDONLY);
+    fd = open("/mnt/mkd_ts", O_RDONLY);
     chk(fd >= 0, "trailing-slash dir reachable at no-slash path");
     if (fd >= 0) close(fd);
 
     /* unlink with trailing slash should also work. */
-    rc = unlink("/data/mkd_ts/");
+    rc = unlink("/mnt/mkd_ts/");
     chk(rc == 0, "unlink with trailing slash succeeds");
 
     /* Multiple trailing slashes should also be stripped. */
-    rc = mkdir("/data/mkd_ts2///", 0755);
+    rc = mkdir("/mnt/mkd_ts2///", 0755);
     chk(rc == 0, "mkdir with multiple trailing slashes succeeds");
-    try_unlink("/data/mkd_ts2");
+    try_unlink("/mnt/mkd_ts2");
 
     /* "/" alone has no leaf — must fail cleanly, not panic. */
     rc = mkdir("/", 0755);
     chk(rc < 0, "mkdir / returns negative (no leaf)");
 
     /* ---- 16. Final cleanup so re-runs across reboots stay clean ---- */
-    try_unlink("/data/mkd_a");
-    try_unlink("/data/mkd_file");
-    try_unlink("/data/mkd_ts");
-    try_unlink("/data/mkd_ts2");
+    try_unlink("/mnt/mkd_a");
+    try_unlink("/mnt/mkd_file");
+    try_unlink("/mnt/mkd_ts");
+    try_unlink("/mnt/mkd_ts2");
 
     if (fail_cnt == 0)
         printf("mkdir_test: PASS (%d tests)\n", pass_cnt);

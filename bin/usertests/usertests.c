@@ -55,9 +55,9 @@ static void opentest(void) {
 }
 
 static void writetest_small(void) {
-    unlink("/data/small");
-    int fd = open("/data/small", O_RDWR | O_CREAT);
-    chk(fd >= 0, "create /data/small");
+    unlink("/mnt/small");
+    int fd = open("/mnt/small", O_RDWR | O_CREAT);
+    chk(fd >= 0, "create /mnt/small");
     if (fd < 0) return;
 
     int ok = 1;
@@ -68,7 +68,7 @@ static void writetest_small(void) {
     chk(ok, "write 100x(a10+b10) to small");
     close(fd);
 
-    fd = open("/data/small", O_RDONLY);
+    fd = open("/mnt/small", O_RDONLY);
     chk(fd >= 0, "reopen small for read");
     long n = read(fd, buf, sizeof(buf));
     chk(n == 2000, "small: read 2000 bytes back");
@@ -79,11 +79,11 @@ static void writetest_small(void) {
     }
     chk(content_ok, "small: content matches written pattern");
     close(fd);
-    chk(unlink("/data/small") == 0, "unlink /data/small");
+    chk(unlink("/mnt/small") == 0, "unlink /mnt/small");
 }
 
 static void createtest_many(void) {
-    char name[] = "/data/aX";
+    char name[] = "/mnt/aX";
     int ok = 1;
     for (int i = 0; i < 20; i++) {
         name[7] = 'a' + i;
@@ -91,7 +91,7 @@ static void createtest_many(void) {
         if (fd < 0) { ok = 0; break; }
         close(fd);
     }
-    chk(ok, "create 20 files in /data");
+    chk(ok, "create 20 files in /mnt");
     int unlinked = 0;
     for (int i = 0; i < 20; i++) {
         name[7] = 'a' + i;
@@ -101,53 +101,53 @@ static void createtest_many(void) {
 }
 
 static void unlinkread(void) {
-    unlink("/data/unlinkread");
-    int fd = open("/data/unlinkread", O_RDWR | O_CREAT);
-    chk(fd >= 0, "create /data/unlinkread");
+    unlink("/mnt/unlinkread");
+    int fd = open("/mnt/unlinkread", O_RDWR | O_CREAT);
+    chk(fd >= 0, "create /mnt/unlinkread");
     if (fd < 0) return;
     write(fd, "hello", 5);
     close(fd);
 
-    fd = open("/data/unlinkread", O_RDONLY);
+    fd = open("/mnt/unlinkread", O_RDONLY);
     chk(fd >= 0, "reopen before unlink");
-    chk(unlink("/data/unlinkread") == 0, "unlink while fd open");
+    chk(unlink("/mnt/unlinkread") == 0, "unlink while fd open");
     char b[8] = {0};
     long n = read(fd, b, 5);
     chk(n == 5 && b[0] == 'h' && b[4] == 'o', "read from unlinked-but-open fd");
     close(fd);
 
-    int fd2 = open("/data/unlinkread", O_RDONLY);
+    int fd2 = open("/mnt/unlinkread", O_RDONLY);
     chk(fd2 < 0, "reopen of unlinked file fails");
 }
 
 /* ---------- dirs ---------- */
 
 static void dirtest(void) {
-    chk(mkdir("/data/dir0", 0755) == 0, "mkdir /data/dir0");
-    chk(chdir("/data/dir0") == 0, "chdir into /data/dir0");
+    chk(mkdir("/mnt/dir0", 0755) == 0, "mkdir /mnt/dir0");
+    chk(chdir("/mnt/dir0") == 0, "chdir into /mnt/dir0");
     chk(chdir("/") == 0, "chdir back to /");
-    chk(unlink("/data/dir0") == 0, "unlink empty dir");
+    chk(unlink("/mnt/dir0") == 0, "unlink empty dir");
 }
 
 static void subdir(void) {
-    mkdir("/data/sub", 0755);
-    mkdir("/data/sub/a", 0755);
-    int fd = open("/data/sub/a/f", O_RDWR | O_CREAT);
-    chk(fd >= 0, "create nested /data/sub/a/f");
+    mkdir("/mnt/sub", 0755);
+    mkdir("/mnt/sub/a", 0755);
+    int fd = open("/mnt/sub/a/f", O_RDWR | O_CREAT);
+    chk(fd >= 0, "create nested /mnt/sub/a/f");
     if (fd >= 0) {
         chk(write(fd, "xyz", 3) == 3, "write to nested file");
         close(fd);
     }
-    fd = open("/data/sub/a/f", O_RDONLY);
+    fd = open("/mnt/sub/a/f", O_RDONLY);
     chk(fd >= 0, "reopen nested file");
     if (fd >= 0) {
         char b[4] = {0};
         chk(read(fd, b, 3) == 3 && b[0] == 'x' && b[2] == 'z', "nested content OK");
         close(fd);
     }
-    unlink("/data/sub/a/f");
-    unlink("/data/sub/a");
-    unlink("/data/sub");
+    unlink("/mnt/sub/a/f");
+    unlink("/mnt/sub/a");
+    unlink("/mnt/sub");
 }
 
 /* ---------- fork / wait / exec ---------- */
@@ -247,8 +247,8 @@ static void pipe_eof(void) {
 /* ---------- shared fd via fork ---------- */
 
 static void sharedfd(void) {
-    unlink("/data/sharedfd");
-    int fd = open("/data/sharedfd", O_RDWR | O_CREAT);
+    unlink("/mnt/sharedfd");
+    int fd = open("/mnt/sharedfd", O_RDWR | O_CREAT);
     chk(fd >= 0, "open shared fd");
     if (fd < 0) return;
     int pid = fork();
@@ -263,7 +263,7 @@ static void sharedfd(void) {
     chk(ok && st == 0, "sharedfd: both procs wrote 1000 bytes");
     close(fd);
 
-    fd = open("/data/sharedfd", O_RDONLY);
+    fd = open("/mnt/sharedfd", O_RDONLY);
     int nc = 0, np = 0;
     long n;
     while ((n = read(fd, buf, sizeof(buf))) > 0) {
@@ -274,7 +274,7 @@ static void sharedfd(void) {
     }
     close(fd);
     chk(nc == 1000 && np == 1000, "sharedfd: 1000 c + 1000 p (shared offset)");
-    unlink("/data/sharedfd");
+    unlink("/mnt/sharedfd");
 }
 
 /* ---------- mem: malloc stress until failure ---------- */
@@ -360,28 +360,28 @@ static void sigpipe_writer(void) {
 /* ---------- dup / dup2 ---------- */
 
 static void duptest(void) {
-    unlink("/data/dup");
-    int fd = open("/data/dup", O_RDWR | O_CREAT);
-    chk(fd >= 0, "open /data/dup");
+    unlink("/mnt/dup");
+    int fd = open("/mnt/dup", O_RDWR | O_CREAT);
+    chk(fd >= 0, "open /mnt/dup");
     int fd2 = dup(fd);
     chk(fd2 >= 0 && fd2 != fd, "dup() returns new fd");
     write(fd, "AB", 2);
     write(fd2, "CD", 2);
     close(fd);
     close(fd2);
-    fd = open("/data/dup", O_RDONLY);
+    fd = open("/mnt/dup", O_RDONLY);
     char b[8] = {0};
     long n = read(fd, b, 4);
     chk(n == 4 && b[0] == 'A' && b[1] == 'B' && b[2] == 'C' && b[3] == 'D',
         "dup'd fds share offset (ABCD)");
     close(fd);
-    unlink("/data/dup");
+    unlink("/mnt/dup");
 }
 
 /* ---------- concurrent creates: 4 procs create distinct files ---------- */
 
 static void fourfiles(void) {
-    const char *names[] = {"/data/f0", "/data/f1", "/data/f2", "/data/f3"};
+    const char *names[] = {"/mnt/f0", "/mnt/f1", "/mnt/f2", "/mnt/f3"};
     for (int i = 0; i < 4; i++) unlink(names[i]);
     for (int pi = 0; pi < 4; pi++) {
         if (fork() == 0) {
@@ -423,8 +423,8 @@ static void fourfiles(void) {
 /* ---------- big write ---------- */
 
 static void bigwrite(void) {
-    unlink("/data/bigw");
-    int fd = open("/data/bigw", O_RDWR | O_CREAT);
+    unlink("/mnt/bigw");
+    int fd = open("/mnt/bigw", O_RDWR | O_CREAT);
     if (fd < 0) { chk(0, "open bigw"); return; }
     int ok = 1;
     for (int sz = 499; sz < 8192; sz += 471) {
@@ -433,7 +433,7 @@ static void bigwrite(void) {
     }
     close(fd);
     chk(ok, "bigwrite: variable-size writes accepted");
-    unlink("/data/bigw");
+    unlink("/mnt/bigw");
 }
 
 /* ---------- bad fd / bad syscall args ---------- */
@@ -479,8 +479,8 @@ static void pidppid(void) {
 /* ---------- lseek ---------- */
 
 static void lseektest(void) {
-    unlink("/data/lseek");
-    int fd = open("/data/lseek", O_RDWR | O_CREAT);
+    unlink("/mnt/lseek");
+    int fd = open("/mnt/lseek", O_RDWR | O_CREAT);
     if (fd < 0) { chk(0, "open lseek file"); return; }
     write(fd, "0123456789", 10);
     chk(lseek(fd, 3, 0) == 3, "lseek SEEK_SET 3");
@@ -488,7 +488,7 @@ static void lseektest(void) {
     chk(read(fd, b, 3) == 3 && b[0] == '3' && b[2] == '5',
         "read after lseek returns offset data");
     close(fd);
-    unlink("/data/lseek");
+    unlink("/mnt/lseek");
 }
 
 /* ---------- orphan reaping: parent exits before child ---------- */

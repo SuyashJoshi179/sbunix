@@ -48,6 +48,9 @@
 #define SYS_gettimeofday   81   // (struct timeval *, NULL)
 #define SYS_nanosleep      82   // (const struct timespec *req, struct timespec *rem)
 
+// Filesystem mount
+#define SYS_mount          83   // (const char *target, const char *fstype)
+
 // Phase 8b: signals
 #define SYS_kill           90   // (pid, sig)
 #define SYS_sigaction      91   // (sig, const struct sigaction *act, struct sigaction *oldact)
