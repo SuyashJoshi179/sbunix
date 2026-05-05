@@ -1348,7 +1348,7 @@ static int64_t sys_meminfo(void) {
 // Returns 0 on success, negative errno otherwise.
 // ---------------------------------------------------------------------------
 static int64_t sys_mount(const char *u_target, const char *u_fstype) {
-    char target[64];
+    char target[PATH_MAX_LOCAL];
     char fstype[16];
     int rc = copyin_cstr(u_target, target, sizeof(target));
     if (rc < 0) return rc;
