@@ -340,7 +340,8 @@ void tarfs_init(void) {
     tarfs_ensure_dir("dev");
     tarfs_ensure_dir("bin");
     tarfs_ensure_dir("etc");
-    tarfs_ensure_dir("data");
+    tarfs_ensure_dir("mnt");
+    tarfs_ensure_dir("proc");
 
     // Walk the archive and build the tree.
     char *p = _tarfs_start;
