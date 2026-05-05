@@ -29,11 +29,18 @@ static int nmounts = 0;
  * returns -EBUSY.
  * ---------------------------------------------------------------- */
 int mount_fs(const char *path, struct inode *root) {
-    /* Idempotency check: bytewise compare since callers may pass either
-     * a kernel rodata literal or a stack-copied user buffer. */
+    /* Idempotency + uniqueness check. Bytewise compare on path since
+     * callers may pass either a kernel rodata literal or a stack-copied
+     * user buffer. A given root inode has exactly one mount_parent slot,
+     * so the same root cannot be attached at two paths without breaking
+     * `..` traversal at the older mount point. */
     for (int i = 0; i < nmounts; i++) {
-        if (strcmp(mounts[i].path, path) == 0)
-            return mounts[i].root == root ? 0 : -EBUSY;
+        int same_path = strcmp(mounts[i].path, path) == 0;
+        int same_root = mounts[i].root == root;
+        if (same_path && same_root)
+            return 0;
+        if (same_path || same_root)
+            return -EBUSY;
     }
 
     if (nmounts >= NMOUNT) return -ENOMEM;
@@ -63,6 +70,16 @@ int mount_fs(const char *path, struct inode *root) {
         printk("mount_fs: can't resolve '%s': %d\n", path, rc);
         nmounts--;
         return rc;
+    }
+    if (mp->type != I_DIR) {
+        inode_put(mp);
+        nmounts--;
+        return -ENOTDIR;
+    }
+    if (mp->mount_child) {
+        inode_put(mp);
+        nmounts--;
+        return -EBUSY;
     }
     mp->mount_child = root;
     /* Keep mp alive: child root holds a borrowed pointer back to its
