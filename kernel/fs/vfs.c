@@ -7,10 +7,11 @@
 #include <page_cache.h>
 
 #define NMOUNT 8
+#define MOUNT_PATH_MAX 64
 #define SYMLINK_MAX 8
 
 static struct {
-    const char   *path;
+    char          path[MOUNT_PATH_MAX];
     struct inode *root;
 } mounts[NMOUNT];
 
@@ -22,10 +23,31 @@ static int nmounts = 0;
  * For the root mount ("/"), simply record mounts[0].
  * For other mounts, walk to the existing path inode and set its
  * mount_child so the path walker crosses the boundary automatically.
+ *
+ * Idempotent: if `path` is already mounted with the same `root`,
+ * returns 0 silently. If `path` is mounted with a different root,
+ * returns -EBUSY.
  * ---------------------------------------------------------------- */
 int mount_fs(const char *path, struct inode *root) {
+    /* Idempotency check: bytewise compare since callers may pass either
+     * a kernel rodata literal or a stack-copied user buffer. */
+    for (int i = 0; i < nmounts; i++) {
+        if (strcmp(mounts[i].path, path) == 0)
+            return mounts[i].root == root ? 0 : -EBUSY;
+    }
+
     if (nmounts >= NMOUNT) return -ENOMEM;
-    mounts[nmounts].path = path;
+
+    /* Copy path into private storage — caller's buffer may be on the
+     * stack (sys_mount) and go out of scope after this call returns. */
+    int len = 0;
+    while (path[len] && len < MOUNT_PATH_MAX - 1) {
+        mounts[nmounts].path[len] = path[len];
+        len++;
+    }
+    mounts[nmounts].path[len] = '\0';
+    if (path[len] != '\0') return -ENAMETOOLONG;
+
     mounts[nmounts].root = root;
     nmounts++;
 
