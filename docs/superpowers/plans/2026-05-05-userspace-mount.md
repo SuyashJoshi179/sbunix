@@ -24,9 +24,9 @@
 | Task 4: kernel boot drops auto-mount | done | `9cd1d6c` kernel: stop auto-mounting procfs and sbfs at boot |
 | Task 5: selftest pre-attach + /data→/mnt | done | `afbcc06` selftest: pre-attach procfs+sbfs, rename /data refs to /mnt |
 | Task 6: tarfs ensure_dir → mnt+proc | done | `ecf8fa1` fs(tarfs): create /mnt and /proc mountpoints (replaces /data) |
-| Task 7: SYS_mount syscall | pending | — |
-| Task 8: bin/mount userspace binary | pending | — |
-| Task 9: rootfs dirs + restore etc/rc | pending | — |
+| Task 7: SYS_mount syscall | done | included in this PR |
+| Task 8: bin/mount userspace binary | done | included in this PR |
+| Task 9: rootfs dirs + restore etc/rc | done | included in this PR |
 | Task 10: rename /data→/mnt across 13 user files | done | `cca06ef` tests+libc: rename /data to /mnt to match new mountpoint |
 | Task 11: end-to-end QEMU verify | done | `82fcd67` init+sh: run /etc/rc at boot via sh script mode |
 
