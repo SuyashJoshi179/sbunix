@@ -143,6 +143,7 @@ struct pcb *alloc_proc(void) {
     p->last_signal = 0;
     p->stopped_reported = 0;
     p->continued_pending = 0;
+    p->did_exec   = 0;
     p->is_user    = 0;
     p->pagetable  = 0;
     p->user_entry = 0;
