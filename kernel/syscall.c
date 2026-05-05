@@ -24,6 +24,7 @@
 #include <log.h>
 #include <page_cache.h>
 #include <drivers/uart.h>
+#include <drivers/rtc.h>
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1166,6 +1167,11 @@ static int64_t sys_sleep(uint64_t ms) {
 
 // ---------------------------------------------------------------------------
 // sys_clock_gettime
+//
+// CLOCK_REALTIME — wall-clock time, sourced from the Goldfish RTC. Returns
+//                  seconds since the Unix epoch.
+// CLOCK_MONOTONIC — uptime since boot, derived from the timer tick counter.
+//                  Always non-decreasing; not affected by RTC adjustments.
 // ---------------------------------------------------------------------------
 static int64_t sys_clock_gettime(int clockid, struct timespec *ts) {
     if (!ts) return -EFAULT;
@@ -1186,7 +1192,8 @@ static int64_t sys_clock_gettime(int clockid, struct timespec *ts) {
 }
 
 // ---------------------------------------------------------------------------
-// sys_gettimeofday
+// sys_gettimeofday — wall-clock time, sourced from the RTC (POSIX requires
+// this to be wall-clock, not uptime).
 // ---------------------------------------------------------------------------
 static int64_t sys_gettimeofday(struct timeval *tv, void *tz) {
     (void)tz;
