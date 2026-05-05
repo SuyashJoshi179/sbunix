@@ -696,6 +696,13 @@ void procfs_init(void) {
         ip->mount_child = ip->mount_parent = 0;
     }
 
-    mount_fs("/proc", &proc_root_inode);
-    printk("procfs: mounted /proc\n");
+}
+
+/* Register the procfs root at `target`. Returns 0 on success, negative
+ * errno on failure. Idempotent when called twice with the same target
+ * (mount_fs detects same-root re-mount). */
+int procfs_attach(const char *target) {
+    int rc = mount_fs(target, &proc_root_inode);
+    if (rc == 0) printk("procfs: mounted %s\n", target);
+    return rc;
 }
