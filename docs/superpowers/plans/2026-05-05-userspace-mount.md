@@ -10,6 +10,63 @@
 
 ---
 
+## Execution Progress Log
+
+> **For a takeover agent:** This section is updated after each task is committed and pushed. To pick up where the previous agent left off, find the most recent commit on `feature/userspace-mount` matching the task list below, then resume from the next pending task. All commits are on remote `origin/feature/userspace-mount`.
+
+| Task | Status | Commit (origin/feature/userspace-mount) |
+|------|--------|------------------------------------------|
+| Plan: initial draft | done | `03017d7` docs(plan): userspace mount command implementation plan |
+| Plan: chat context appended | done | `7ec5c42` docs(plan): add chat context (Piazza Q&A, decision rationale, recon findings) |
+| Task 1: procfs split | done | `215fc6b` fs(procfs): split init from attach (no mount in init) |
+| Task 2: sbfs split | done | `4c23673` fs(sbfs): split mount into sbfs_init + sbfs_attach |
+| Task 3: mount_fs idempotent | done | `999f637` fs(vfs): mount_fs idempotent + copy path into private storage |
+| Task 4: kernel boot drops auto-mount | done | `9cd1d6c` kernel: stop auto-mounting procfs and sbfs at boot |
+| Task 5: selftest pre-attach + /data→/mnt | done | `afbcc06` selftest: pre-attach procfs+sbfs, rename /data refs to /mnt |
+| Task 6: tarfs ensure_dir → mnt+proc | done | `ecf8fa1` fs(tarfs): create /mnt and /proc mountpoints (replaces /data) |
+| Task 7: SYS_mount syscall | pending | — |
+| Task 8: bin/mount userspace binary | pending | — |
+| Task 9: rootfs dirs + restore etc/rc | pending | — |
+| Task 10: rename /data→/mnt across 13 user files | pending | — |
+| Task 11: end-to-end QEMU verify | pending | — |
+
+### Notable deviations from the plan as written
+
+- **Task 3**: plan specified bytewise compare on stored `path` pointer. Implementation went further and copied path into a `char path[MOUNT_PATH_MAX]` (64 bytes) inside the `mounts[]` table, because the previous design stored the caller's pointer — fine for kernel literals, but unsafe once `sys_mount` passes a stack-allocated `copyinstr` buffer. New constraint: `MOUNT_PATH_MAX = 64` ⇒ paths longer than 63 chars now return `-ENAMETOOLONG`. No real-world target hits this.
+- **Task 5**: selftest now `#include <procfs.h>` (added to its include block) instead of inline `extern` declarations. `sbfs.h` already included. Cleaner than plan's fallback.
+- **Task 6**: plan only changed `tarfs_ensure_dir("data")` → `tarfs_ensure_dir("mnt")`. Implementation also adds `tarfs_ensure_dir("proc")` defensively. `rootfs/proc/` exists empty in the source tree and is normally archived by GNU tar, but the explicit `ensure_dir` is cheap insurance.
+
+### Verification summary so far
+
+After Tasks 1–6, `make build/kernel.elf` succeeds clean. QEMU boot shows:
+
+```
+sbfs: superblock ok (size=1051 nblocks=1000 ninodes=256 logstart=2)
+========================================
+[SELFTEST] Kernel self-tests starting
+========================================
+procfs: mounted /proc
+sbfs: mounted /mnt
+[SELFTEST] PASS  ...
+```
+
+Selftest completes without `FAIL` or `panic`. Userspace test runner picks up after; not yet verified end-to-end because that requires the userspace `mount` binary (Task 8) and `/data` → `/mnt` test path renames (Task 10).
+
+### How to resume (takeover instructions)
+
+```bash
+git fetch origin
+git checkout feature/userspace-mount
+git pull --ff-only
+# Read this section's table to find the next pending task.
+# Then read the task body further down in this file and execute it
+# step-by-step, committing + pushing per task.
+```
+
+Each task in the body below is self-contained with exact file paths, full code, and verification commands. Use `superpowers:executing-plans` (single session) or `superpowers:subagent-driven-development` (subagent per task) to drive.
+
+---
+
 ## Conversation context (carry-over for any agent picking this up)
 
 This plan came out of a discussion comparing `develop` (our work) to `master` (professor's evaluation baseline). Key facts established during that discussion — preserved here so a fresh agent has full context without scrolling chat history.
