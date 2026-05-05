@@ -4,6 +4,7 @@
 #include <string.h>
 #include <printk.h>
 #include <proc.h>
+#include <page_cache.h>
 
 #define NMOUNT 8
 #define SYMLINK_MAX 8
@@ -220,4 +221,69 @@ static int namei_flags(const char *path, struct inode **out, int nofollow) {
 
     *out = cur;
     return 0;
+}
+
+int generic_file_read(struct inode *ip, uint64_t off,
+                      void *buf, uint64_t n) {
+    if (!ip->ops || !ip->ops->readpage) return -EINVAL;
+    if (off >= ip->size) return 0;
+    if (off + n > ip->size) n = ip->size - off;
+    if (n == 0) return 0;
+
+    char *out = (char *)buf;
+    uint64_t done = 0;
+    while (done < n) {
+        uint64_t pos    = off + done;
+        uint64_t pgidx  = pos / PCACHE_PGSZ;
+        uint64_t pgoff  = pos % PCACHE_PGSZ;
+        uint64_t chunk  = PCACHE_PGSZ - pgoff;
+        if (chunk > n - done) chunk = n - done;
+
+        struct pcache_page *p;
+        int rc = pcache_get(ip, pgidx, &p);
+        if (rc < 0) {
+            if (done > 0) return (int)done;
+            return rc;
+        }
+        memcpy(out + done, (char *)p->page + pgoff, chunk);
+        pcache_put(p);
+        done += chunk;
+    }
+    return (int)done;
+}
+
+int generic_file_write(struct inode *ip, uint64_t off,
+                       const void *buf, uint64_t n) {
+    if (!ip->ops || !ip->ops->writepage || !ip->ops->readpage) return -EINVAL;
+    if (n == 0) return 0;
+
+    const char *in = (const char *)buf;
+    uint64_t done = 0;
+
+    while (done < n) {
+        uint64_t pos   = off + done;
+        uint64_t pgidx = pos / PCACHE_PGSZ;
+        uint64_t pgoff = pos % PCACHE_PGSZ;
+        uint64_t chunk = PCACHE_PGSZ - pgoff;
+        if (chunk > n - done) chunk = n - done;
+
+        struct pcache_page *p;
+        int rc = pcache_get(ip, pgidx, &p);
+        if (rc < 0) {
+            if (done > 0) return (int)done;
+            return rc;
+        }
+        memcpy((char *)p->page + pgoff, in + done, chunk);
+        rc = ip->ops->writepage(ip, pgidx, p->page);
+        if (rc < 0) {
+            p->valid = 0;
+            pcache_put(p);
+            if (done > 0) return (int)done;
+            return rc;
+        }
+        p->dirty = 0;
+        pcache_put(p);
+        done += chunk;
+    }
+    return (int)done;
 }

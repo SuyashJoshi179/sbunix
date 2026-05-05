@@ -2,6 +2,7 @@
 #include <exec.h>
 #include <file.h>
 #include <inode.h>
+#include <page_cache.h>
 #include <page_ref.h>
 #include <pipe.h>
 #include <log.h>
@@ -830,6 +831,69 @@ static void test_time_monotonic_basic(void) {
 }
 
 // ----------------------------------------------------------------------------
+// Page cache tests
+// ----------------------------------------------------------------------------
+
+static void test_pcache_basic(void) {
+    printk("[SELFTEST] -- pcache basic --\n");
+
+    /* Static so the slot's retained ip pointer doesn't alias a future
+     * stack frame and produce a phantom cache hit in a later test. */
+    static struct inode dummy_a, dummy_b;
+    dummy_a = (struct inode){0};
+    dummy_b = (struct inode){0};
+    struct pcache_page *p1, *p2, *p3;
+
+    int rc = pcache_get(&dummy_a, 0, &p1);
+    st_check(rc == 0, "pcache_basic: first get returns 0");
+    if (rc < 0) return;
+
+    rc = pcache_get(&dummy_a, 0, &p2);
+    st_check(rc == 0, "pcache_basic: second get (same key) returns 0");
+    if (rc < 0) { pcache_put(p1); return; }
+
+    st_check(p1 == p2,        "pcache_basic: same key returns same slot");
+    st_check(p1->refcnt == 2, "pcache_basic: refcnt == 2 after two gets");
+
+    pcache_put(p1);
+    pcache_put(p2);
+
+    rc = pcache_get(&dummy_b, 0, &p3);
+    st_check(rc == 0, "pcache_basic: get with different inode returns 0");
+    if (rc < 0) return;
+
+    st_check(p3 != p1, "pcache_basic: different inode gets different slot");
+    pcache_put(p3);
+
+    /* Drop slot tracking for the dummy keys so subsequent tests that
+     * happen to address-alias a real inode don't observe a stale hit. */
+    pcache_flush_inode(&dummy_a);
+    pcache_flush_inode(&dummy_b);
+}
+
+static void test_pcache_evict(void) {
+    printk("\n[SELFTEST] -- pcache evict --\n");
+    /* Use NSLOTS+1 distinct dummy keys; release each immediately so
+     * eviction can recycle. */
+    static struct inode dummies[PCACHE_NSLOTS + 1];
+    for (int i = 0; i < PCACHE_NSLOTS + 1; i++)
+        dummies[i] = (struct inode){0};
+    int ok = 1;
+    for (int i = 0; i < PCACHE_NSLOTS + 1; i++) {
+        struct pcache_page *p;
+        if (pcache_get(&dummies[i], 0, &p) < 0) { ok = 0; break; }
+        pcache_put(p);
+    }
+    st_check(ok, "pcache_evict: NSLOTS+1 distinct gets all succeed");
+    /* Touch first dummy: should still resolve (eviction may have reaped
+     * an earlier slot, but pcache_get will simply re-fetch via miss path). */
+    struct pcache_page *p;
+    int rc = pcache_get(&dummies[0], 0, &p);
+    st_check(rc == 0, "pcache_evict: re-get after eviction succeeds");
+    if (rc == 0) pcache_put(p);
+}
+
+// ----------------------------------------------------------------------------
 // Entry point
 // ----------------------------------------------------------------------------
 
@@ -865,6 +929,8 @@ void selftest_run(void) {
     test_signal_pending_bitops();
     test_termios_defaults();
     test_time_monotonic_basic();
+    test_pcache_basic();
+    test_pcache_evict();
 
     printk("========================================\n");
     printk("[SELFTEST] Results: %d passed, %d failed\n", st_pass, st_fails);

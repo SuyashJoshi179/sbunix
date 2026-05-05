@@ -192,6 +192,10 @@ int munmap(void *addr, long len) {
     return (int)syscall_ret(ecall2(72, (long)addr, len));
 }
 
+int msync(void *addr, long len, int flags) {
+    return (int)syscall_ret(ecall3(115, (long)addr, len, (long)flags));
+}
+
 int ioctl(int fd, int cmd, void *arg) {
     return (int)syscall_ret(ecall3(110, (long)fd, (long)cmd, (long)arg));
 }

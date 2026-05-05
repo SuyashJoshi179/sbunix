@@ -95,6 +95,10 @@ static void proc_destroy(struct pcb *p) {
     }
 
     // 3) free VMA metadata.
+    for (struct vma *vv = p->vma_list; vv; vv = vv->next) {
+        if (vv->type == VMA_TYPE_FILE)
+            vma_drop_file_pages(p, vv);
+    }
     vma_list_free(&p->vma_list);
     p->heap_vma = 0;
 
@@ -307,6 +311,15 @@ int proc_fork_current(void) {
     if (!child->vma_list) {
         proc_destroy(child);
         return -ENOMEM;
+    }
+    /* Bump pcache refs for file-backed PTEs inherited via uvmcow_share so
+     * the child holds its own fault-time refs (uvmcow_share only bumps
+     * anon page_ref, not pcache slot refcnts). */
+    for (struct vma *v = child->vma_list; v; v = v->next) {
+        if (v->type == VMA_TYPE_FILE && vma_dup_file_pages(child, v) < 0) {
+            proc_destroy(child);
+            return -ENOMEM;
+        }
     }
     child->heap_vma = 0;
     for (struct vma *v = child->vma_list; v; v = v->next) {

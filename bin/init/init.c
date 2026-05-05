@@ -97,6 +97,14 @@ int main(void) {
         "/bin/headers_compile_gate",
         "/bin/sh_c_test",
         "/bin/usertests",
+        "/bin/mmap_smoke_test",
+        "/bin/mmap_cow_test",
+        "/bin/pagecache_test",
+        /* Phase D follow-ups (see docs/superpowers/specs/2026-05-03-page-cache-design.md):
+         *   /bin/truncate_mmap_test  — open(O_TRUNC) on already-mapped file
+         *   /bin/mmap_share_test     — fork-shared MAP_SHARED visibility
+         *   /bin/bigfile_pcache_test — needs file > sbfs size cap
+         *   /bin/pagecache_stress    — write-while-mapped coherence */
     };
     int ntests = (int)(sizeof(tests) / sizeof(tests[0]));
 

@@ -207,13 +207,7 @@ static struct inode *tarfs_ensure_dir(const char *path) {
 /* ---- inode ops ---- */
 
 static int tarfs_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
-    struct tarfs_ino_data *d = ip->fs_data;
-    if (off >= d->file_size) return 0;
-    if (off + n > d->file_size) n = d->file_size - off;
-    // memmove: dst, src, n
-    for (uint64_t i = 0; i < n; i++)
-        ((char *)buf)[i] = d->data[off + i];
-    return (int)n;
+    return generic_file_read(ip, off, buf, n);
 }
 
 static int tarfs_write(struct inode *ip, uint64_t off, const void *buf,
@@ -308,12 +302,27 @@ static int tarfs_getdents(struct inode *dir, uint64_t off, void *buf,
     return (int)written;
 }
 
+static int tarfs_readpage(struct inode *ip, uint64_t pgidx, void *page) {
+    struct tarfs_ino_data *d = ip->fs_data;
+    uint64_t off = pgidx * 4096UL;
+    if (off >= d->file_size) {
+        memset(page, 0, 4096);
+        return 0;
+    }
+    uint64_t n = 4096;
+    if (off + n > d->file_size) n = d->file_size - off;
+    memcpy(page, d->data + off, n);
+    if (n < 4096) memset((char *)page + n, 0, 4096 - n);
+    return 0;
+}
+
 static const struct inode_ops tarfs_ops = {
     .read     = tarfs_read,
     .write    = tarfs_write,
     .stat     = tarfs_stat,
     .lookup   = tarfs_lookup,
     .getdents = tarfs_getdents,
+    .readpage = tarfs_readpage,
     .readlink = tarfs_readlink,
 };
 
