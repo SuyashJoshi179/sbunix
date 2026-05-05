@@ -72,10 +72,13 @@ struct sbfs_inode {
  * Public interface
  * ----------------------------------------------------------------------- */
 
-/* Mount sbfs from device (dev is the block device number, 0 for the only disk).
- * Reads the superblock, initialises the inode cache, replays the log.
- * Returns a pointer to the root inode on success, NULL on failure. */
-struct inode *sbfs_mount(void);
+/* Initialise sbfs in-memory state: read superblock, replay log.
+ * Returns 0 on success, negative errno on failure. */
+int sbfs_init(void);
+
+/* Register the sbfs root at `target` (e.g. "/mnt"). Must be called
+ * after sbfs_init() has succeeded. Returns 0 / -errno. */
+int sbfs_attach(const char *target);
 
 /* Get an in-memory inode for the given inode number (bumps refcnt). */
 struct inode *sbfs_iget(uint32_t inum);
