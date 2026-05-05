@@ -7,6 +7,7 @@
 #include <printk.h>
 #include <proc.h>
 #include <riscv.h>
+#include <procfs.h>
 #include <sbfs.h>
 #include <signal.h>
 #include <drivers/rtc.h>
@@ -1337,6 +1338,29 @@ static int64_t sys_ioctl(int fd, int cmd, unsigned long arg) {
 static int64_t sys_meminfo(void) {
     return (int64_t)pmem_free_count();
 }
+
+// ---------------------------------------------------------------------------
+// sys_mount(target, fstype) — userspace mount entry point.
+//
+// Supported fstypes: "proc" (procfs), "disk" (sbfs).
+// The CLI form is `mount -t TYPE [SOURCE] TARGET`; SOURCE is ignored
+// (we have no /dev fs), so only target + fstype reach the kernel.
+// Returns 0 on success, negative errno otherwise.
+// ---------------------------------------------------------------------------
+static int64_t sys_mount(const char *u_target, const char *u_fstype) {
+    char target[64];
+    char fstype[16];
+    int rc = copyin_cstr(u_target, target, sizeof(target));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(u_fstype, fstype, sizeof(fstype));
+    if (rc < 0) return rc;
+
+    if (strcmp(fstype, "proc") == 0)
+        return procfs_attach(target);
+    if (strcmp(fstype, "disk") == 0)
+        return sbfs_attach(target);
+    return -EINVAL;
+}
 // ---------------------------------------------------------------------------
 // syscall_dispatch
 // ---------------------------------------------------------------------------
@@ -1514,6 +1538,10 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_meminfo:
             return sys_meminfo();
+
+        case SYS_mount:
+            return sys_mount((const char *)trapframe[TF_A0],
+                             (const char *)trapframe[TF_A1]);
 
         case SYS_wait4: {
             int pid_a       = (int)(int64_t)trapframe[TF_A0];
