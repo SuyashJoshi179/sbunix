@@ -907,6 +907,7 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     }
     p->in_sighandler   = 0;
     p->delivering_segv = 0;
+    p->did_exec        = 1;
 
     return 0;
 }
@@ -1258,15 +1259,19 @@ static int64_t sys_setpgid(int pid, int pgid) {
     if (!me) return -EINVAL;
     if (pid < 0 || pgid < 0) return -EINVAL;
 
-    /* Only allow setpgid() on the calling process (pid == 0/self).
-     * POSIX also permits a parent to set its child's pgid before exec,
-     * but our shell and init both already self-setpgid in the child,
-     * so the parent's call is redundant — restricting to self-only
-     * keeps the semantics tighter and matches the reviewer's preference. */
-    if (pid != 0 && pid != me->pid) return -EPERM;
-
     struct pcb *p = pcb_target(pid);
     if (!p) return -ESRCH;
+
+    /* POSIX: caller may set its own pgid, or the pgid of a child that
+     * has not yet called execve.  Without the parent path, a shell
+     * that calls setpgid(child, child) before the child has had a
+     * chance to self-setpgid loses the race and waitpid(-pgid)
+     * returns -ECHILD immediately. */
+    int is_self  = (p == me);
+    int is_child = (p->parent_pid == me->pid);
+    if (!is_self && !is_child) return -EPERM;
+    if (is_child && p->did_exec) return -EACCES;
+
     if (p->sid != me->sid) return -EPERM;
     if (p->pid == p->sid) return -EPERM;          // session leader
 

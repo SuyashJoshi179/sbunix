@@ -48,6 +48,7 @@ struct pcb {
     int            last_signal;            // last signal that stopped/terminated
     uint8_t        stopped_reported;       // wait4(WUNTRACED) already reported
     uint8_t        continued_pending;      // SIGCONT seen, wait4(WCONTINUED) pending
+    uint8_t        did_exec;               // child has called execve at least once
 
     uint8_t        is_user;         // 1 for user processes, 0 for kernel threads
 
