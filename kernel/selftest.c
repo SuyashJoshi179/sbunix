@@ -1,4 +1,5 @@
 #include <bio.h>
+#include <drivers/rtc.h>
 #include <exec.h>
 #include <file.h>
 #include <inode.h>
@@ -830,6 +831,23 @@ static void test_time_monotonic_basic(void) {
     st_check(t2 >= t1, "time_monotonic: timer_ticks non-decreasing");
 }
 
+static void test_time_realtime_rtc(void) {
+    printk("[SELFTEST] -- time realtime (goldfish rtc) --\n");
+    /* Wall clock must come from the RTC, not from boot-relative ticks.
+     * Threshold is 2024-01-01 UTC = 1704067200 — anything below that
+     * means CLOCK_REALTIME regressed back to uptime/epoch-0. */
+    uint64_t ns  = rtc_read_ns();
+    uint64_t sec = ns / 1000000000UL;
+    st_check(sec > 1704067200UL,
+             "time_realtime: rtc seconds past 2024-01-01 (not uptime)");
+    /* Sanity bound: well below 2100-01-01 = 4102444800. */
+    st_check(sec < 4102444800UL,
+             "time_realtime: rtc seconds below year-2100 sanity bound");
+    /* Monotonic-ish: a second read is >= the first. */
+    uint64_t ns2 = rtc_read_ns();
+    st_check(ns2 >= ns, "time_realtime: rtc non-decreasing across reads");
+}
+
 // ----------------------------------------------------------------------------
 // Page cache tests
 // ----------------------------------------------------------------------------
@@ -929,6 +947,7 @@ void selftest_run(void) {
     test_signal_pending_bitops();
     test_termios_defaults();
     test_time_monotonic_basic();
+    test_time_realtime_rtc();
     test_pcache_basic();
     test_pcache_evict();
 
