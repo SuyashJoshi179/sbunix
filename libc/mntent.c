@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-/* Hardcoded mount table: tarfs at / and sbfs at /mnt. We dont have
+/* Hardcoded mount table: tarfs at / and sbfs at /mnt. We don't have
  * /etc/mtab on disk, so setmntent ignores its arguments and walks this
  * fixed list once per opened stream. */
 
