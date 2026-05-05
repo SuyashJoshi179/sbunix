@@ -9,10 +9,10 @@ SECTIONS {
 	.text   : { *(.text.init) *(.text) *(.text.*) } :text
 	_text_end = .;
 	.rodata : { *(.rodata) *(.rodata.*) } :text
-	.data   : { *(.data) *(.data.*) *(.sdata) *(.sdata.*) } :data
+	.data   : { *(.data) *(.data.*) } :data
 	.tarfs  : { *(.tarfs) } :data
 	_bss_start = .;
-	.bss (NOLOAD) : { *(.bss) *(.bss.*) *(.sbss) *(.sbss.*) *(COMMON) } :data
+	.bss    : { *(.bss) *(.bss.*) *(COMMON) } :data
 	. = ALIGN(16);
 	. += 16384;
 	_stack_top = .;
