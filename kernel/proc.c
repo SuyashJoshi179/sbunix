@@ -31,9 +31,12 @@ static int            next_pid = 1;
 static int            init_pid = 0;  // pid of the user init, set in sched_init
 static struct context sched_context;
 
+/* rlim_npages: kept for future use (e.g. mmap enforcement), but no longer
+ * checked in sys_sbrk — HEAP_MAX and physical memory exhaustion are the
+ * real guards for heap growth.                                          */
 #define RLIM_NOFILE_DEFAULT 16
 #define RLIM_NVMA_DEFAULT   64
-#define RLIM_NPAGES_DEFAULT 256
+#define RLIM_NPAGES_DEFAULT 262144
 
 struct pcb *current_proc(void)   { return current; }
 struct pcb *proc_list_head(void) { return procs;   }

@@ -5,7 +5,6 @@
 #define ALIGN       16
 #define HDR_SIZE    (sizeof(struct chunk))
 #define MIN_ALLOC   4096
-#define MAX_ALLOC   (128 * 1024)
 
 #define USED_BIT    1UL
 
@@ -37,7 +36,6 @@ static struct chunk *grow_heap(unsigned long need) {
 
 void *malloc(unsigned long size) {
     if (size == 0) return 0;
-    if (size > MAX_ALLOC) return 0;
 
     size = align_up(size, ALIGN);
 

@@ -926,14 +926,6 @@ static int64_t sys_sbrk(int64_t incr) {
     if (incr > 0) {
         if (new_end > HEAP_MAX) return -ENOMEM;
 
-        // Enforce per-process mapped-page cap against the VMA address range;
-        // actual physical pages come on demand via user_page_fault.
-        uint64_t old_pages = (old_end - p->heap_vma->start) / PAGE_SIZE;
-        uint64_t new_pages = (new_end - p->heap_vma->start) / PAGE_SIZE;
-        uint64_t add_pages = (new_pages > old_pages) ? (new_pages - old_pages) : 0;
-        if (proc_vma_total_pages(p) + add_pages > (uint64_t)p->rlim_npages)
-            return -ENOMEM;
-
         p->heap_vma->end = new_end;
     } else if (incr < 0) {
         if (new_end < p->heap_vma->start) return -EINVAL;
