@@ -122,6 +122,17 @@ int main(void) {
         "/bin/mmap_smoke_test",
         "/bin/mmap_cow_test",
         "/bin/pagecache_test",
+        /* Large-userspace-allocations feature tests. */
+        "/bin/setrlimit_test",
+        "/bin/free_reuse",
+        "/bin/direct_threshold",
+        "/bin/many_mmaps_test",
+        "/bin/mmap_fixed_test",
+        "/bin/stack_grow_test",
+        "/bin/pattern_write",
+        "/bin/lazy_reserve",
+        "/bin/huge_reserve_no_touch",
+        "/bin/exec_resets_arena",
         /* Phase D follow-ups (see docs/superpowers/specs/2026-05-03-page-cache-design.md):
          *   /bin/truncate_mmap_test  — open(O_TRUNC) on already-mapped file
          *   /bin/mmap_share_test     — fork-shared MAP_SHARED visibility
