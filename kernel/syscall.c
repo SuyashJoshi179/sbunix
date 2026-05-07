@@ -9,6 +9,7 @@
 #include <riscv.h>
 #include <procfs.h>
 #include <sbfs.h>
+#include <tmpfs.h>
 #include <signal.h>
 #include <drivers/rtc.h>
 #include <stat.h>
@@ -1359,6 +1360,8 @@ static int64_t sys_mount(const char *u_target, const char *u_fstype) {
         return procfs_attach(target);
     if (strcmp(fstype, "disk") == 0)
         return sbfs_attach(target);
+    if (strcmp(fstype, "tmpfs") == 0)
+        return tmpfs_attach(target);
     return -EINVAL;
 }
 // ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@
 #include <bio.h>
 #include <page_cache.h>
 #include <sbfs.h>
+#include <tmpfs.h>
 #include <termios.h>
 #include <drivers/uart.h>
 #include <drivers/plic.h>
@@ -46,6 +47,7 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
     // Mount synthetic /dev with /dev/console.
     devfs_init();
     procfs_init();
+    tmpfs_init();
     termios_init();
 
     // Phase 5/10: buffer cache and VirtIO-PCI block device.

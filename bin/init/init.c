@@ -65,6 +65,7 @@ int main(void) {
         "/bin/link_test",
         "/bin/rename_test",
         "/bin/timestamp_test",
+        "/bin/tmpfs_test",
         "/bin/pipe_test",
         "/bin/sbrk_test",
         "/bin/malloc_test",
