@@ -935,11 +935,11 @@ static int64_t sys_sbrk(int64_t incr) {
 // ---------------------------------------------------------------------------
 #define MAP_PRIVATE 0x02
 #define MAP_SHARED  0x01
+#define MAP_FIXED   0x10
 #define MAP_ANON    0x20
 
 static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
                         int fd, uint64_t off) {
-    (void)addr;  /* always anonymous-style placement for now */
     if (len == 0) return -EINVAL;
     len = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     if ((flags & (MAP_PRIVATE | MAP_SHARED)) == 0) return -EINVAL;
@@ -975,24 +975,53 @@ static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
         if (fd != -1 || off != 0) return -EINVAL;
     }
 
-    /* Top-down search for an empty range — preserve existing logic. */
     struct pcb *proc = current_proc();
-    uint64_t search = MMAP_END - len;
-    while (search >= MMAP_START) {
-        int overlap = 0;
+    if (!proc) { if (fip) inode_put(fip); return -EINVAL; }
+
+    uint64_t search;
+    if (flags & MAP_FIXED) {
+        if (addr == 0 || (addr & (PAGE_SIZE - 1))) {
+            if (fip) inode_put(fip);
+            return -EINVAL;
+        }
+        if (addr < USER_TEXT_BASE) {
+            if (fip) inode_put(fip);
+            return -EINVAL;
+        }
+        rlim_t stack_max = proc->rlim[RLIMIT_STACK].rlim_cur;
+        if (stack_max == RLIM_INFINITY) stack_max = USER_STACK_TOP - USER_TEXT_BASE;
+        if (addr + len > USER_STACK_TOP - stack_max) {
+            if (fip) inode_put(fip);
+            return -EINVAL;
+        }
         for (struct vma *v = proc->vma_list; v; v = v->next) {
-            if (search < v->end && search + len > v->start) {
-                overlap = 1;
-                if (v->start < MMAP_START) { overlap = 1; break; }
-                search = v->start - len;
-                search &= ~(PAGE_SIZE - 1);
-                break;
+            if (addr < v->end && addr + len > v->start) {
+                if (fip) inode_put(fip);
+                return -EINVAL;
             }
         }
-        if (!overlap) break;
+        search = addr;
+    } else {
+        if (len > MMAP_END - MMAP_START) { if (fip) inode_put(fip); return -ENOMEM; }
+        search = (MMAP_END - len) & ~(PAGE_SIZE - 1);
+        while (search >= MMAP_START) {
+            int overlap = 0;
+            for (struct vma *v = proc->vma_list; v; v = v->next) {
+                if (search < v->end && search + len > v->start) {
+                    overlap = 1;
+                    if (v->start < MMAP_START + len) {
+                        if (fip) inode_put(fip);
+                        return -ENOMEM;
+                    }
+                    search = (v->start - len) & ~(PAGE_SIZE - 1);
+                    break;
+                }
+            }
+            if (!overlap) break;
+            if (search < MMAP_START) { if (fip) inode_put(fip); return -ENOMEM; }
+        }
         if (search < MMAP_START) { if (fip) inode_put(fip); return -ENOMEM; }
     }
-    if (search < MMAP_START) { if (fip) inode_put(fip); return -ENOMEM; }
 
     struct vma *v = vma_alloc();
     if (!v) { if (fip) inode_put(fip); return -ENOMEM; }
@@ -1084,6 +1113,33 @@ static int64_t sys_msync(uint64_t addr, uint64_t len, int flags) {
             pcache_put(pp);
         }
     }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sys_getrlimit / sys_setrlimit (POSIX)
+// ---------------------------------------------------------------------------
+static int64_t sys_getrlimit(int resource, struct rlimit *urlim) {
+    if (resource < 0 || resource >= RLIMITS_NR) return -EINVAL;
+    if (!urlim) return -EFAULT;
+    struct pcb *p = current_proc();
+    if (!p) return -EINVAL;
+    struct rlimit r = p->rlim[resource];
+    if (copyout(urlim, &r, sizeof(r)) < 0) return -EFAULT;
+    return 0;
+}
+
+static int64_t sys_setrlimit(int resource, const struct rlimit *urlim) {
+    if (resource < 0 || resource >= RLIMITS_NR) return -EINVAL;
+    if (!urlim) return -EFAULT;
+    struct pcb *p = current_proc();
+    if (!p) return -EINVAL;
+    struct rlimit r;
+    if (copyin(&r, urlim, sizeof(r)) < 0) return -EFAULT;
+    if (r.rlim_cur != RLIM_INFINITY && r.rlim_max != RLIM_INFINITY
+        && r.rlim_cur > r.rlim_max) return -EINVAL;
+    /* Single-user OS: allow raising rlim_max without privilege check. */
+    p->rlim[resource] = r;
     return 0;
 }
 
@@ -1469,6 +1525,13 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_msync:
             return sys_msync(trapframe[TF_A0], trapframe[TF_A1],
                              (int)trapframe[TF_A2]);
+
+        case SYS_getrlimit:
+            return sys_getrlimit((int)trapframe[TF_A0],
+                                 (struct rlimit *)trapframe[TF_A1]);
+        case SYS_setrlimit:
+            return sys_setrlimit((int)trapframe[TF_A0],
+                                 (const struct rlimit *)trapframe[TF_A1]);
 
         case SYS_clock_gettime:
             return sys_clock_gettime((int)(int64_t)trapframe[TF_A0],
