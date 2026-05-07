@@ -11,6 +11,7 @@
 #include <syscall.h>
 #include <termios.h>
 #include <timer.h>
+#include <resource.h>
 #include <vmem.h>
 
 // Declared in devfs.c — returns the /dev/console inode.
@@ -30,10 +31,6 @@ static struct pcb    *current = 0;   // currently running process
 static int            next_pid = 1;
 static int            init_pid = 0;  // pid of the user init, set in sched_init
 static struct context sched_context;
-
-#define RLIM_NOFILE_DEFAULT 16
-#define RLIM_NVMA_DEFAULT   64
-#define RLIM_NPAGES_DEFAULT 256
 
 struct pcb *current_proc(void)   { return current; }
 struct pcb *proc_list_head(void) { return procs;   }
@@ -167,9 +164,14 @@ struct pcb *alloc_proc(void) {
         p->sig_handlers[i].sa_restorer = 0;
     }
 
-    p->rlim_nofile = RLIM_NOFILE_DEFAULT;
-    p->rlim_nvma   = RLIM_NVMA_DEFAULT;
-    p->rlim_npages = RLIM_NPAGES_DEFAULT;
+    for (int i = 0; i < RLIMITS_NR; i++) {
+        p->rlim[i].rlim_cur = RLIM_INFINITY;
+        p->rlim[i].rlim_max = RLIM_INFINITY;
+    }
+    p->rlim[RLIMIT_STACK].rlim_cur  = DEFAULT_STACK_SOFT;
+    p->rlim[RLIMIT_STACK].rlim_max  = DEFAULT_STACK_HARD;
+    p->rlim[RLIMIT_NOFILE].rlim_cur = 16;
+    p->rlim[RLIMIT_NOFILE].rlim_max = 64;
     // context is zeroed by page_alloc; set sp and ra
     p->context.sp = (uint64_t)p->kstack_page + KSTACK_SIZE;
     p->context.ra = (uint64_t)forkret;
@@ -304,9 +306,8 @@ int proc_fork_current(void) {
     child->sig_pending    = 0;
     child->in_sighandler  = 0;
     child->delivering_segv= 0;
-    child->rlim_nofile    = parent->rlim_nofile;
-    child->rlim_nvma      = parent->rlim_nvma;
-    child->rlim_npages    = parent->rlim_npages;
+    for (int i = 0; i < RLIMITS_NR; i++)
+        child->rlim[i] = parent->rlim[i];
 
     child->vma_list = vma_list_dup(parent->vma_list);
     if (!child->vma_list) {

@@ -4,29 +4,31 @@
 #include <pmem.h>
 #include <printk.h>
 #include <proc.h>
+#include <resource.h>
 #include <string.h>
 #include <vma.h>
 #include <vmem.h>
 
-#define VMA_POOL_SIZE 256
-
-static struct vma  vma_pool[VMA_POOL_SIZE];
+/* Slab allocator: refill from kernel page allocator on demand. Each refill
+ * page becomes (PAGE_SIZE / sizeof(struct vma)) slots threaded onto the
+ * free list via v->next. Slots are reused indefinitely; slab pages are
+ * never freed (acceptable for a course OS; future TODO: reclaim). */
 static struct vma *vma_freelist;
-static int         vma_pool_inited;
 
-static void vma_pool_init(void) {
-    if (vma_pool_inited) return;
-    vma_pool_inited = 1;
-    vma_freelist = 0;
-    for (int i = VMA_POOL_SIZE - 1; i >= 0; i--) {
-        vma_pool[i].next = vma_freelist;
-        vma_freelist = &vma_pool[i];
+static int vma_slab_refill(void) {
+    void *page = page_alloc();
+    if (!page) return -1;
+    unsigned int n = PAGE_SIZE / sizeof(struct vma);
+    struct vma *arr = (struct vma *)page;
+    for (unsigned int i = 0; i < n; i++) {
+        arr[i].next = vma_freelist;
+        vma_freelist = &arr[i];
     }
+    return 0;
 }
 
 struct vma *vma_alloc(void) {
-    if (!vma_pool_inited) vma_pool_init();
-    if (!vma_freelist) return 0;
+    if (!vma_freelist && vma_slab_refill() < 0) return 0;
     struct vma *v = vma_freelist;
     vma_freelist = v->next;
     memset(v, 0, sizeof(*v));
@@ -145,7 +147,9 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
 
     if (!v) {
         struct vma *sv = find_stack_vma(p->vma_list);
-        uint64_t min_start = USER_STACK_TOP - (MAX_STACK_PAGES * PAGE_SIZE);
+        rlim_t stack_max = p->rlim[RLIMIT_STACK].rlim_cur;
+        if (stack_max == RLIM_INFINITY) stack_max = USER_STACK_TOP - USER_TEXT_BASE;
+        uint64_t min_start = USER_STACK_TOP - stack_max;
         if (sv && stval < sv->start && fault_va >= min_start) {
             uint64_t user_sp = trapframe ? trapframe[1] : sv->start;
             if (stval >= user_sp - PAGE_SIZE) {

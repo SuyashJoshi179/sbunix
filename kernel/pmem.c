@@ -74,7 +74,7 @@ void page_free(void *page) {
         panic("page_free: page out of range");
 
     if (page_refs_ready) {
-        unsigned char ref = page_ref_get(pa);
+        unsigned short ref = page_ref_get(pa);
         if (ref != 1 && ref != 0)
             panic("page_free: refcount != 1");
         page_ref_set(pa, 0);

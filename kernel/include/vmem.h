@@ -69,9 +69,21 @@ static inline unsigned long phys_to_virt(unsigned long pa) {
     return pa + mem_offset;
 }
 
-// User virtual address space layout
-#define USER_TEXT_BASE  0x1000UL          // first user code page
-#define USER_STACK_TOP  0x40000000UL      // user stack grows down from here
+// User virtual address space layout (Sv39: user VA up to 256 GB).
+// Regions are segregated: HEAP_ARENA is reserved for libc malloc's mmap'd
+// arena (placed via MAP_FIXED). MMAP window is for explicit user mmap()
+// calls (top-down search). Stack lives at the very top, grow-down,
+// gated at runtime by RLIMIT_STACK.
+#define USER_TEXT_BASE     0x0000000000001000UL  /* first user code page         */
+#define HEAP_ARENA_BASE    0x0000000100000000UL  /* 4 GB                         */
+#define HEAP_ARENA_END     0x0000001000000000UL  /* 64 GB                        */
+#define MMAP_BASE          HEAP_ARENA_END        /* 64 GB                        */
+#define MMAP_END_VA        0x0000002000000000UL  /* 128 GB                       */
+#define USER_STACK_TOP     0x0000004000000000UL  /* 256 GB                       */
+
+#define DEFAULT_STACK_SOFT (8UL  * 1024 * 1024)  /* 8 MB                         */
+#define DEFAULT_STACK_HARD (64UL * 1024 * 1024)  /* 64 MB                        */
+#define DEFAULT_STACK_MAX  DEFAULT_STACK_HARD
 
 extern pgtable_t kernel_pgtable;
 
