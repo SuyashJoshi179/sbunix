@@ -156,9 +156,11 @@ Syscalls:
 
 `sys_sbrk`:
 
-- Stays for backward compatibility. Drop `rlim_npages` check; keep
-  `HEAP_MAX` as a per-process compatibility ceiling for legacy heap (not
-  the new arena).
+- Stays for backward compatibility. Drop `rlim_npages` check.
+- Decouple `HEAP_MAX` from `MMAP_BASE` (current `#define HEAP_MAX MMAP_START`
+  must be removed). Pin `HEAP_MAX = 0x2000_0000UL` (512 MB) as a fixed
+  legacy sbrk ceiling. Lies well below `HEAP_ARENA_BASE` (4 GB) so cannot
+  collide with the malloc arena.
 
 ### Kernel: page-fault handler
 
@@ -313,7 +315,8 @@ existing `MAP_PRIVATE`/`MAP_ANON` live).
 **mmap explicit:**
 - `mmap_anon_huge` — `mmap(NULL, 16 GB, ...)`, sparse touch, munmap.
 - `mmap_fixed` — `MAP_FIXED` at chosen address inside mmap window;
-  overlapping fixed call fails.
+  overlapping fixed call fails; addr below `USER_TEXT_BASE` rejected;
+  addr colliding with stack reservation rejected.
 - `mmap_file_regression` — existing file mmap tests untouched.
 
 **Fork / exec:**
