@@ -15,8 +15,9 @@ int main(int argc, char **argv) {
     if (!parent_buf) { printf("FAIL parent malloc\n"); return 1; }
     parent_buf[0] = 'P';
 
-    char *args[] = { argv[0], "C", 0 };
-    execv(argv[0], args);
+    const char *path = "/bin/exec_resets_arena";
+    char *args[] = { (char *)path, "C", 0 };
+    execv(path, args);
     printf("FAIL execv returned\n");
     return 1;
 }
