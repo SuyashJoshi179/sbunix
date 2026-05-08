@@ -268,7 +268,9 @@ static int tmpfs_op_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) 
     struct tmpfs_inode *ti = (struct tmpfs_inode *)ip;
     if (ti->vnode.type != I_REG) return -EISDIR;
     if (off >= ti->vnode.size) return 0;
-    if (off + n > ti->vnode.size) n = ti->vnode.size - off;
+    /* Overflow-safe clamp: subtract before compare so a huge `n` cannot
+     * make `off + n` wrap past size and bypass the bound. */
+    if (n > ti->vnode.size - off) n = ti->vnode.size - off;
 
     fs_lock();
     uint64_t total = 0;
@@ -289,7 +291,9 @@ static int tmpfs_op_write(struct inode *ip, uint64_t off, const void *buf, uint6
     struct tmpfs_inode *ti = (struct tmpfs_inode *)ip;
     if (ti->vnode.type != I_REG) return -EISDIR;
     if (off > TMPFS_MAX_FILESIZE) return -EFBIG;
-    if (off + n > TMPFS_MAX_FILESIZE) n = TMPFS_MAX_FILESIZE - off;
+    /* Overflow-safe clamp; mirrors the read path. */
+    if (n > (uint64_t)TMPFS_MAX_FILESIZE - off)
+        n = (uint64_t)TMPFS_MAX_FILESIZE - off;
     if (n == 0) return 0;
 
     fs_lock();
@@ -379,8 +383,14 @@ static int tmpfs_op_getdents(struct inode *dir, uint64_t off, void *buf,
         cursor++;                                                         \
     } while (0)
 
-    if (cursor == 0) EMIT(".",  (uint64_t)(uintptr_t)td, DT_DIR);
-    if (cursor == 1) EMIT("..", (uint64_t)(uintptr_t)td, DT_DIR);
+    /* Hold fs_lock across the entire walk: timer preemption could
+     * otherwise reschedule another process that calls unlink/rename
+     * and page_free()s a dirent we still hold a pointer to. */
+    fs_lock();
+
+    struct tmpfs_inode *par = td->parent ? td->parent : td;
+    if (cursor == 0) EMIT(".",  (uint64_t)(uintptr_t)td,  DT_DIR);
+    if (cursor == 1) EMIT("..", (uint64_t)(uintptr_t)par, DT_DIR);
 
     /* Walk dirent list, skipping the first (cursor - 2) entries. */
     uint64_t skip = (cursor >= 2) ? cursor - 2 : 0;
@@ -390,13 +400,12 @@ static int tmpfs_op_getdents(struct inode *dir, uint64_t off, void *buf,
         if (d->target) {
             uint8_t dtype = (d->target->vnode.type == I_DIR) ? DT_DIR : DT_REG;
             EMIT(d->name, (uint64_t)(uintptr_t)d->target, dtype);
-        } else {
-            cursor++;   /* tombstone: still consume cursor slot */
         }
         d = d->next;
     }
 
 done:
+    fs_unlock();
     if (out_next) *out_next = cursor;
     return (int)written;
 
@@ -500,9 +509,14 @@ static int tmpfs_op_unlink(struct inode *parent, const char *name) {
     int rc = tmpfs_dirunlink(td, name);
     if (rc < 0) { fs_unlock(); return rc; }
 
-    /* Update nlink. Directories also drop the parent's back-ref. */
+    /* Update nlink. New dirs start at nlink == 2 ("." + parent's
+     * entry), and the parent itself bumped its own nlink for the
+     * subdir's ".." back-ref at mkdir time. So removing a dir drops
+     * both of those: target -= 2 (dir entry + own "."), parent -= 1
+     * (lost back-ref). For regular files just drop the entry. */
     if (target->vnode.type == I_DIR) {
         td->vnode.nlink--;
+        target->vnode.nlink--;
     }
     target->vnode.nlink--;
     target->vnode.mtime = tmpfs_now();
@@ -566,9 +580,14 @@ static int tmpfs_op_rename(struct inode *old_p, const char *old_name,
         if (dst->vnode.type == I_DIR && !tmpfs_dir_is_empty(dst)) {
             fs_unlock(); return -ENOTEMPTY;
         }
-        /* Replace: unlink dst first. */
+        /* Replace: unlink dst first. Same nlink accounting as
+         * tmpfs_op_unlink — drop parent's back-ref + dst's "." for
+         * directories, then the dirent link itself. */
         tmpfs_dirunlink(nd, new_name);
-        if (dst->vnode.type == I_DIR) nd->vnode.nlink--;
+        if (dst->vnode.type == I_DIR) {
+            nd->vnode.nlink--;
+            dst->vnode.nlink--;
+        }
         dst->vnode.nlink--;
         if (dst->vnode.nlink == 0 && dst->vnode.refcnt == 0)
             tmpfs_ifree(dst);

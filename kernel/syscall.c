@@ -1343,7 +1343,7 @@ static int64_t sys_meminfo(void) {
 // ---------------------------------------------------------------------------
 // sys_mount(target, fstype) — userspace mount entry point.
 //
-// Supported fstypes: "proc" (procfs), "disk" (sbfs).
+// Supported fstypes: "proc" (procfs), "disk" (sbfs), "tmpfs".
 // The CLI form is `mount -t TYPE [SOURCE] TARGET`; SOURCE is ignored
 // (we have no /dev fs), so only target + fstype reach the kernel.
 // Returns 0 on success, negative errno otherwise.

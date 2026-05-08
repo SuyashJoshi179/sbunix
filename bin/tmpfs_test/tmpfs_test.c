@@ -186,6 +186,25 @@ int main(void) {
     }
     try_unlink("/tmp/big");
 
+    /* ---- 8. dir nlink accounting: rmdir must reclaim the slot ----
+     * Catches the bug where unlink on a directory only dropped one of
+     * two nlinks, leaving the inode at nlink == 1 forever and leaking
+     * a slot from the fixed pool. Loop more times than TMPFS_NINODES
+     * (64) so a leak would exhaust the pool and the next mkdir fails. */
+    int dir_iters = 0;
+    int dir_ok = 1;
+    for (int i = 0; i < 128; i++) {
+        char path[24] = "/tmp/dir_x";
+        path[9] = 'a' + (i % 26);
+        path[10] = 'a' + ((i / 26) % 26);
+        path[11] = 0;
+        if (mkdir(path, 0755) < 0) { dir_ok = 0; break; }
+        if (unlink(path)      < 0) { dir_ok = 0; break; }
+        dir_iters++;
+    }
+    chk(dir_ok && dir_iters == 128,
+        "mkdir+rmdir 128 times without exhausting inode pool");
+
     /* Final cleanup. */
     try_unlink("/tmp/sub/inner");
     try_unlink("/tmp/sub");
