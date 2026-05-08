@@ -25,4 +25,4 @@ struct rlimit {
 #define RLIMIT_MEMLOCK  8
 #define RLIMIT_AS       9
 
-#define RLIMITS_NR      16
+#define RLIMITS_NR      10

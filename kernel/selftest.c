@@ -22,6 +22,7 @@
 #include <vfs.h>
 #include <vma.h>
 #include <vmem.h>
+#include <resource.h>
 
 // ----------------------------------------------------------------------------
 // Minimal test harness
@@ -634,6 +635,68 @@ static void test_vma_pool(void) {
     vma_free(v);
 }
 
+#define VMA_SCALE_N 300
+
+static struct vma *vma_scale_arr[VMA_SCALE_N];
+
+static void test_vma_slab_scaling(void) {
+    printk("[SELFTEST] -- vma_slab_scaling --\n");
+    int ok = 0;
+    for (int i = 0; i < VMA_SCALE_N; i++) {
+        vma_scale_arr[i] = vma_alloc();
+        if (vma_scale_arr[i]) ok++;
+    }
+    st_check(ok == VMA_SCALE_N, "vma_alloc x300 (slab refills past legacy 256 cap)");
+    for (int i = 0; i < ok; i++) vma_free(vma_scale_arr[i]);
+
+    struct vma *v = vma_alloc();
+    st_check(v != 0, "vma_alloc after bulk free still works");
+    vma_free(v);
+}
+
+static void test_rlimit_roundtrip(void) {
+    printk("[SELFTEST] -- rlimit_roundtrip --\n");
+    struct pcb *p = alloc_proc();
+    st_check(p != 0, "alloc_proc for rlimit test");
+    if (!p) return;
+
+    st_check(p->rlim[RLIMIT_STACK].rlim_cur  == 8UL  * 1024 * 1024,
+             "default RLIMIT_STACK soft = 8 MB");
+    st_check(p->rlim[RLIMIT_STACK].rlim_max  == 64UL * 1024 * 1024,
+             "default RLIMIT_STACK hard = 64 MB");
+    st_check(p->rlim[RLIMIT_NOFILE].rlim_cur == 16,
+             "default RLIMIT_NOFILE soft = 16");
+    st_check(p->rlim[RLIMIT_NOFILE].rlim_max == 64,
+             "default RLIMIT_NOFILE hard = 64");
+    st_check(p->rlim[RLIMIT_AS].rlim_cur     == RLIM_INFINITY,
+             "default RLIMIT_AS = RLIM_INFINITY");
+
+    p->rlim[RLIMIT_STACK].rlim_cur = 32UL * 1024 * 1024;
+    st_check(p->rlim[RLIMIT_STACK].rlim_cur == 32UL * 1024 * 1024,
+             "RLIMIT_STACK roundtrip after write");
+
+    free_proc(p);
+}
+
+static void test_rlimit_stack_dynamic(void) {
+    printk("[SELFTEST] -- rlimit_stack_dynamic --\n");
+    /* The stack-growth fault path reads rlim[RLIMIT_STACK].rlim_cur per
+     * process. Mutating one PCB's value must not perturb another. */
+    struct pcb *a = alloc_proc();
+    struct pcb *b = alloc_proc();
+    st_check(a && b, "alloc two procs for stack-limit isolation check");
+    if (!a || !b) { if (a) free_proc(a); if (b) free_proc(b); return; }
+
+    a->rlim[RLIMIT_STACK].rlim_cur = 4UL * 1024 * 1024;
+    b->rlim[RLIMIT_STACK].rlim_cur = 12UL * 1024 * 1024;
+    st_check(a->rlim[RLIMIT_STACK].rlim_cur == 4UL  * 1024 * 1024 &&
+             b->rlim[RLIMIT_STACK].rlim_cur == 12UL * 1024 * 1024,
+             "per-PCB stack limit values are independent");
+
+    free_proc(a);
+    free_proc(b);
+}
+
 static void test_vma_insert_find(void) {
     printk("[SELFTEST] -- vma_insert_find --\n");
     struct vma *list = 0;
@@ -947,6 +1010,9 @@ void selftest_run(void) {
     test_pipe_alloc_free_cycle();
     test_page_refcount();
     test_vma_pool();
+    test_vma_slab_scaling();
+    test_rlimit_roundtrip();
+    test_rlimit_stack_dynamic();
     test_vma_insert_find();
     test_vma_find_miss();
     test_vma_list_dup();
