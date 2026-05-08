@@ -31,7 +31,10 @@ static char         *arena_end;
 static int           arena_inited;
 static struct chunk *free_list;
 
+/* Returns 0 if rounding up would wrap past ULONG_MAX. Callers must
+ * treat 0 as overflow (malloc(0) is already handled separately). */
 static unsigned long align_up(unsigned long n, unsigned long a) {
+    if (n > (unsigned long)-1 - (a - 1)) return 0;
     return (n + a - 1) & ~(a - 1);
 }
 
@@ -95,6 +98,8 @@ static void *direct_alloc(unsigned long size) {
 void *malloc(unsigned long size) {
     if (size == 0) return 0;
     size = align_up(size, ALIGN);
+    if (size == 0) return 0;                       /* align overflow */
+    if (size > (unsigned long)-1 - HDR_SIZE) return 0; /* size+HDR wrap */
 
     if (size + HDR_SIZE >= DIRECT_THRESHOLD)
         return direct_alloc(size);
@@ -150,7 +155,9 @@ void *realloc(void *ptr, unsigned long size) {
 
     struct chunk *c = (struct chunk *)((char *)ptr - HDR_SIZE);
     unsigned long old_size = c->size & ~(USED_BIT | DIRECT_BIT);
-    if (old_size >= size) return ptr;
+    unsigned long want = align_up(size, ALIGN);
+    if (want == 0) return 0;
+    if (old_size >= want) return ptr;
 
     void *newp = malloc(size);
     if (!newp) return 0;

@@ -202,15 +202,11 @@ int msync(void *addr, long len, int flags) {
 }
 
 int getrlimit(int resource, struct rlimit *rlim) {
-    long r = ecall2(117, (long)resource, (long)rlim);
-    if (r < 0) { errno = (int)(-r); return -1; }
-    return 0;
+    return (int)syscall_ret(ecall2(117, (long)resource, (long)rlim));
 }
 
 int setrlimit(int resource, const struct rlimit *rlim) {
-    long r = ecall2(118, (long)resource, (long)rlim);
-    if (r < 0) { errno = (int)(-r); return -1; }
-    return 0;
+    return (int)syscall_ret(ecall2(118, (long)resource, (long)rlim));
 }
 
 int ioctl(int fd, int cmd, void *arg) {

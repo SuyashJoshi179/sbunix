@@ -941,7 +941,11 @@ static int64_t sys_sbrk(int64_t incr) {
 static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
                         int fd, uint64_t off) {
     if (len == 0) return -EINVAL;
-    len = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    {
+        uint64_t aligned = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        if (aligned < len) return -EINVAL;   /* page-rounding wrapped */
+        len = aligned;
+    }
     if ((flags & (MAP_PRIVATE | MAP_SHARED)) == 0) return -EINVAL;
     if ((flags & MAP_PRIVATE) && (flags & MAP_SHARED)) return -EINVAL;
     /* RISC-V reserves W-only PTE encoding; the fault handler installs
@@ -985,6 +989,10 @@ static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
             return -EINVAL;
         }
         if (addr < USER_TEXT_BASE) {
+            if (fip) inode_put(fip);
+            return -EINVAL;
+        }
+        if (addr + len < addr) {       /* user-controlled overflow */
             if (fip) inode_put(fip);
             return -EINVAL;
         }
