@@ -199,6 +199,16 @@ static void *tmpfs_find_page(struct tmpfs_inode *ti, uint64_t off) {
 /* Directory: dirent helpers                                          */
 /* ------------------------------------------------------------------ */
 
+/* Reject names that would not fit in TMPFS_DIRSIZ (including NUL).
+ * Without this, tmpfs_dirlink silently truncates and two distinct
+ * overlong names with the same prefix would alias, breaking lookup
+ * and rename's same-path check. Callers translate to -ENAMETOOLONG. */
+static int tmpfs_name_ok(const char *name) {
+    int i = 0;
+    while (name[i] && i < TMPFS_DIRSIZ) i++;
+    return (i < TMPFS_DIRSIZ);
+}
+
 static int name_eq(const char *a, const char *b) {
     for (int i = 0; i < TMPFS_DIRSIZ; i++) {
         if (a[i] != b[i]) return 0;
@@ -295,11 +305,17 @@ static int tmpfs_op_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) 
 static int tmpfs_op_write(struct inode *ip, uint64_t off, const void *buf, uint64_t n) {
     struct tmpfs_inode *ti = (struct tmpfs_inode *)ip;
     if (ti->vnode.type != I_REG) return -EISDIR;
-    if (off > TMPFS_MAX_FILESIZE) return -EFBIG;
-    /* Overflow-safe clamp; mirrors the read path. */
+    /* A non-zero-length write that starts at or past the file-size cap
+     * cannot make any progress. Returning 0 in that case (n clamps to
+     * 0, then the n==0 short-circuit fires) makes user code spin. So
+     * surface -EFBIG explicitly. Zero-length writes still succeed as
+     * a no-op regardless of offset. */
+    if (n == 0) return 0;
+    if (off >= TMPFS_MAX_FILESIZE) return -EFBIG;
+    /* Overflow-safe clamp; mirrors the read path. Partial writes that
+     * straddle the cap return the clamped count, not -EFBIG. */
     if (n > (uint64_t)TMPFS_MAX_FILESIZE - off)
         n = (uint64_t)TMPFS_MAX_FILESIZE - off;
-    if (n == 0) return 0;
 
     fs_lock();
     uint64_t total = 0;
@@ -355,6 +371,7 @@ static int tmpfs_op_lookup(struct inode *dir, const char *name,
         *out = inode_get(&par->vnode);
         return 0;
     }
+    if (!tmpfs_name_ok(name)) return -ENAMETOOLONG;
 
     fs_lock();
     struct tmpfs_dirent *de = tmpfs_dirfind(td, name);
@@ -453,6 +470,7 @@ static int tmpfs_op_create(struct inode *parent, const char *name,
                             struct inode **out) {
     struct tmpfs_inode *td = (struct tmpfs_inode *)parent;
     if (td->vnode.type != I_DIR) return -ENOTDIR;
+    if (!tmpfs_name_ok(name)) return -ENAMETOOLONG;
 
     fs_lock();
     if (tmpfs_dirfind(td, name)) { fs_unlock(); return -EEXIST; }
@@ -473,6 +491,7 @@ static int tmpfs_op_create(struct inode *parent, const char *name,
 static int tmpfs_op_mkdir(struct inode *parent, const char *name) {
     struct tmpfs_inode *td = (struct tmpfs_inode *)parent;
     if (td->vnode.type != I_DIR) return -ENOTDIR;
+    if (!tmpfs_name_ok(name)) return -ENAMETOOLONG;
 
     fs_lock();
     if (tmpfs_dirfind(td, name)) { fs_unlock(); return -EEXIST; }
@@ -503,6 +522,7 @@ static int tmpfs_op_unlink(struct inode *parent, const char *name) {
     /* "." and ".." are not unlinkable. */
     if (name[0] == '.' && (name[1] == 0 ||
         (name[1] == '.' && name[2] == 0))) return -EINVAL;
+    if (!tmpfs_name_ok(name)) return -ENAMETOOLONG;
 
     fs_lock();
     struct tmpfs_dirent *de = tmpfs_dirfind(td, name);
@@ -544,6 +564,7 @@ static int tmpfs_op_link(struct inode *parent, struct inode *target_in,
                           const char *name) {
     struct tmpfs_inode *td  = (struct tmpfs_inode *)parent;
     struct tmpfs_inode *tgt = (struct tmpfs_inode *)target_in;
+    if (!tmpfs_name_ok(name)) return -ENAMETOOLONG;
 
     fs_lock();
     int rc = tmpfs_dirlink(td, name, tgt);
@@ -559,6 +580,8 @@ static int tmpfs_op_rename(struct inode *old_p, const char *old_name,
                             struct inode *new_p, const char *new_name) {
     struct tmpfs_inode *od = (struct tmpfs_inode *)old_p;
     struct tmpfs_inode *nd = (struct tmpfs_inode *)new_p;
+    if (!tmpfs_name_ok(old_name) || !tmpfs_name_ok(new_name))
+        return -ENAMETOOLONG;
 
     fs_lock();
     /* Same-path no-op. */

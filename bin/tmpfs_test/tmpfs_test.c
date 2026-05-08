@@ -184,7 +184,34 @@ int main(void) {
         chk(total == 256 * 1024,
             "write fills exactly 256 KiB before hitting EFBIG");
     }
+    /* Reopen with O_APPEND so the offset starts at EOF (== MAX), then
+     * verify a non-zero write returns a negative error rather than 0.
+     * A 0 return would spin POSIX-style writers. */
+    fd = open("/tmp/big", O_WRONLY | O_APPEND);
+    if (fd >= 0) {
+        long extra = write(fd, "x", 1);
+        chk(extra < 0,
+            "write at MAX_FILESIZE returns -errno, not 0 (would spin)");
+        close(fd);
+    }
     try_unlink("/tmp/big");
+
+    /* ---- 7b. overlong basename rejected with -ENAMETOOLONG ----
+     * Without the length gate, two distinct overlong names sharing
+     * the first TMPFS_DIRSIZ bytes alias to the same dirent; here
+     * we assert the kernel surfaces the error instead. */
+    {
+        char longp[80];
+        int k = 0;
+        const char *pre = "/tmp/";
+        while (pre[k]) { longp[k] = pre[k]; k++; }
+        for (int j = 0; j < 60; j++) longp[k++] = 'A';
+        longp[k] = 0;
+        int rc_long = open(longp, O_WRONLY | O_CREAT);
+        chk(rc_long < 0, "open(O_CREAT) with 60-char basename rejected");
+        int rc_mkd = mkdir(longp, 0755);
+        chk(rc_mkd < 0, "mkdir with 60-char basename rejected");
+    }
 
     /* ---- 8. dir nlink accounting: rmdir must reclaim the slot ----
      * Catches the bug where unlink on a directory only dropped one of
