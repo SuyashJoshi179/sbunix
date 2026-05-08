@@ -148,7 +148,9 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
     if (!v) {
         struct vma *sv = find_stack_vma(p->vma_list);
         rlim_t stack_max = p->rlim[RLIMIT_STACK].rlim_cur;
-        if (stack_max == RLIM_INFINITY) stack_max = USER_STACK_TOP - USER_TEXT_BASE;
+        uint64_t stack_cap = USER_STACK_TOP - USER_TEXT_BASE;
+        if (stack_max == RLIM_INFINITY || stack_max > stack_cap)
+            stack_max = stack_cap;
         uint64_t min_start = USER_STACK_TOP - stack_max;
         if (sv && stval < sv->start && fault_va >= min_start) {
             uint64_t user_sp = trapframe ? trapframe[1] : sv->start;

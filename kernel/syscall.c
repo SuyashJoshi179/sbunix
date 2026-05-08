@@ -996,8 +996,14 @@ static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
             if (fip) inode_put(fip);
             return -EINVAL;
         }
+        if (addr + len > USER_STACK_TOP) {
+            if (fip) inode_put(fip);
+            return -EINVAL;
+        }
         rlim_t stack_max = proc->rlim[RLIMIT_STACK].rlim_cur;
-        if (stack_max == RLIM_INFINITY) stack_max = USER_STACK_TOP - USER_TEXT_BASE;
+        uint64_t stack_cap = USER_STACK_TOP - USER_TEXT_BASE;
+        if (stack_max == RLIM_INFINITY || stack_max > stack_cap)
+            stack_max = stack_cap;
         if (addr + len > USER_STACK_TOP - stack_max) {
             if (fip) inode_put(fip);
             return -EINVAL;
@@ -1144,8 +1150,11 @@ static int64_t sys_setrlimit(int resource, const struct rlimit *urlim) {
     if (!p) return -EINVAL;
     struct rlimit r;
     if (copyin(&r, urlim, sizeof(r)) < 0) return -EFAULT;
-    if (r.rlim_cur != RLIM_INFINITY && r.rlim_max != RLIM_INFINITY
-        && r.rlim_cur > r.rlim_max) return -EINVAL;
+    /* RLIM_INFINITY is (rlim_t)-1 = max unsigned, so a straight unsigned
+     * compare correctly treats it as larger than any finite value: a
+     * finite cur with infinite max is fine; an infinite cur with finite
+     * max is rejected. */
+    if (r.rlim_cur > r.rlim_max) return -EINVAL;
     /* Single-user OS: allow raising rlim_max without privilege check. */
     p->rlim[resource] = r;
     return 0;

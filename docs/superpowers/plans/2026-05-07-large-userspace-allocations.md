@@ -97,7 +97,7 @@ struct rlimit {
 #define RLIMIT_MEMLOCK  8
 #define RLIMIT_AS       9
 
-#define RLIMITS_NR      16   /* table size; sparse */
+#define RLIMITS_NR      10   /* table size; sparse, indexed by RLIMIT_* id */
 ```
 
 - [ ] **Step 2: Build & verify compiles**
@@ -1538,5 +1538,5 @@ git push origin feature/large-userspace-alloc
 
 - **Spec coverage:** layout (Tasks 2), VMA slab (3), page cap removal (6), rlimit infra (1, 5, 8, 9, 17), MAP_FIXED (7, 9, 19), libc malloc rewrite (10), tests (12–22), regression (23). ✓
 - **No placeholders:** every step contains the exact code or command.
-- **Type consistency:** `struct rlimit { rlim_cur, rlim_max }` consistent across kernel + libc. `RLIMITS_NR = 16` matches array dimensioning. `MAP_FIXED = 0x10` consistent kernel + libc.
+- **Type consistency:** `struct rlimit { rlim_cur, rlim_max }` consistent across kernel + libc. `RLIMITS_NR = 10` matches array dimensioning (sparse, RLIMIT_AS=9 is highest id). `MAP_FIXED = 0x10` consistent kernel + libc.
 - **Frequent commits + pushes:** every task ends with a commit and a `git push origin feature/large-userspace-alloc`.
