@@ -4,8 +4,11 @@
  * Storage:
  *   - Static array of TMPFS_NINODES inodes; each is either free (in_use==0)
  *     or holds a regular file or directory.
- *   - File data: linked list of 4 KiB pages allocated via page_alloc().
- *   - Directory entries: linked list of struct tmpfs_dirent records.
+ *   - File data: fixed array of page pointers (file_pages[]) indexed by
+ *     page number. Each slot is NULL (sparse hole) or a 4 KiB page from
+ *     page_alloc().
+ *   - Directory entries: linked list of struct tmpfs_dirent records,
+ *     each occupying its own 4 KiB page.
  *
  * No on-disk format, no WAL. Crash safety is trivial — RAM is gone after
  * a crash anyway. All mutating ops are atomic w.r.t. interrupts because
@@ -267,12 +270,14 @@ static int tmpfs_dir_is_empty(struct tmpfs_inode *dir) {
 static int tmpfs_op_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
     struct tmpfs_inode *ti = (struct tmpfs_inode *)ip;
     if (ti->vnode.type != I_REG) return -EISDIR;
-    if (off >= ti->vnode.size) return 0;
-    /* Overflow-safe clamp: subtract before compare so a huge `n` cannot
-     * make `off + n` wrap past size and bypass the bound. */
-    if (n > ti->vnode.size - off) n = ti->vnode.size - off;
 
+    /* Read size + clamp under fs_lock: a concurrent write/truncate
+     * (timer-preempted scheduling) could otherwise shrink size between
+     * the bound check and the read, allowing reads past current EOF.
+     * Overflow-safe form: `n > size - off` after off <= size. */
     fs_lock();
+    if (off >= ti->vnode.size) { fs_unlock(); return 0; }
+    if (n > ti->vnode.size - off) n = ti->vnode.size - off;
     uint64_t total = 0;
     while (total < n) {
         void *pg = tmpfs_find_page(ti, off + total);
@@ -316,6 +321,9 @@ static int tmpfs_op_write(struct inode *ip, uint64_t off, const void *buf, uint6
 
 static int tmpfs_op_stat(struct inode *ip, struct stat *st) {
     struct tmpfs_inode *ti = (struct tmpfs_inode *)ip;
+    /* fs_lock so size/nlink/mtime/mode are read atomically with respect
+     * to concurrent mutators (write, truncate, link, unlink, rename). */
+    fs_lock();
     st->st_dev   = 5;                     /* arbitrary distinct id */
     st->st_ino   = (uint64_t)(uintptr_t)ti;
     st->st_mode  = ti->vnode.mode;
@@ -326,6 +334,7 @@ static int tmpfs_op_stat(struct inode *ip, struct stat *st) {
     st->st_atime = ti->vnode.mtime;
     st->st_mtime = ti->vnode.mtime;
     st->st_ctime = ti->vnode.mtime;
+    fs_unlock();
     return 0;
 }
 
@@ -625,9 +634,9 @@ void tmpfs_init(void) {
     root->vnode.type     = I_DIR;
     root->vnode.mode     = S_IFDIR | 0777;
     root->vnode.nlink    = 2;          /* "." + (whatever mounts us)   */
-    root->vnode.refcnt   = 0;          /* attach() will iget()         */
+    root->vnode.refcnt   = 0;          /* mount table holds borrowed ref */
     root->vnode.size     = 0;
-    root->vnode.mtime    = 0;          /* RTC not yet read at this point */
+    root->vnode.mtime    = tmpfs_now();
     root->vnode.ops      = &tmpfs_iops;
     root->vnode.fs_data  = root;
     tmpfs_ready = 1;
@@ -637,14 +646,13 @@ void tmpfs_init(void) {
 
 int tmpfs_attach(const char *target) {
     if (!tmpfs_ready) return -ENODEV;
-    struct inode *root = inode_get(&inodes[0].vnode);
-    int rc = mount_fs(target, root);
-    if (rc < 0) {
-        inode_put(root);
-        return rc;
-    }
-    /* Set the mtime now that the RTC is alive. */
-    inodes[0].vnode.mtime = tmpfs_now();
+    /* mount_fs records a borrowed pointer; the root inode lives forever
+     * in the static inodes[] pool, so no inode_get/put is needed. Doing
+     * one here would leak a refcnt on the idempotent same-root re-mount
+     * path (mount_fs returns 0 without consuming an extra ref). Mirrors
+     * procfs_attach. */
+    int rc = mount_fs(target, &inodes[0].vnode);
+    if (rc < 0) return rc;
     printk("tmpfs: mounted %s\n", target);
     return 0;
 }
