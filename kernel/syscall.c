@@ -9,6 +9,7 @@
 #include <riscv.h>
 #include <procfs.h>
 #include <sbfs.h>
+#include <tmpfs.h>
 #include <signal.h>
 #include <drivers/rtc.h>
 #include <stat.h>
@@ -1342,7 +1343,7 @@ static int64_t sys_meminfo(void) {
 // ---------------------------------------------------------------------------
 // sys_mount(target, fstype) — userspace mount entry point.
 //
-// Supported fstypes: "proc" (procfs), "disk" (sbfs).
+// Supported fstypes: "proc" (procfs), "disk" (sbfs), "tmpfs".
 // The CLI form is `mount -t TYPE [SOURCE] TARGET`; SOURCE is ignored
 // (we have no /dev fs), so only target + fstype reach the kernel.
 // Returns 0 on success, negative errno otherwise.
@@ -1359,6 +1360,8 @@ static int64_t sys_mount(const char *u_target, const char *u_fstype) {
         return procfs_attach(target);
     if (strcmp(fstype, "disk") == 0)
         return sbfs_attach(target);
+    if (strcmp(fstype, "tmpfs") == 0)
+        return tmpfs_attach(target);
     return -EINVAL;
 }
 // ---------------------------------------------------------------------------
