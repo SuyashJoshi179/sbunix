@@ -51,9 +51,12 @@ struct tmpfs_inode {
      *
      * For I_DIR: dirents is a linked list of child entries. Each
      *   tmpfs_dirent is small (44 bytes) and gets its own 4 KiB page
-     *   (wasteful but bounded by TMPFS_NINODES). */
+     *   (wasteful but bounded by TMPFS_NINODES). parent points at the
+     *   containing dir so lookup(".." ) and rename loop checks work
+     *   without per-dir ".." dirents. NULL on the root inode. */
     void                *file_pages[TMPFS_PAGES_PER_FILE];
     struct tmpfs_dirent *dirents;
+    struct tmpfs_inode  *parent;
 };
 
 /* ------------------------------------------------------------------ */
@@ -332,9 +335,11 @@ static int tmpfs_op_lookup(struct inode *dir, const char *name,
         return 0;
     }
     if (name[0] == '.' && name[1] == '.' && name[2] == 0) {
-        /* tmpfs is a leaf fs; ".." of root stays at root. namei handles
-         * mount-boundary ".." traversal via mount_parent. */
-        *out = inode_get(dir);
+        /* Mount-root ".." is intercepted by namei via mount_parent
+         * before reaching here. For nested dirs return the tracked
+         * parent; for the unmounted root (defensive) stay at root. */
+        struct tmpfs_inode *par = td->parent ? td->parent : td;
+        *out = inode_get(&par->vnode);
         return 0;
     }
 
@@ -457,6 +462,7 @@ static int tmpfs_op_mkdir(struct inode *parent, const char *name) {
     if (!ni) { fs_unlock(); return -ENOSPC; }
     /* New dirs have nlink == 2 ("." + parent's reference). */
     ni->vnode.nlink = 2;
+    ni->parent      = td;
 
     int rc = tmpfs_dirlink(td, name, ni);
     if (rc < 0) {
@@ -539,16 +545,12 @@ static int tmpfs_op_rename(struct inode *old_p, const char *old_name,
     if (!src_de) { fs_unlock(); return -ENOENT; }
     struct tmpfs_inode *src = src_de->target;
 
-    /* Loop check: if src is a dir, new_p must not be src or any descendant
-     * (would create a cycle). Walk up new_p's chain — but tmpfs is a leaf
-     * fs and we don't track parent pointers, so we approximate with: just
-     * forbid moving src into itself or into one of its direct children. A
-     * deeper loop is theoretically possible to construct but would require
-     * unusual sequences of moves; we accept this simplification. */
+    /* Loop check: if src is a dir, new_p must not be src nor any
+     * descendant of src. Walk new_p's parent chain upward; if we hit
+     * src before reaching the root, the move would create a cycle. */
     if (src->vnode.type == I_DIR) {
-        if (nd == src) { fs_unlock(); return -EINVAL; }
-        for (struct tmpfs_dirent *d = src->dirents; d; d = d->next) {
-            if (d->target == nd) { fs_unlock(); return -EINVAL; }
+        for (struct tmpfs_inode *a = nd; a; a = a->parent) {
+            if (a == src) { fs_unlock(); return -EINVAL; }
         }
     }
 
@@ -576,10 +578,11 @@ static int tmpfs_op_rename(struct inode *old_p, const char *old_name,
     if (rc < 0) { fs_unlock(); return rc; }
     tmpfs_dirunlink(od, old_name);
 
-    /* Cross-parent directory move: parent nlink fixup. */
+    /* Cross-parent directory move: parent nlink fixup + parent ptr. */
     if (src->vnode.type == I_DIR && od != nd) {
         od->vnode.nlink--;
         nd->vnode.nlink++;
+        src->parent = nd;
     }
     od->vnode.mtime = tmpfs_now();
     nd->vnode.mtime = tmpfs_now();

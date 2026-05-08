@@ -66,6 +66,19 @@ int main(void) {
     chk(stat("/tmp/sub", &st) == 0 && S_ISDIR(st.st_mode),
         "/tmp/sub is a directory");
 
+    /* ---- 2b. ".." from nested dir resolves to the real parent ----
+     * stat("/tmp/sub/..") must yield the same inode as stat("/tmp"),
+     * not /tmp/sub itself. Catches a bug where the lookup op naively
+     * returned `dir` for any "..". */
+    struct stat st_root, st_dotdot, st_sub;
+    chk(stat("/tmp",        &st_root)   == 0, "stat /tmp");
+    chk(stat("/tmp/sub",    &st_sub)    == 0, "stat /tmp/sub");
+    chk(stat("/tmp/sub/..", &st_dotdot) == 0, "stat /tmp/sub/..");
+    chk(st_dotdot.st_ino == st_root.st_ino,
+        "/tmp/sub/.. resolves to /tmp (not /tmp/sub)");
+    chk(st_dotdot.st_ino != st_sub.st_ino,
+        "/tmp/sub/.. distinct from /tmp/sub");
+
     /* ---- 3. unlink truly removes ---- */
     chk(unlink("/tmp/foo") == 0, "unlink /tmp/foo");
     chk(stat("/tmp/foo", &st) < 0, "/tmp/foo gone after unlink");
