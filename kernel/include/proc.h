@@ -4,6 +4,7 @@
 #include <file.h>    // struct file, NOFILE
 #include <inode.h>   // struct inode
 #include <vma.h>
+#include <resource.h> // struct rlimit, RLIMITS_NR
 #include <signal.h>  // sigset_t, struct sigaction, NSIG
 
 #define KSTACK_SIZE PAGE_SIZE   // one 4KB page per process kernel stack
@@ -89,10 +90,8 @@ struct pcb {
     uint8_t        in_sighandler;   // 1 while a user signal handler is running
     uint8_t        delivering_segv; // guard against recursive SIGSEGV default-kill
 
-    // Phase 9c: per-process hard resource limits.
-    int            rlim_nofile;     // max open fds visible to this process
-    int            rlim_nvma;       // max VMA nodes
-    int            rlim_npages;     // max total virtual mapped pages across VMAs
+    // POSIX rlimit table (indexed by resource id; sparse).
+    struct rlimit  rlim[RLIMITS_NR];
     struct pcb    *next;            // intrusive linked list
 };
 

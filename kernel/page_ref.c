@@ -3,7 +3,10 @@
 #include <printk.h>
 #include <vmem.h>
 
-static unsigned char page_refs[NPAGES];
+/* uint16 supports up to 65535 references per page. uint8 (255) overflowed
+ * once page caps were removed and oom_test fork()ed 256 children sharing
+ * an 8192-page heap CoW. */
+static unsigned short page_refs[NPAGES];
 int page_refs_ready = 0;
 
 static unsigned long pa2pfn(unsigned long pa) {
@@ -16,17 +19,17 @@ void page_ref_init(void) {
     page_refs_ready = 1;
 }
 
-void page_ref_set(unsigned long pa, unsigned char val) {
+void page_ref_set(unsigned long pa, unsigned short val) {
     page_refs[pa2pfn(pa)] = val;
 }
 
-unsigned char page_ref_get(unsigned long pa) {
+unsigned short page_ref_get(unsigned long pa) {
     return page_refs[pa2pfn(pa)];
 }
 
 void page_get(unsigned long pa) {
     unsigned long pfn = pa2pfn(pa);
-    if (page_refs[pfn] == 255)
+    if (page_refs[pfn] == 65535)
         panic("page_get: refcount overflow");
     page_refs[pfn]++;
 }

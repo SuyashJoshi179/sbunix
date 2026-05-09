@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -198,6 +199,14 @@ int munmap(void *addr, long len) {
 
 int msync(void *addr, long len, int flags) {
     return (int)syscall_ret(ecall3(115, (long)addr, len, (long)flags));
+}
+
+int getrlimit(int resource, struct rlimit *rlim) {
+    return (int)syscall_ret(ecall2(117, (long)resource, (long)rlim));
+}
+
+int setrlimit(int resource, const struct rlimit *rlim) {
+    return (int)syscall_ret(ecall2(118, (long)resource, (long)rlim));
 }
 
 int ioctl(int fd, int cmd, void *arg) {
