@@ -149,6 +149,21 @@ int main(void) {
          *   /bin/mmap_share_test     — fork-shared MAP_SHARED visibility
          *   /bin/bigfile_pcache_test — needs file > sbfs size cap
          *   /bin/pagecache_stress    — write-while-mapped coherence */
+        /* Professor-grade grader tests */
+        "/bin/grader_errno_test",
+        "/bin/grader_defensive_test",
+        "/bin/grader_libc_test",
+        "/bin/grader_fileio_test",
+        "/bin/grader_time_test",
+        "/bin/grader_cow_test",
+        "/bin/grader_zerofill_test",
+        "/bin/grader_proc_test",
+        "/bin/grader_malloc_test",
+        "/bin/grader_system_test",
+        "/bin/grader_printf_test",
+        "/bin/grader_shell_io_test",
+        "/bin/grader_adversarial_test",
+        "/bin/grader_edge_test",
     };
     int ntests = (int)(sizeof(tests) / sizeof(tests[0]));
 
