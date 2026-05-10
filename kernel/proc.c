@@ -236,6 +236,20 @@ int proc_fork_current(void) {
     struct pcb *parent = current;
     if (!parent || !parent->is_user) return -1;
 
+    /* Enforce RLIMIT_NPROC (number of processes for the same uid). SBUnix
+     * is single-user, so we count every non-unused, non-zombie process
+     * other than init (pid 1). */
+    rlim_t nproc_max = parent->rlim[RLIMIT_NPROC].rlim_cur;
+    if (nproc_max != RLIM_INFINITY) {
+        rlim_t live = 0;
+        for (struct pcb *q = proc_list_head(); q; q = q->next) {
+            if (q->state == PROC_UNUSED || q->state == PROC_ZOMBIE) continue;
+            if (q->pid == 1) continue;
+            live++;
+        }
+        if (live >= nproc_max) return -EAGAIN;
+    }
+
     struct pcb *child = alloc_proc();
     if (!child) return -ENOMEM;
 

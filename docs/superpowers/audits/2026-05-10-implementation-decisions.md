@@ -200,3 +200,22 @@ A small inline helper `read_at(ip, off, buf, n)` wraps `generic_file_read` and t
 - Removing `tarfs_find` — selftest still uses it as a sanity check that the tarfs blob is well-formed before any VFS-level code runs.
 
 **Side-effect commits to `kernel/include/errno.h`:** added `ENOEXEC=8` and `EAGAIN=11` (used by the new return paths and by the now-tolerant oom_test).
+
+---
+
+## T1.9 — `RLIMIT_NPROC` never enforced
+
+**Approach chosen:** In `proc_fork_current`, before calling `alloc_proc`, count live (non-unused, non-zombie, non-init) processes. If `rlim_cur` is finite and the count is already at the limit, return `-EAGAIN`. SBUnix is single-user so the count is global rather than per-uid.
+
+**Alternatives rejected:**
+- *Enforce in `alloc_proc`*: also called for kernel threads, where rlimits don't apply. Hooking at the user-fork entry point is cleaner.
+- *Track a counter incremented at alloc / decremented at zombie reap*: more state, easier to drift out of sync. Walking the list once per fork is fine — fork is not a hot path on a teaching OS.
+
+**Edge cases handled:**
+- Parent's `rlim_cur == RLIM_INFINITY` short-circuits the check (no-op for the default config).
+- Init (pid 1) excluded from the count so it's never counted against a forking process's limit.
+- `EAGAIN` matches POSIX/Linux for "too many processes" (paired with the libc errno `EAGAIN=11` already added by T1.5's side effect).
+
+**Out of scope:**
+- Per-uid accounting. SBUnix doesn't have meaningful uids, so the global count is the cleanest mapping of NPROC semantics.
+- Enforcing on `vfork` or `clone` (we don't have those).
