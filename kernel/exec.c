@@ -31,10 +31,17 @@ static int read_at(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
 int load_user_elf(pgtable_t pt, struct inode *ip,
                   unsigned long *entry_out, struct vma **vma_list_out,
                   uint64_t *brk_out) {
+    /* read_at returns the underlying filesystem error (e.g. -EIO) for
+     * a real read failure, and -ENOEXEC only for short / malformed
+     * reads. We propagate the original code so callers can distinguish
+     * "disk broke" from "this isn't a valid binary". */
     Elf64_Ehdr ehdr;
-    if (read_at(ip, 0, &ehdr, sizeof(ehdr)) < 0) {
-        printk("exec: short read on ELF header\n");
-        return -ENOEXEC;
+    {
+        int r = read_at(ip, 0, &ehdr, sizeof(ehdr));
+        if (r < 0) {
+            printk("exec: read on ELF header failed (%d)\n", r);
+            return r;
+        }
     }
 
     if (*(const uint32_t *)ehdr.e_ident != ELF_MAGIC) {
@@ -60,10 +67,11 @@ int load_user_elf(pgtable_t pt, struct inode *ip,
 
     for (int i = 0; i < ehdr.e_phnum; i++) {
         Elf64_Phdr ph;
-        if (read_at(ip, ehdr.e_phoff + (uint64_t)i * sizeof(ph),
-                    &ph, sizeof(ph)) < 0) {
+        int rph = read_at(ip, ehdr.e_phoff + (uint64_t)i * sizeof(ph),
+                          &ph, sizeof(ph));
+        if (rph < 0) {
             vma_list_free(&vlist);
-            return -ENOEXEC;
+            return rph;
         }
         if (ph.p_type != PT_LOAD) continue;
         if (ph.p_memsz == 0) continue;
@@ -96,7 +104,17 @@ int load_user_elf(pgtable_t pt, struct inode *ip,
                 uint64_t copy_len = copy_va_end - copy_va_start;
                 int got = generic_file_read(ip, file_off,
                                             (char *)kpage + page_off, copy_len);
-                if (got < 0 || (uint64_t)got != copy_len) {
+                /* Distinguish a real read error (got < 0) from a short
+                 * read (got != copy_len): the first propagates the
+                 * underlying fs errno (e.g. -EIO), the second is
+                 * malformed-binary territory. */
+                if (got < 0) {
+                    printk("exec: segment read failed (%d)\n", got);
+                    page_free(kpage);
+                    vma_list_free(&vlist);
+                    return got;
+                }
+                if ((uint64_t)got != copy_len) {
                     printk("exec: short read in segment\n");
                     page_free(kpage);
                     vma_list_free(&vlist);

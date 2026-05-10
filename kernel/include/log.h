@@ -15,7 +15,11 @@
  * (header present) but not yet installed.
  */
 
-void log_init(uint32_t log_start, uint32_t log_size);
+/* `disk_size` is the total number of blocks on the backing device.
+ * recover_from_log uses it to bound-check on-disk log entries; without
+ * it, a corrupt header could ask install_trans to overwrite arbitrary
+ * memory-mapped or out-of-range sectors. */
+void log_init(uint32_t log_start, uint32_t log_size, uint32_t disk_size);
 void recover_from_log(void);
 
 void begin_op(void);

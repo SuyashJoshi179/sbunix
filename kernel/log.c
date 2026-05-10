@@ -38,6 +38,7 @@ struct log_header {
 static struct {
     uint32_t start;       /* first block of the log on disk          */
     uint32_t size;        /* total log blocks (including header)     */
+    uint32_t disk_size;   /* total blocks on the backing device      */
     int      outstanding; /* 1 = inside begin_op/end_op              */
     int      nblocks;     /* blocks in current (pending) transaction */
     uint32_t blocks[LOG_HDR_MAX]; /* real block numbers              */
@@ -76,9 +77,10 @@ static void install_trans(void) {
 /* -----------------------------------------------------------------------
  * log_init — called from sbfs_mount
  * ----------------------------------------------------------------------- */
-void log_init(uint32_t log_start, uint32_t log_size) {
+void log_init(uint32_t log_start, uint32_t log_size, uint32_t disk_size) {
     log.start       = log_start;
     log.size        = log_size;
+    log.disk_size   = disk_size;
     log.outstanding = 0;
     log.nblocks     = 0;
 }
@@ -110,10 +112,20 @@ void recover_from_log(void) {
     log.nblocks = (int)n;
     for (uint32_t i = 0; i < n; i++) {
         uint32_t b = lh->block[i];
-        /* Each entry must point inside the disk's data region; reject
-         * obvious garbage to avoid scribbling on the superblock or log. */
-        if (b == 0 || b == log.start ||
-            (b >= log.start && b < log.start + log.size)) {
+        /* Reject any entry that would scribble outside the on-disk filesystem
+         * or onto fs metadata install_trans is never supposed to overwrite:
+         *   - block 0 (boot/reserved) and block 1 (sbfs superblock) — losing
+         *     the superblock would brick the disk on next mount.
+         *   - the log region itself (the log replays *out of* this range,
+         *     never *into* it).
+         *   - anything at or past disk_size — install_trans would issue an
+         *     out-of-range bio that the driver may not bound-check.
+         * If disk_size is 0 (uninitialised) we accept anything past the log
+         * (defensive default; sbfs always passes a real size). */
+        int oob = (b == 0 || b == 1);
+        if (b >= log.start && b < log.start + log.size) oob = 1;
+        if (log.disk_size && b >= log.disk_size) oob = 1;
+        if (oob) {
             printk("log: header entry %u points at block %u; clearing log\n",
                    i, b);
             brelse(hb);

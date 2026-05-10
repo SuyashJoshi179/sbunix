@@ -1031,8 +1031,9 @@ int sbfs_init(void) {
     printk("sbfs: superblock ok (size=%u nblocks=%u ninodes=%u logstart=%u)\n",
            sb.size, sb.nblocks, sb.ninodes, sb.logstart);
 
-    /* Initialise log and replay any crashed transaction. */
-    log_init(sb.logstart, sb.nlog);
+    /* Initialise log and replay any crashed transaction. The disk size
+     * bounds the set of blocks log replay is allowed to touch. */
+    log_init(sb.logstart, sb.nlog, sb.size);
     recover_from_log();
 
     sbfs_ready = 1;
