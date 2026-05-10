@@ -674,8 +674,28 @@ static int sbfs_op_stat(struct inode *ip, struct stat *st) {
     st->st_atime = si->d.mtime;
     st->st_mtime = si->d.mtime;
     st->st_ctime = si->d.mtime;
-    st->st_blksize = 512;
-    st->st_blocks  = (si->d.size + 511) / 512;
+    st->st_blksize = SBFS_BSIZE;
+    /* Count actually-allocated data blocks (and indirect blocks they
+     * consume), not ceil(size/512) — sbfs files can be sparse if
+     * userspace seeks past EOF before writing, in which case unallocated
+     * direct slots / indirect entries are zero. The 512-byte unit
+     * matches SBFS_BSIZE so no scaling needed. */
+    uint64_t nblocks = 0;
+    for (int i = 0; i < SBFS_NDIR; i++) {
+        if (si->d.addrs[i]) nblocks++;
+    }
+    for (int ii = 0; ii < SBFS_NINDIR; ii++) {
+        uint32_t indir = si->d.addrs[SBFS_NDIR + ii];
+        if (!indir) continue;
+        nblocks++;                  /* indirect block itself */
+        struct buf *ibp = bread(indir);
+        uint32_t *slots = (uint32_t *)ibp->data;
+        for (uint32_t k = 0; k < SBFS_NBLK_PER_INDIR; k++) {
+            if (slots[k]) nblocks++;
+        }
+        brelse(ibp);
+    }
+    st->st_blocks = nblocks;
     return 0;
 }
 
