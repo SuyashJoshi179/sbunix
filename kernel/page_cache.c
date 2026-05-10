@@ -1,5 +1,6 @@
 #include <page_cache.h>
 #include <pmem.h>
+#include <vmem.h>
 #include <inode.h>
 #include <printk.h>
 #include <string.h>
@@ -197,6 +198,21 @@ retry:;
     p->valid = 1;
     pcache_unlock();
     *out = p;
+    return 0;
+}
+
+/* PTE-to-slot reverse lookup. The PTE only stores the physical address;
+ * to tell "this is a pcache slot we shouldn't refcount via page_get/put"
+ * we have to scan slots[] for a matching backing page. PCACHE_NSLOTS is
+ * small (64) and slots[i].page is immutable after init, so the scan is
+ * cheap and lock-free. */
+struct pcache_page *pcache_pa_to_slot(unsigned long pa) {
+    if (!pcache_inited) return 0;
+    for (int i = 0; i < PCACHE_NSLOTS; i++) {
+        if (slots[i].page &&
+            virt_to_phys((unsigned long)slots[i].page) == pa)
+            return &slots[i];
+    }
     return 0;
 }
 

@@ -188,9 +188,28 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
             unsigned long old_pa = pte_to_phyaddr(*pte_existing);
 
             if (v->flags & VMA_FLAG_COW) {
-                /* MAP_PRIVATE writable: copy cache page to a fresh anon
-                 * page and remap. Drop both the cache refcnt acquired
-                 * here for re-lookup AND the original fault-time ref. */
+                /* MAP_PRIVATE writable: copy the current backing page
+                 * to a fresh anon page and remap.
+                 *
+                 * The current backing can be either:
+                 *   (a) the pcache slot for (file, file_pgidx) — first
+                 *       write since the file was faulted in;
+                 *   (b) an anon page from an earlier CoW that survived
+                 *       a subsequent fork (uvmcow_share clears PTE_W
+                 *       and bumps page_refs, so the next write here
+                 *       takes this branch with old_pa = anon).
+                 *
+                 * Previous code unconditionally ran
+                 *   pcache_get(...); pcache_put × 2;
+                 * which is correct for (a) — drop the lookup ref plus
+                 * this proc's fault-time pcache ref — but for (b) it
+                 * decrements an unrelated slot's refcnt by 2, eventually
+                 * underflowing it and silently corrupting whichever
+                 * (ip, pgidx) that slot is caching for another proc.
+                 * It also failed to release the anon refcnt this PTE
+                 * held in case (b), leaking page_refs[anon_pfn] by 1
+                 * per fork+CoW cycle. */
+                struct pcache_page *opp = pcache_pa_to_slot(old_pa);
                 void *np = page_alloc();
                 if (!np) return -1;
                 memmove(np, (void *)phys_to_virt(old_pa), PAGE_SIZE);
@@ -204,10 +223,12 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
                 if (v->prot & VMA_PROT_X) perm |= PTE_X;
                 *pte_existing =
                     phyaddr_to_pte(new_pa) | perm | PTE_LEAF_AD;
-                struct pcache_page *opp;
-                if (pcache_get(v->file, file_pgidx, &opp) == 0) {
-                    pcache_put(opp);   /* drop the lookup ref      */
-                    pcache_put(opp);   /* drop the fault-time ref  */
+                if (opp) {
+                    /* (a): drop this proc's fault-time pcache ref. */
+                    pcache_put(opp);
+                } else {
+                    /* (b): drop the anon refcnt this PTE held. */
+                    page_put(old_pa);
                 }
                 flush_tlb();
                 return 0;

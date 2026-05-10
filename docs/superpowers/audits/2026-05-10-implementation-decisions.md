@@ -336,4 +336,41 @@ New helpers:
 - Real floating-point conversions (no FP toolchain, see T1.3 note).
 - `%n` (security risk; rarely used).
 - Locale-aware grouping or thousands separators.
+
+---
+
+## T1.13 — `pcache` × `uvmcow_share` refcount leak and file-CoW slot corruption
+
+**Approach chosen:** Three coordinated changes plus one symmetric defensive guard, gated by a single new helper `pcache_pa_to_slot(pa)` that maps a physical address to the pcache slot owning it (or NULL).
+
+1. **`uvmcow_share` (`kernel/vmem.c`)** — skip `page_get(pa)` when `pa` belongs to a pcache slot. Pcache slot pages live outside the `page_refs[]` accounting (their slot owns the backing page for the slot's lifetime, init bumps `page_refs[pfn]=1` once and it stays there). The child's fault-time pin is taken via `pp->refcnt` in `vma_dup_file_pages`, which is the right currency. Without this skip, every fork of a proc with a faulted-in file mapping leaked one `page_refs[pcache_pfn]` permanently; ~65 535 such forks tripped `page_get: refcount overflow`.
+
+2. **File-CoW write fault (`kernel/vma.c:190-214`)** — the present-PTE + `VMA_FLAG_COW` branch previously assumed `old_pa` was always the pcache slot for `(v->file, file_pgidx)` and ran `pcache_get(...); pcache_put × 2;`. After fork-of-fork-after-CoW the same branch fires with `old_pa = anon` (a private anon page from an earlier CoW that the post-fork PTE_W clear made write-faultable again), and the unconditional pcache dance corrupted an *unrelated* slot's refcnt by 2 — eventually triggering eviction of a slot another proc still had mapped, silently serving wrong data. The branch now uses `pcache_pa_to_slot(old_pa)` to discriminate:
+   - **pcache `old_pa`**: drop this proc's fault-time pcache ref via a single `pcache_put`. No `pcache_get` re-lookup needed — the slot can't be evicted while we hold the ref, so `pcache_pa_to_slot` returns a stable pointer.
+   - **anon `old_pa`**: `page_put(old_pa)` to release the refcnt this PTE held from the prior `uvmcow_share`. Without it, page_refs[anon_pfn] leaked 1 per fork+CoW cycle.
+
+3. **Symmetric teardown guard (`kernel/vmem.c`)** — `free_user_pages_level` and `uvmunmap_range` both skip `page_put` for pcache slot pages. The normal exit/exec paths already clear file PTEs through `vma_drop_file_pages` before generic teardown runs, so this is belt-and-suspenders, but it makes the page_refs invariant "any PTE pointing at a pcache slot is invisible to page_get/put" hold structurally instead of by convention. A future caller forgetting `vma_drop_file_pages` would no longer underflow the slot's backing page out from under the cache.
+
+**The helper itself** (`kernel/page_cache.c`):
+- `pcache_pa_to_slot(pa)` linear-scans the fixed `slots[]` array (PCACHE_NSLOTS=64) comparing `virt_to_phys(slots[i].page)` against `pa`. `slots[i].page` is set exactly once in `pcache_init` and never changes, so the read is lock-free.
+
+**Alternatives rejected:**
+- *Track pcache pages through `page_get`/`page_put` like anon pages*: would require teaching pcache eviction to wait for page_refs to drop, mixing two separate refcount systems (slot refcnt vs page refcnt). The current design is "pcache owns its pages, fault/teardown is invisible to page_refs" — that's cleaner, this fix just makes the boundary tight everywhere.
+- *Reverse-map physical addresses via a hashtable*: PCACHE_NSLOTS is 64. Linear scan is ~50ns and saves the hashtable's maintenance cost on every pcache_get/put.
+- *Always call `pcache_get` in the file-CoW branch to identify the slot*: bumps refcnt for nothing, costs a lock acquisition and an LRU shuffle, and doesn't help the anon-old_pa case anyway (would just bump a wrong-but-still-valid slot for a different (ip,pgidx) pair).
+
+**Edge cases handled:**
+- Slot eviction while a proc holds a fault-time pcache ref: impossible — eviction requires `pp->refcnt == 0`. The `pcache_pa_to_slot` lookup in the file-CoW branch is therefore safe to use without a fresh `pcache_get`.
+- Anon CoW after fork, parent already CoW'd: `old_pa` is anon, helper returns NULL, takes the `page_put(old_pa)` branch — drops the fork-inherited ref.
+- Grandchild CoW after parent fork (no parent write): `old_pa` is pcache (PTE still installed via fault), helper returns the slot, single `pcache_put` drops grandchild's fault-time ref.
+- `pcache_pa_to_slot` called pre-init: returns NULL (guard on `pcache_inited`). Boot-time selftests that run after pcache_init aren't affected.
+
+**Verification:**
+- **Kernel selftest** `test_pcache_uvmcow_refleak` (`kernel/selftest.c`): synthetically install a pcache PTE into a fresh pagetable, record `page_ref_get(pcache_pa)`, run 256 `uvmcow_share + free_user_pgtable` cycles, assert the refcount is unchanged before/after and again after tearing the parent down. Catches the leak deterministically without needing 65 535 iterations.
+- **Userspace regression** `bin/cow_pcache_refleak_test`: three loops exercising the realistic paths — (A) map+fork+child-CoW, (B) map+parent-CoW-then-fork+child-CoW (the anon-`old_pa` case), (C) map+grandchild-CoW (nested fork). 50 iterations each, all pass.
+- **Smoke**: 939 PASS / 0 FAIL across kernel selftest + 101 init tests + usertests. No `refcount overflow` / `refcount underflow` panics.
+
+**Out of scope:**
+- A general "PTE → owning subsystem" registry. Pcache is the only refcount-immune mapping today; if more land, the linear-scan helper can be replaced with a dispatch table.
+- `MAP_SHARED` writeback ordering during fork — already handled by `vma_drop_file_pages` MAP_SHARED branch; this fix only changes the page_refs side.
 - Wide-character `%ls` / `%lc`.

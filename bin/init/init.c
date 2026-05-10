@@ -144,6 +144,7 @@ int main(void) {
         "/bin/usertests",
         "/bin/mmap_smoke_test",
         "/bin/mmap_cow_test",
+        "/bin/cow_pcache_refleak_test",
         "/bin/pagecache_test",
         /* Phase D follow-ups (see docs/superpowers/specs/2026-05-03-page-cache-design.md):
          *   /bin/truncate_mmap_test  — open(O_TRUNC) on already-mapped file

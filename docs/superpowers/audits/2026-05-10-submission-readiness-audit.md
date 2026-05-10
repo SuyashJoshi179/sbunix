@@ -123,13 +123,13 @@ for (int i = 0; i < (int)lh->n; i++)
 **Problem:** Auto-grow only fires when `stval >= user_sp - PAGE_SIZE`. A function prologue that bumps SP by, say, 16 KB (large stack frame) and probes the new SP first will fault with `stval` *below* `user_sp - PAGE_SIZE` and gets killed. GCC at `-O0` and Rust binaries do this routinely.
 **Fix:** Drop the heuristic; allow grow as long as `fault_va >= USER_STACK_TOP - rlim_stack` and below the existing stack VMA (Linux behavior).
 
-### T1.13 — `pcache` × `uvmcow_share` reference-count leak / double-put
+### T1.13 — `pcache` × `uvmcow_share` reference-count leak / double-put **[FIXED]**
 **File:** `kernel/vma.c:187-211`, `kernel/vmem.c:213-214`, `kernel/page_cache.c:29-49`
 **Problem:**
 - `uvmcow_share` calls `page_get(pa)` for every leaf PTE, including PTEs pointing at pcache slot pages. Nothing ever pairs that with `page_put` for pcache pages → `page_refs[pcache_pfn]` increments permanently → eventual `page_get: refcount overflow` panic at 65 535.
-- The "already-present PTE + `VMA_FLAG_COW`" branch in `vma.c` does two `pcache_put`s (lookup + fault-time). Correct on first CoW; on second CoW the PTE points at an anon page yet the same dance runs → pcache slot refcount underflow.
+- The "already-present PTE + `VMA_FLAG_COW`" branch in `vma.c` does two `pcache_put`s (lookup + fault-time). Correct on first CoW; on later forks the PTE can point at an anon page yet the same dance runs → corrupts an unrelated pcache slot's refcnt + leaks anon `page_refs`.
 **Reproducer:** mmap MAP_PRIVATE a file, write, fork, write again — eventually panics.
-**Fix:** Skip `page_get(pa)` for pcache pages in `uvmcow_share`; in present-PTE+COW branch, look up the pcache slot and only run drop-path if the PTE still points at the pcache page.
+**Fix applied:** Added `pcache_pa_to_slot(pa)` reverse-lookup helper. `uvmcow_share` skips `page_get` for pcache pages. File-CoW branch now uses the helper to discriminate pcache vs anon `old_pa` and does the right ref drop in each case (`pcache_put` × 1 for pcache, `page_put` for anon). Symmetric guards added in `free_user_pages_level` and `uvmunmap_range` so the page_refs invariant is structural. Verified by new kernel selftest `test_pcache_uvmcow_refleak` (asserts page_refs unchanged across 256 share+free cycles) and userspace `cow_pcache_refleak_test` (50× three CoW scenarios). See implementation decisions doc for full rationale.
 
 ### T1.14 — Missing `SYS_truncate` / `SYS_ftruncate`
 **File:** `kernel/include/syscall.h`, `kernel/syscall.c`, `libc/misc.c:63-64`

@@ -184,6 +184,79 @@ static void test_uvmcow_share(void) {
 }
 
 // ----------------------------------------------------------------------------
+// pcache × uvmcow_share refcount regression (audit T1.13)
+//
+// Pre-fix: uvmcow_share walked every leaf PTE and called page_get(pa),
+// including PTEs pointing at pcache slot pages. Pcache pages live outside
+// the page_ref accounting (slot owns its backing page for life), so each
+// fork of a proc holding a faulted-in file mapping permanently bumped
+// page_refs[pcache_pfn] by 1 without any matching page_put. After ~65535
+// fork()s of any proc with a mapped file, page_get panicked with
+// "refcount overflow".
+//
+// This test maps a pcache page into a synthetic parent pgtable, records
+// page_refs[pcache_pfn], runs 256 uvmcow_share + free_user_pgtable
+// cycles, and asserts the refcount is unchanged. 256 iterations is enough
+// to expose the linear leak (1 ref per share) without taking visible boot
+// time even before the fix bites.
+// ----------------------------------------------------------------------------
+
+static void test_pcache_uvmcow_refleak(void) {
+    printk("[SELFTEST] -- pcache_uvmcow_refleak --\n");
+
+    struct inode *ip = 0;
+    if (namei("/bin/init", &ip) < 0 || !ip) {
+        st_check(0, "pcache_uvmcow: namei"); return;
+    }
+    /* Fault in page 0 of /bin/init through the page cache. */
+    struct pcache_page *pp = 0;
+    if (pcache_get(ip, 0, &pp) < 0 || !pp) {
+        inode_put(ip);
+        st_check(0, "pcache_uvmcow: pcache_get");
+        return;
+    }
+    unsigned long pcache_pa = virt_to_phys((unsigned long)pp->page);
+
+    pgtable_t parent_pt = create_user_pgtable();
+    if (!parent_pt) {
+        pcache_put(pp); inode_put(ip);
+        st_check(0, "pcache_uvmcow: create parent_pt");
+        return;
+    }
+
+    /* Install pcache page as a user-readable PTE. Matches the RO install
+     * path in vma.c — no page_get, just vmem_map. */
+    unsigned long va = USER_TEXT_BASE;
+    vmem_map(parent_pt, va, pcache_pa, PAGE_SIZE,
+             PTE_R | PTE_U | PTE_V);
+
+    unsigned short refs_before = page_ref_get(pcache_pa);
+    int ok = 1;
+    for (int i = 0; i < 256; i++) {
+        pgtable_t child_pt = uvmcow_share(parent_pt);
+        if (!child_pt) { ok = 0; break; }
+        free_user_pgtable(child_pt);
+    }
+    unsigned short refs_after = page_ref_get(pcache_pa);
+
+    st_check(ok, "pcache_uvmcow: 256 share+free cycles complete");
+    st_check(refs_after == refs_before,
+             "pcache_uvmcow: page_refs[pcache_pfn] unchanged across forks");
+
+    /* Tear down parent. uvmunmap_range/free_user_pages_level must skip
+     * page_put on the pcache PTE (symmetric guard) — otherwise we'd
+     * underflow the slot's backing page here. */
+    uvmunmap_range(parent_pt, va, va + PAGE_SIZE);
+    free_user_pgtable(parent_pt);
+    pcache_put(pp);
+    inode_put(ip);
+
+    /* Slot ref returned to pre-test state. */
+    st_check(page_ref_get(pcache_pa) == refs_before,
+             "pcache_uvmcow: slot ref still intact after teardown");
+}
+
+// ----------------------------------------------------------------------------
 // Leak test: spawn + tear down 1000 processes and check pmem invariant
 // ----------------------------------------------------------------------------
 
@@ -997,6 +1070,7 @@ void selftest_run(void) {
     test_alloc_free_proc();
     test_load_elf();
     test_uvmcow_share();
+    test_pcache_uvmcow_refleak();
     test_leak_spawn_free();
     test_namei();
     test_tarfs_inode_tree();
