@@ -56,8 +56,7 @@ unsigned sleep(unsigned secs) {
     return (unsigned)rem.tv_sec;
 }
 
-int ftruncate(int fd, off_t len)              { (void)fd; (void)len; errno = ENOSYS; return -1; }
-int truncate(const char *path, off_t len)     { (void)path; (void)len; errno = ENOSYS; return -1; }
+/* truncate() / ftruncate() implementations live in libc/syscall.c. */
 int chown(const char *p, uid_t u, gid_t g)    { (void)p; (void)u; (void)g; return 0; }
 int fchown(int fd, uid_t u, gid_t g)          { (void)fd; (void)u; (void)g; return 0; }
 int lchown(const char *p, uid_t u, gid_t g)   { (void)p; (void)u; (void)g; return 0; }

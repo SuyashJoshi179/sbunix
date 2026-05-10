@@ -122,6 +122,14 @@ unsigned alarm(unsigned secs) {
     return (unsigned)ecall1(84, (long)secs);
 }
 
+int truncate(const char *path, long length) {
+    return (int)syscall_ret(ecall2(85, (long)path, length));
+}
+
+int ftruncate(int fd, long length) {
+    return (int)syscall_ret(ecall2(86, (long)fd, length));
+}
+
 /* POSIX getcwd: returns buf on success, NULL on error.
  * glibc extension: buf == NULL → allocate. With size==0 use PATH_MAX.
  * BusyBox ash relies on this extension (`getcwd(NULL, 0)`). */

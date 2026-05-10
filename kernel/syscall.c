@@ -1438,6 +1438,43 @@ static int64_t sys_mount(const char *u_target, const char *u_fstype) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_truncate / sys_ftruncate — set a file's length.
+//
+// Currently only `length == 0` is supported (full truncate); any other
+// length returns -EINVAL because the underlying fs ops only know how to
+// drop all data blocks. Extending or partial-shrink would need a richer
+// truncate-to(ip, length) op which is left for a future change.
+// ---------------------------------------------------------------------------
+static int64_t do_truncate_inode(struct inode *ip, int64_t length) {
+    if (ip->type != I_REG) return -EINVAL;
+    if (length < 0) return -EINVAL;
+    if (length == (int64_t)ip->size) return 0;          /* no-op */
+    if (length != 0) return -EINVAL;                    /* see comment */
+    if (!ip->ops || !ip->ops->truncate) return -EROFS;
+    return ip->ops->truncate(ip);
+}
+
+static int64_t sys_truncate(const char *u_path, int64_t length) {
+    char path[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(u_path, path, sizeof(path));
+    if (rc < 0) return rc;
+    struct inode *ip;
+    if (namei(path, &ip) < 0) return -ENOENT;
+    rc = (int)do_truncate_inode(ip, length);
+    inode_put(ip);
+    return rc;
+}
+
+static int64_t sys_ftruncate(int fd, int64_t length) {
+    struct pcb *p = current_proc();
+    if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
+    struct file *f = p->ofile[fd];
+    if (!f->writable) return -EBADF;
+    if (!f->ip) return -EINVAL;
+    return do_truncate_inode(f->ip, length);
+}
+
+// ---------------------------------------------------------------------------
 // sys_alarm(secs) — schedule a SIGALRM after `secs` seconds.
 //
 // Replaces any prior pending alarm; returns the prior alarm's remaining
@@ -1654,6 +1691,14 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_alarm:
             return sys_alarm((unsigned)trapframe[TF_A0]);
+
+        case SYS_truncate:
+            return sys_truncate((const char *)trapframe[TF_A0],
+                                (int64_t)trapframe[TF_A1]);
+
+        case SYS_ftruncate:
+            return sys_ftruncate((int)(int64_t)trapframe[TF_A0],
+                                 (int64_t)trapframe[TF_A1]);
 
         case SYS_wait4: {
             int pid_a       = (int)(int64_t)trapframe[TF_A0];
