@@ -674,6 +674,8 @@ static int sbfs_op_stat(struct inode *ip, struct stat *st) {
     st->st_atime = si->d.mtime;
     st->st_mtime = si->d.mtime;
     st->st_ctime = si->d.mtime;
+    st->st_blksize = 512;
+    st->st_blocks  = (si->d.size + 511) / 512;
     return 0;
 }
 
