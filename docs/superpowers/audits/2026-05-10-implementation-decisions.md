@@ -111,3 +111,27 @@ Notify the parent with SIGCHLD on the same path (the parent might be in `wait4(W
 **Out of scope:**
 - Truly dynamic per-process fd tables.
 - Per-uid resource accounting.
+
+---
+
+## T1.16 + T1.17 + (partial) T2.9 — `init` execv NULL argv, no backoff, no orphan reap
+
+**Approach chosen:** Three coupled fixes in `bin/init/init.c`'s shell-respawn loop:
+
+1. **`execv("/bin/sh", 0)` → `execv("/bin/sh", sh_args)` with a non-NULL argv.** POSIX requires `argv[0]` non-NULL; the `0` literal was UB in practice on every libc.
+2. **Exec failure exits 127** (POSIX shell convention for "command not found") instead of `1`, so a backoff loop can distinguish exec-failure from a normal shell exit.
+3. **Backoff:** track consecutive exit-code-127 results in `sh_failures`; on the 5th, `sleep(5)` and reset. Prevents busy-looping the kernel log when `/bin/sh` is missing or corrupt.
+4. **Orphan reap (T2.9):** call `while (waitpid(-1, 0, WNOHANG) > 0) {}` at the top of every iteration so detached subprocesses reparented to init are reaped instead of leaking zombie slots.
+
+**Alternatives rejected:**
+- *Panic on first sh-exec failure*: too brittle. Allow some retries in case it's a transient (oom, page fault) issue.
+- *Exponential backoff*: overkill. 5s flat after 5 fast failures is enough.
+- *Reap orphans on a separate timer/SIGCHLD handler*: init is single-threaded; reap-on-loop-iteration is simpler and bounded by how often init wakes anyway (every shell exit).
+
+**Edge cases handled:**
+- `waitpid(-1, …, WNOHANG)` returns 0 when no zombies, so the inner loop exits cleanly.
+- Failure counter resets on any non-127 exit so a transient crash doesn't accidentally trigger backoff later.
+- The forked sh child still calls `setpgid(0, 0)` first so the foreground pgid handoff works.
+
+**Out of scope:**
+- T2.9 fully — orphan reap also belongs anywhere else that long-running processes spawn detached children. Init is the most important reaper but not the only one needed in principle. Audit doc T2.9 stays open for that reason.
