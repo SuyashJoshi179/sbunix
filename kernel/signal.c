@@ -63,6 +63,18 @@ void send_signal(struct pcb *target, int sig) {
 
     target->sig_pending |= (1ULL << sig);
 
+    /* SIGKILL must terminate a stopped process. Without this, kill -KILL
+     * on a Ctrl-Z'd job hangs forever (the stopped proc never runs
+     * check_signals to notice the pending kill). Force it back to READY
+     * so the scheduler picks it up and the default ACT_TERM action runs. */
+    if (sig == SIGKILL && target->state == PROC_STOPPED) {
+        target->state = PROC_READY;
+        target->wake_tick = 0;
+        /* Notify parent that the stopped child is moving (will exit
+         * shortly via check_signals → proc_exit_current). */
+        send_signal_by_pid(target->parent_pid, SIGCHLD);
+    }
+
     /* Wake a sleeping process if the signal is now deliverable. */
     if (target->state == PROC_SLEEPING &&
         sig_has_pending(target->sig_pending, target->sig_blocked)) {

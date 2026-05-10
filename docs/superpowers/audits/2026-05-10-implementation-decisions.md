@@ -69,3 +69,24 @@ Append-only log of design decisions made while fixing audit findings. One entry 
 **Out of scope:**
 - Multi-user permission checks (no uid system).
 - Limiting broadcast to the caller's session (SBUnix is single-session).
+
+---
+
+## T1.7 — SIGKILL on stopped process hangs forever
+
+**Approach chosen:** In `send_signal`, after marking SIGKILL pending, if the target is `PROC_STOPPED`, force `state = PROC_READY` and clear `wake_tick`. The scheduler will then pick the process up; `check_signals` runs on its next user-mode return path, sees SIGKILL, and runs the default `ACT_TERM` action.
+
+Notify the parent with SIGCHLD on the same path (the parent might be in `wait4(WUNTRACED)` waiting on the stopped child).
+
+**Alternatives rejected:**
+- *Synthesize an exit directly inside `send_signal`*: would require `send_signal` to be safe to call from arbitrary contexts (timer IRQ, other procs). Letting the scheduler+check_signals handle the exit keeps the death path consistent with every other ACT_TERM signal.
+- *Auto-resume on any fatal signal*: SIGTERM and friends can be caught/blocked, so they shouldn't unilaterally resume a stopped process. SIGKILL is special-cased because it can never be caught or blocked.
+
+**Edge cases handled:**
+- Parent in `wait4(WUNTRACED)` on the stopped child wakes via the SIGCHLD send (`proc_wakeup` would already happen on the subsequent ACT_TERM exit, but the explicit SIGCHLD here keeps the bookkeeping clean).
+- The pre-existing force-unblock + override-SIG_IGN at the top of `send_signal` already covers the case where SIGKILL is masked or ignored.
+- Sleeping (`PROC_SLEEPING`) processes already woken via the existing deliverable-signal check below.
+
+**Out of scope:**
+- SIGTERM/SIGINT auto-resume (caller can pair `SIGCONT; SIGTERM` if desired).
+- Group-wide SIGKILL semantics — `kill(-pgid, SIGKILL)` already iterates the pgrp and hits each member individually via `send_signal`.
