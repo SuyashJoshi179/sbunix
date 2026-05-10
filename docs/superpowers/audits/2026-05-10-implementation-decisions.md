@@ -90,3 +90,24 @@ Notify the parent with SIGCHLD on the same path (the parent might be in `wait4(W
 **Out of scope:**
 - SIGTERM/SIGINT auto-resume (caller can pair `SIGCONT; SIGTERM` if desired).
 - Group-wide SIGKILL semantics — `kill(-pgid, SIGKILL)` already iterates the pgrp and hits each member individually via `send_signal`.
+
+---
+
+## T1.8 — `RLIMIT_NOFILE = 16` default too low
+
+**Approach chosen:** Quadruple the per-process fd table (`NOFILE` 16 → 64) and the global open-file table (`NFILE` 128 → 256). Default `RLIMIT_NOFILE` rlim_cur and rlim_max both set to `NOFILE` (64). Update libc-side advertised limits to match (`OPEN_MAX`, `FOPEN_MAX`, `_SC_OPEN_MAX`).
+
+**Alternatives rejected:**
+- *Match Linux's 1024 default*: each PCB pays `NOFILE * sizeof(void *)` for the static `ofile[]` array. 1024 × 8 = 8 KiB/proc, exceeds the 4 KiB single-page PCB allocation. A larger PCB allocation is doable but invasive for marginal benefit on a teaching OS.
+- *Make `ofile` dynamically sized*: extra complexity, more error paths.
+- *Bump only the rlimit and leave NOFILE=16*: rlim_cur > NOFILE is meaningless — the array is the hard cap.
+
+**Memory cost:** PCB grows by `(64-16) * 8 = 384` bytes. PCB still fits in one 4 KiB page (was ~2.6 KiB before; now ~3.0 KiB).
+
+**Edge cases handled:**
+- `NOFILE` is the hard ceiling; `rlim_max` set to `NOFILE` so user code can't `setrlimit` past the array.
+- libc `OPEN_MAX`, `FOPEN_MAX`, `_SC_OPEN_MAX(sysconf)` all bumped to 64 so portable code probes consistent values.
+
+**Out of scope:**
+- Truly dynamic per-process fd tables.
+- Per-uid resource accounting.

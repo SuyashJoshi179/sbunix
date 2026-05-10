@@ -95,7 +95,7 @@ char  *tmpnam(char *s);
 
 #define L_tmpnam 32
 #define FILENAME_MAX 4096
-#define FOPEN_MAX 16
+#define FOPEN_MAX 64
 #define TMP_MAX 1
 
 #endif

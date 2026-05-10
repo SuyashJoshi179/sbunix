@@ -172,8 +172,8 @@ struct pcb *alloc_proc(void) {
     }
     p->rlim[RLIMIT_STACK].rlim_cur  = DEFAULT_STACK_SOFT;
     p->rlim[RLIMIT_STACK].rlim_max  = DEFAULT_STACK_HARD;
-    p->rlim[RLIMIT_NOFILE].rlim_cur = 16;
-    p->rlim[RLIMIT_NOFILE].rlim_max = 64;
+    p->rlim[RLIMIT_NOFILE].rlim_cur = NOFILE;
+    p->rlim[RLIMIT_NOFILE].rlim_max = NOFILE;
     // context is zeroed by page_alloc; set sp and ra
     p->context.sp = (uint64_t)p->kstack_page + KSTACK_SIZE;
     p->context.ra = (uint64_t)forkret;
