@@ -15,10 +15,6 @@ struct inode;
 #define VMA_FLAG_COW    0x1
 #define VMA_FLAG_SHARED 0x2
 
-/* Legacy sbrk ceiling (decoupled from MMAP_BASE so sbrk callers stay
- * confined to the low region). Lies far below HEAP_ARENA_BASE. */
-#define HEAP_MAX        0x20000000UL          /* 512 MB legacy sbrk ceiling */
-
 /* Top-down search bounds for sys_mmap (when MAP_FIXED not set). */
 #define MMAP_START      MMAP_BASE
 #define MMAP_END        MMAP_END_VA

@@ -915,7 +915,20 @@ static int64_t sys_sbrk(int64_t incr) {
     uint64_t new_end = old_end + (uint64_t)incr;
 
     if (incr > 0) {
-        if (new_end > HEAP_MAX) return -ENOMEM;
+        if (new_end < old_end) return -ENOMEM;  /* size_t overflow */
+        /* Cap at the lowest VMA start above the current heap end so the
+         * heap does not collide with libc's fixed arena, prior mmap'd
+         * regions, or the user stack. With no VMA above, allow growth up
+         * to MMAP_BASE (start of the dynamic mmap region). No artificial
+         * fixed ceiling — limit is whatever the address space actually
+         * has free. */
+        uint64_t ceiling = MMAP_BASE;
+        for (struct vma *v = p->vma_list; v; v = v->next) {
+            if (v == p->heap_vma) continue;
+            if (v->start >= old_end && v->start < ceiling)
+                ceiling = v->start;
+        }
+        if (new_end > ceiling) return -ENOMEM;
         p->heap_vma->end = new_end;
     } else if (incr < 0) {
         if (new_end < p->heap_vma->start) return -EINVAL;
