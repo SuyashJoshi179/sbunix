@@ -409,6 +409,51 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_symlink — create a symbolic link at `linkpath` whose target string
+// is `target`. Unlike hard link, target is NOT resolved: it's stored
+// literally and only walked when something later traverses the link.
+//
+// Errors: -ENOENT (parent dir missing), -EEXIST (linkpath exists),
+// -ENOTDIR (parent not a dir), -EROFS (fs lacks symlink op),
+// -EINVAL (empty target / bad path), -ENAMETOOLONG (target too long).
+// ---------------------------------------------------------------------------
+static int64_t sys_symlink(const char *u_target, const char *u_linkpath) {
+    char ktarget[PATH_MAX_LOCAL], klinkpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(u_target, ktarget, sizeof(ktarget));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(u_linkpath, klinkpath, sizeof(klinkpath));
+    if (rc < 0) return rc;
+    if (ktarget[0] == '\0') return -EINVAL;
+
+    char parent_path[PATH_MAX_LOCAL];
+    const char *leaf = 0;
+    if (path_split(klinkpath, parent_path, &leaf) < 0) return -EINVAL;
+    if (!leaf || !leaf[0]) return -EINVAL;
+
+    struct inode *parent = 0;
+    if (namei(parent_path, &parent) < 0) return -ENOENT;
+    if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
+
+    if (parent->ops && parent->ops->lookup) {
+        struct inode *existing = 0;
+        if (parent->ops->lookup(parent, leaf, &existing) == 0) {
+            inode_put(existing);
+            inode_put(parent);
+            return -EEXIST;
+        }
+    }
+
+    if (!parent->ops || !parent->ops->symlink) {
+        inode_put(parent);
+        return -EROFS;
+    }
+
+    int r = parent->ops->symlink(parent, leaf, ktarget);
+    inode_put(parent);
+    return r;
+}
+
+// ---------------------------------------------------------------------------
 // sys_rename — atomically move oldpath to newpath.
 //
 // POSIX rules implemented:
@@ -1699,6 +1744,10 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_ftruncate:
             return sys_ftruncate((int)(int64_t)trapframe[TF_A0],
                                  (int64_t)trapframe[TF_A1]);
+
+        case SYS_symlink:
+            return sys_symlink((const char *)trapframe[TF_A0],
+                               (const char *)trapframe[TF_A1]);
 
         case SYS_wait4: {
             int pid_a       = (int)(int64_t)trapframe[TF_A0];

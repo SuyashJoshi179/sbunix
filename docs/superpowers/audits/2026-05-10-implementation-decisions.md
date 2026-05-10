@@ -265,14 +265,40 @@ Replace libc's `-ENOSYS` stubs in `libc/misc.c` with real syscall wrappers in `l
 
 ---
 
-## T1.15 — `symlink(2)` deferred
+## T1.15 — `symlink(2)` creation
 
-**Status:** Not implemented this pass. SBUnix's tarfs has read-only symlinks (baked from the archive), but neither sbfs nor tmpfs has a symlink type. Adding `SYS_symlink` would require:
-1. New `symlink` op in `inode_ops`.
-2. `tmpfs` implementation (in-memory; simpler).
-3. `sbfs` implementation (on-disk dirent type marking, target stored in a data block — bumps the on-disk format).
+**State of read-side support (already in place, pre-audit):**
+- `I_LNK` inode type, `inode_ops.readlink`, `SYS_readlink` (#112).
+- VFS path walker follows symlinks with 8-hop ELOOP detection.
+- Relative-target resolution against the symlink's parent.
+- `lstat` + `S_ISLNK`, `O_NOFOLLOW` via `lnamei`.
+- Pre-baked symlinks work: tarfs (from tar entries), `/dev/loop` (self-referential), `/proc/self`.
+- `bin/symlink_test` PASS on the read-side flows.
 
-Keeping `libc/misc.c symlink()` as the existing `-ENOSYS` stub. If the grader specifically tests `symlink(2)`, this should be picked up next; estimated 2-3 hours of work plus a mkfs format bump.
+**What was missing:** `symlink(2)` — userspace cannot create new symlinks at runtime. `libc/misc.c:symlink()` was an `-ENOSYS` stub.
+
+**Approach chosen:** Add real creation, both in-memory (tmpfs) and on-disk (sbfs).
+
+1. New `inode_ops.symlink(parent, name, target)` slot.
+2. `tmpfs_op_symlink`: allocate a tmpfs inode of type `I_LNK`, store target in a static per-inode buffer (PATH_MAX), link into parent dir. Reuses `tmpfs_readlink` op already in place.
+3. `sbfs_op_symlink`: allocate a `sb_dinode` with new on-disk type `SBFS_T_LNK = 3` — the existing `uint16_t type` field already has room (no format bump), and the target string is stored in regular data blocks (same path as file content). `sbfs_iget` maps `type==3` → `vnode.type = I_LNK`. `sbfs_readlink` op reads target from the data blocks via `sbfs_readi`.
+4. `SYS_symlink(target, linkpath)` — splits `linkpath` into dirname + basename, namei's the parent, dispatches to `parent->ops->symlink(parent, name, target)`.
+5. Replace libc stub with thin syscall wrapper.
+
+**Alternatives rejected:**
+- *Store target in the dinode itself*: `sb_dinode.addrs[12]` is 48 bytes — would cap symlink targets at 48 chars. Tarfs already supports 100; matching feels right. Using data blocks gives full PATH_MAX without bumping dinode size.
+- *Bump on-disk format version*: not needed — the unused `type==3` slot was always reserved (the field is a u16, the comment just enumerated the values in use).
+
+**Edge cases handled:**
+- `linkpath` already exists → `-EEXIST` (handled in `SYS_symlink` namei pre-flight).
+- Target string too long (> 1023 chars on tmpfs, > a few-blocks on sbfs) → `-ENAMETOOLONG`.
+- Empty target → `-EINVAL`.
+- Read-only fs (tarfs) → `-EROFS` via NULL op.
+- mkfs not regenerated — fresh disks will have no symlinks; users create them at runtime.
+
+**Out of scope:**
+- `linkat(2)` / `symlinkat(2)` — single fixed semantics is enough.
+- Hardening: symlink targets containing internal NULs (we treat as terminator).
 
 ---
 

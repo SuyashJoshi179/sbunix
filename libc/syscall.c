@@ -130,6 +130,10 @@ int ftruncate(int fd, long length) {
     return (int)syscall_ret(ecall2(86, (long)fd, length));
 }
 
+int symlink(const char *target, const char *linkpath) {
+    return (int)syscall_ret(ecall2(87, (long)target, (long)linkpath));
+}
+
 /* POSIX getcwd: returns buf on success, NULL on error.
  * glibc extension: buf == NULL → allocate. With size==0 use PATH_MAX.
  * BusyBox ash relies on this extension (`getcwd(NULL, 0)`). */

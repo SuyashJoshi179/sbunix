@@ -38,6 +38,12 @@ struct inode_ops {
      * directory cross-parent moves, and loop prevention. */
     int  (*rename)  (struct inode *old_parent, const char *old_name,
                      struct inode *new_parent, const char *new_name);
+    /* Create a symbolic link `name` in `parent` whose target string is
+     * the NUL-terminated `target`. Caller (sys_symlink) guarantees `name`
+     * does not already exist in `parent`. NULL on read-only fs → caller
+     * should treat NULL as -EROFS. Implementation wraps begin_op/end_op
+     * as needed. */
+    int  (*symlink) (struct inode *parent, const char *name, const char *target);
     /* Fill `page` (PCACHE_PGSZ bytes) from inode at byte offset
      * pgidx*PCACHE_PGSZ. Tail past EOF zero-filled. NULL on filesystems
      * that do not participate in the page cache (devfs/procfs). */

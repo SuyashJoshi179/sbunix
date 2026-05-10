@@ -58,6 +58,9 @@
 #define SYS_truncate       85   // (const char *path, off_t length)
 #define SYS_ftruncate      86   // (int fd, off_t length)
 
+// Filesystem: symlink(2)
+#define SYS_symlink        87   // (const char *target, const char *linkpath)
+
 // Phase 8b: signals
 #define SYS_kill           90   // (pid, sig)
 #define SYS_sigaction      91   // (sig, const struct sigaction *act, struct sigaction *oldact)

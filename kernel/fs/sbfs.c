@@ -77,6 +77,9 @@ static int  sbfs_op_rename(struct inode *, const char *,
 /* Internal helpers used before their definition. */
 static void sbfs_itrunc(struct sbfs_inode *si);
 
+static int  sbfs_op_symlink (struct inode *, const char *, const char *);
+static int  sbfs_op_readlink(struct inode *, char *, uint64_t);
+
 static const struct inode_ops sbfs_iops = {
     .read     = sbfs_op_read,
     .write    = sbfs_op_write,
@@ -85,11 +88,13 @@ static const struct inode_ops sbfs_iops = {
     .getdents = sbfs_op_getdents,
     .truncate = sbfs_op_truncate,
     .release  = sbfs_op_release,
+    .readlink = sbfs_op_readlink,
     .create   = sbfs_op_create,
     .mkdir    = sbfs_op_mkdir,
     .unlink   = sbfs_op_unlink,
     .link     = sbfs_op_link,
     .rename   = sbfs_op_rename,
+    .symlink  = sbfs_op_symlink,
     .readpage  = sbfs_readpage,
     .writepage = sbfs_writepage,
     .writepage_locked = sbfs_writepage_locked,
@@ -149,9 +154,11 @@ static void sbfs_ilock(struct sbfs_inode *si) {
     memcpy(&si->d, bp->data + offset, sizeof(struct sb_dinode));
     brelse(bp);
     si->valid = 1;
-    /* Sync generic inode fields from dinode. */
+    /* Sync generic inode fields from dinode. type 3 was added for symlinks;
+     * target string is stored in regular data blocks (same layout as files). */
     si->vnode.type = (si->d.type == 1) ? I_REG
                    : (si->d.type == 2) ? I_DIR
+                   : (si->d.type == 3) ? I_LNK
                    : 0;
     si->vnode.size   = si->d.size;
     si->vnode.nlink  = si->d.nlink;
@@ -666,6 +673,8 @@ static int sbfs_op_stat(struct inode *ip, struct stat *st) {
         st->st_mode = 0100644;   /* regular file */
     } else if (si->d.type == 2) {
         st->st_mode = 040755;    /* directory    */
+    } else if (si->d.type == 3) {
+        st->st_mode = 0120777;   /* S_IFLNK | 0777 */
     } else {
         st->st_mode = 0;
     }
@@ -726,7 +735,8 @@ static int sbfs_op_getdents(struct inode *dir, uint64_t off, void *buf,
         /* Determine type. */
         struct inode *tip = sbfs_iget(de.inum);
         d64->d_type = (tip && tip->type == I_DIR) ? DT_DIR :
-                      (tip && tip->type == I_REG) ? DT_REG : DT_UNKNOWN;
+                      (tip && tip->type == I_REG) ? DT_REG :
+                      (tip && tip->type == I_LNK) ? DT_LNK : DT_UNKNOWN;
         if (tip) inode_put(tip);
         memcpy(d64->d_name, de.name, namelen);
         d64->d_name[namelen] = '\0';
@@ -794,6 +804,55 @@ static int sbfs_op_link(struct inode *parent, struct inode *target, const char *
     int rc = sbfs_link(parent, target, name);
     end_op();
     return rc;
+}
+
+/* -----------------------------------------------------------------------
+ * sbfs_op_symlink — create a symbolic link.
+ *
+ * On-disk representation: a new inode of type 3 (I_LNK) with the target
+ * string stored in regular data blocks via sbfs_writei. No new on-disk
+ * structures or format bumps — type==3 was a previously-unused value
+ * in the existing 16-bit dinode.type field.
+ * ----------------------------------------------------------------------- */
+static int sbfs_op_symlink(struct inode *parent, const char *name,
+                           const char *target) {
+    if (!target || target[0] == '\0') return -EINVAL;
+
+    /* Bound target length. sbfs files cap at a few KiB anyway; cap at
+     * 1023 bytes (PATH_MAX is 4096 but this matches what readlink users
+     * tend to pass for buf size and keeps it small). */
+    uint64_t tlen = 0;
+    while (target[tlen] && tlen < 1024) tlen++;
+    if (tlen >= 1024) return -ENAMETOOLONG;
+
+    begin_op();
+    struct inode *ip = sbfs_create(parent, name, 3 /* SBFS_T_LNK */);
+    if (!ip) { end_op(); return -ENOSPC; }
+
+    int w = sbfs_writei(ip, 0, target, tlen);
+    if (w != (int)tlen) {
+        /* Roll back: drop the link from parent and mark the inode free. */
+        sbfs_unlink(parent, name);
+        end_op();
+        inode_put(ip);
+        return -ENOSPC;
+    }
+
+    struct sbfs_inode *si = (struct sbfs_inode *)ip;
+    si->d.size = (uint32_t)tlen;
+    si->vnode.size = tlen;
+    si->dirty = 1;
+    sbfs_iupdate(si);
+    end_op();
+    inode_put(ip);
+    return 0;
+}
+
+static int sbfs_op_readlink(struct inode *ip, char *buf, uint64_t n) {
+    if (ip->type != I_LNK) return -EINVAL;
+    int got = sbfs_readi(ip, 0, buf, n);
+    if (got < 0) return got;
+    return got;
 }
 
 /* -----------------------------------------------------------------------

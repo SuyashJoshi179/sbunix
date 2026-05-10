@@ -60,8 +60,7 @@ unsigned sleep(unsigned secs) {
 int chown(const char *p, uid_t u, gid_t g)    { (void)p; (void)u; (void)g; return 0; }
 int fchown(int fd, uid_t u, gid_t g)          { (void)fd; (void)u; (void)g; return 0; }
 int lchown(const char *p, uid_t u, gid_t g)   { (void)p; (void)u; (void)g; return 0; }
-/* link() is now a real syscall — see libc/syscall.c. */
-int symlink(const char *t, const char *l)     { (void)t; (void)l; errno = ENOSYS; return -1; }
+/* link() / symlink() are real syscalls — see libc/syscall.c. */
 int rmdir(const char *p)                      { return unlink(p); }
 
 char *ttyname(int fd) {
