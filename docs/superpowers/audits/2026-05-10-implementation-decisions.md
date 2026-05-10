@@ -135,3 +135,17 @@ Notify the parent with SIGCHLD on the same path (the parent might be in `wait4(W
 
 **Out of scope:**
 - T2.9 fully — orphan reap also belongs anywhere else that long-running processes spawn detached children. Init is the most important reaper but not the only one needed in principle. Audit doc T2.9 stays open for that reason.
+
+---
+
+## T1.10 — `SIG_ERR` undefined; `signal()` returned `SIG_IGN` on error
+
+**Approach chosen:** Define `SIG_ERR` as `((sighandler_t)-1)` in `libc/include/signal.h` (matches glibc/musl/POSIX); change `libc/signal.c:signal()` to return `SIG_ERR` on `sigaction` failure.
+
+**Alternatives rejected:**
+- *Define SIG_ERR as something other than -1*: every other libc uses -1; deviating breaks portable code that assumes the cast.
+- *Leave `SIG_IGN` as the error sentinel*: silently mis-handles `if (signal(...) == SIG_ERR)` checks because real handlers might compare `== SIG_IGN` for "this signal is currently ignored".
+
+**Edge cases handled:** None — pure header + one-line return-value swap.
+
+**Out of scope:** Re-evaluating BSD-vs-System-V semantics of `signal()` (handler stays installed across delivery vs reset to SIG_DFL). Current behavior keeps the handler installed (BSD semantics, what most tests expect). Audit didn't flag this as broken; leaving it.
