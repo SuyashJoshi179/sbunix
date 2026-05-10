@@ -29,7 +29,7 @@ int main(void) {
     }
     check(r == -1 && errno == EMFILE, "NOFILE cap enforced with -EMFILE");
 
-    int dup2_rc = dup2(fds[0], 63);
+    int dup2_rc = dup2(fds[0], 9999);
     check(dup2_rc == -1 && errno == EBADF, "dup2 newfd beyond limit returns -EBADF");
 
     for (int i = 0; i < nfds; i++) close(fds[i]);

@@ -664,10 +664,10 @@ static void test_rlimit_roundtrip(void) {
              "default RLIMIT_STACK soft = 8 MB");
     st_check(p->rlim[RLIMIT_STACK].rlim_max  == 64UL * 1024 * 1024,
              "default RLIMIT_STACK hard = 64 MB");
-    st_check(p->rlim[RLIMIT_NOFILE].rlim_cur == 16,
-             "default RLIMIT_NOFILE soft = 16");
-    st_check(p->rlim[RLIMIT_NOFILE].rlim_max == 64,
-             "default RLIMIT_NOFILE hard = 64");
+    st_check(p->rlim[RLIMIT_NOFILE].rlim_cur == NOFILE,
+             "default RLIMIT_NOFILE soft = NOFILE");
+    st_check(p->rlim[RLIMIT_NOFILE].rlim_max == NOFILE,
+             "default RLIMIT_NOFILE hard = NOFILE");
     st_check(p->rlim[RLIMIT_AS].rlim_cur     == RLIM_INFINITY,
              "default RLIMIT_AS = RLIM_INFINITY");
 
