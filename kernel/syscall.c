@@ -803,26 +803,30 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc_path < 0) return rc_path;
 
-    // Resolve through VFS.
+    // Resolve through VFS — works for any filesystem with a readpage op
+    // (tarfs, sbfs, tmpfs, ...). Don't cast fs_data; let the loader pull
+    // bytes through the inode's read path.
     struct inode *ip;
     if (namei(kpath, &ip) < 0) {
         printk("exec: '%s' not found\n", kpath);
         return -ENOENT;
     }
-    unsigned long img_sz = ip->size;
-    struct { const char *data; unsigned long file_size; } *td = ip->fs_data;
-    const void *img = td->data;
-    inode_put(ip);
-
-    if (!img) return -ENOENT;
+    if (ip->type != I_REG) {
+        inode_put(ip);
+        return -EACCES;
+    }
 
     pgtable_t new_pt = create_user_pgtable();
-    if (!new_pt) return -ENOMEM;
+    if (!new_pt) {
+        inode_put(ip);
+        return -ENOMEM;
+    }
 
     struct vma *vlist = 0;
     uint64_t brk = 0;
     unsigned long entry;
-    int load_rc = load_user_elf(new_pt, img, img_sz, &entry, &vlist, &brk);
+    int load_rc = load_user_elf(new_pt, ip, &entry, &vlist, &brk);
+    inode_put(ip);
     if (load_rc < 0) {
         free_user_pgtable(new_pt);
         return load_rc;

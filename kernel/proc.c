@@ -619,7 +619,7 @@ void proc_sleep_ms(uint64_t ms) {
 // ----------------------------------------------------------------
 
 void sched_init(void) {
-    struct pcb *init = proc_spawn("bin/init");
+    struct pcb *init = proc_spawn("/bin/init");
     if (!init) panic("sched_init: failed to spawn init");
     init_pid = init->pid;
 

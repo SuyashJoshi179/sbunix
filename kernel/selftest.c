@@ -105,21 +105,21 @@ static void test_alloc_free_proc(void) {
 static void test_load_elf(void) {
     printk("[SELFTEST] -- load_user_elf --\n");
 
-    unsigned long sz = 0;
-    const void *img = tarfs_find("bin/init", &sz);
-    if (!img) {
-        st_check(0, "load_elf: tarfs_find bin/init");
+    struct inode *ip = 0;
+    if (namei("/bin/init", &ip) < 0 || !ip) {
+        st_check(0, "load_elf: namei /bin/init");
         return;
     }
 
     pgtable_t pt = create_user_pgtable();
     st_check(pt != 0, "load_elf: create_user_pgtable");
-    if (!pt) return;
+    if (!pt) { inode_put(ip); return; }
 
     unsigned long entry = 0;
     struct vma *vlist = 0;
     uint64_t brk = 0;
-    int rc = load_user_elf(pt, img, sz, &entry, &vlist, &brk);
+    int rc = load_user_elf(pt, ip, &entry, &vlist, &brk);
+    inode_put(ip);
     st_check(rc == 0,                    "load_elf: load_user_elf returns 0");
     st_check(entry >= USER_TEXT_BASE,    "load_elf: entry >= USER_TEXT_BASE");
     st_check(entry <  KVMEM_OFFSET,      "load_elf: entry in user virtual space");
@@ -138,17 +138,18 @@ static void test_load_elf(void) {
 static void test_uvmcow_share(void) {
     printk("[SELFTEST] -- uvmcow_share --\n");
 
-    unsigned long sz = 0;
-    const void *img = tarfs_find("bin/init", &sz);
-    if (!img) { st_check(0, "cow_share: tarfs setup"); return; }
+    struct inode *ip = 0;
+    if (namei("/bin/init", &ip) < 0 || !ip) { st_check(0, "cow_share: namei"); return; }
 
     pgtable_t parent_pt = create_user_pgtable();
-    if (!parent_pt) { st_check(0, "cow_share: parent create_user_pgtable"); return; }
+    if (!parent_pt) { inode_put(ip); st_check(0, "cow_share: parent create_user_pgtable"); return; }
 
     unsigned long entry = 0;
     struct vma *vlist = 0;
     uint64_t brk = 0;
-    if (load_user_elf(parent_pt, img, sz, &entry, &vlist, &brk) < 0) {
+    int load_rc = load_user_elf(parent_pt, ip, &entry, &vlist, &brk);
+    inode_put(ip);
+    if (load_rc < 0) {
         free_user_pgtable(parent_pt);
         st_check(0, "cow_share: parent load_user_elf");
         return;
@@ -193,7 +194,7 @@ static void test_leak_spawn_free(void) {
     int ok = 1;
 
     for (int i = 0; i < 1000; i++) {
-        struct pcb *p = proc_spawn("bin/init");
+        struct pcb *p = proc_spawn("/bin/init");
         if (!p) {
             ok = 0;
             printk("[SELFTEST] leak: spawn failed at iter=%d\n", i);

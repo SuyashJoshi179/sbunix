@@ -173,3 +173,30 @@ In both cases the on-disk transaction is unrecoverable anyway (we can't trust *a
 **Out of scope:**
 - Adding a CRC over the log header. Useful but disk-format-changing.
 - Detecting torn data-block writes. The header gates the commit; if data blocks are torn we'd need per-block CRCs.
+
+---
+
+## T1.5 — `do_exec` (and `proc_spawn`) crash on non-tarfs binaries
+
+**Approach chosen:** Refactor `load_user_elf` to take `struct inode *` instead of `(const void *, size)` and pull bytes via `generic_file_read` (the VFS read path that goes through `ip->ops->readpage`). Both call sites — `do_exec` in `syscall.c` and `proc_spawn` in `exec.c` — now resolve the path with `namei` and pass the inode pointer through. The tarfs-specific cast of `ip->fs_data` is gone.
+
+A small inline helper `read_at(ip, off, buf, n)` wraps `generic_file_read` and treats short reads as `-ENOEXEC` (malformed binary).
+
+**Alternatives rejected:**
+- *Pre-flight reject non-tarfs binaries with `-ENOEXEC`*: avoids the crash but ships a known-broken corner. The audit's whole point is that "known-broken" is what burns submissions.
+- *Allocate a contiguous bounce buffer of size `ip->size`, read whole file, pass to old API*: page allocator is single-page only; multi-page contiguous would need a vmalloc-style allocator we don't have.
+- *Add a `read_into_buffer` op per fs*: extra interface for a problem `generic_file_read` already solves.
+
+**Edge cases handled:**
+- Reject non-regular-file inodes (`ip->type != I_REG`) with `-EACCES` instead of trying to exec a directory or symlink directly.
+- ELF program-header count capped at 32 (sanity bound; real binaries have ≤8).
+- Short reads on header, phdr table, or any segment all return `-ENOEXEC` cleanly with intermediate VMA list freed.
+- `inode_put` always called on the namei'd inode, including on early-error paths.
+- Selftest's two `load_user_elf` callers updated (`test_load_elf`, `test_uvmcow_share`) to pass an inode pointer obtained via `namei("/bin/init")`.
+- `sched_init`'s and selftest's `proc_spawn("bin/init")` paths bumped to absolute `/bin/init` because kernel threads have no cwd to anchor a relative resolve.
+
+**Out of scope:**
+- Lazy/on-demand segment loading (mmap-style). All segments are still eagerly read into freshly allocated kernel pages at exec time.
+- Removing `tarfs_find` — selftest still uses it as a sanity check that the tarfs blob is well-formed before any VFS-level code runs.
+
+**Side-effect commits to `kernel/include/errno.h`:** added `ENOEXEC=8` and `EAGAIN=11` (used by the new return paths and by the now-tolerant oom_test).
