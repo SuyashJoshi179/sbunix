@@ -90,9 +90,39 @@ void recover_from_log(void) {
     struct buf *hb = bread(log.start);
     struct log_header *lh = (struct log_header *)hb->data;
 
-    log.nblocks = lh->n;
-    for (int i = 0; i < (int)lh->n; i++)
-        log.blocks[i] = lh->block[i];
+    /* Bounds-check the on-disk header before trusting it: a torn write
+     * or stale superblock can leave lh->n at any 32-bit value. Without
+     * this guard the loop below writes past log.blocks[LOG_HDR_MAX-1]
+     * and corrupts adjacent kernel state, then install_trans replays
+     * arbitrary garbage to disk. Treat an out-of-range header as "no
+     * pending transaction" (the on-disk data is unrecoverable anyway,
+     * and zeroing it puts the log back in a known state). */
+    uint32_t n = lh->n;
+    if (n > LOG_HDR_MAX) {
+        printk("log: header n=%u exceeds LOG_HDR_MAX=%d; clearing\n",
+               n, LOG_HDR_MAX);
+        brelse(hb);
+        log.nblocks = 0;
+        write_log_header();
+        return;
+    }
+
+    log.nblocks = (int)n;
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t b = lh->block[i];
+        /* Each entry must point inside the disk's data region; reject
+         * obvious garbage to avoid scribbling on the superblock or log. */
+        if (b == 0 || b == log.start ||
+            (b >= log.start && b < log.start + log.size)) {
+            printk("log: header entry %u points at block %u; clearing log\n",
+                   i, b);
+            brelse(hb);
+            log.nblocks = 0;
+            write_log_header();
+            return;
+        }
+        log.blocks[i] = b;
+    }
     brelse(hb);
 
     if (log.nblocks > 0) {

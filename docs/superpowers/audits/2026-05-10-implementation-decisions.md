@@ -149,3 +149,27 @@ Notify the parent with SIGCHLD on the same path (the parent might be in `wait4(W
 **Edge cases handled:** None — pure header + one-line return-value swap.
 
 **Out of scope:** Re-evaluating BSD-vs-System-V semantics of `signal()` (handler stays installed across delivery vs reset to SIG_DFL). Current behavior keeps the handler installed (BSD semantics, what most tests expect). Audit didn't flag this as broken; leaving it.
+
+---
+
+## T1.11 — `recover_from_log` trusts on-disk `lh->n` blindly
+
+**Approach chosen:** Defensive validation of the on-disk log header in `recover_from_log`:
+1. Reject `lh->n > LOG_HDR_MAX` outright; log a message, zero the header, return.
+2. Reject any individual block entry pointing at block 0, the log header itself, or anywhere inside the log region. Same recovery action.
+
+In both cases the on-disk transaction is unrecoverable anyway (we can't trust *any* of the header's contents), so the safe move is to clear it and continue with no replay.
+
+**Alternatives rejected:**
+- *Add a magic number to the on-disk header*: requires bumping the on-disk format version, conflicts with the existing mkfs layout. Reviewer-visible upside is small for a course OS.
+- *Panic on corruption*: makes a single bad sector fatal across reboots. Recoverable-with-data-loss is friendlier and matches xv6 behavior.
+- *Bounds-check `lh->n` only*: doesn't catch entries pointing at the superblock or other system metadata. Per-entry check is cheap (≤15 entries).
+
+**Edge cases handled:**
+- `lh->n == 0`: skipped naturally (loop doesn't run; the existing `log.nblocks > 0` guard prevents a no-op replay).
+- Entry equal to `log.start` (header itself) or any in-log slot is rejected.
+- Entry equal to 0 is rejected (block 0 is the on-disk superblock by convention; replaying onto it would brick the disk).
+
+**Out of scope:**
+- Adding a CRC over the log header. Useful but disk-format-changing.
+- Detecting torn data-block writes. The header gates the commit; if data blocks are torn we'd need per-block CRCs.
