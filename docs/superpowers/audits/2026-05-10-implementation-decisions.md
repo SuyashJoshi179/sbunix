@@ -309,7 +309,7 @@ Replace libc's `-ENOSYS` stubs in `libc/misc.c` with real syscall wrappers in `l
 1. Parse flag characters: `-` (left), `+` (plus), space, `#` (alt), `0` (zero-pad).
 2. Parse width: digits or `*` (consume an `int` arg; negative width sets `-` and uses `|width|`).
 3. Parse precision: `.` then digits or `.*`.
-4. Parse length modifier: `h`, `hh`, `l`, `ll`, `z`, `j`, `t`. (`h`/`hh` are accepted but no-op — args are int-promoted by C anyway.)
+4. Parse length modifier: `h`, `hh`, `l`, `ll`, `z`, `j`, `t`. `h`/`hh` are tracked as `lng = -1` / `-2`; the underlying short/char is promoted to `int` by default argument promotions, so the integer conversions read `va_arg(ap, int)` and narrow back via a `(short)` / `(signed char)` / `(unsigned short)` / `(unsigned char)` cast. Reading via `va_arg(ap, unsigned int)` here would be UB on lp64 because the actual promoted type is signed `int`.
 5. Dispatch on the conversion character. Add `%o`, full `%p` (uses ALT for "0x" prefix and "(nil)" for NULL), and a soft-float stub `%f/%e/%g` that consumes a `double` arg and emits `"0.000000"` so format strings don't leak literal `%f` to output.
 
 New helpers:
@@ -331,6 +331,8 @@ New helpers:
 - Trailing `%` at end of format emits literally.
 - Unknown conversions emit `%X` (literal) so malformed format strings are visible.
 - Float conversions consume the `double` arg slot (so subsequent args remain aligned) but emit a constant string.
+- `%#.3o` of 8 emits `"010"`, not `"0010"`. The alt-form `0` prefix is suppressed when precision-driven zero-padding already supplies a leading 0 — emitting it on top of `zeros > 0` was over-counting.
+- `%hu` / `%hhu` / `%hx` / `%hhx` etc. narrow the read `int` to the declared width before widening to `unsigned long long`. `%hhu` of `0x101` prints `"1"`, `%hu` of `0x10001` prints `"1"`.
 
 **Out of scope:**
 - Real floating-point conversions (no FP toolchain, see T1.3 note).

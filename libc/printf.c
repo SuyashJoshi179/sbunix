@@ -79,6 +79,13 @@ static void emit_num(struct sink *s, unsigned long long n, int base, int flags,
     int prefix_len = sign_ch ? 1 : 0;
     int alt_hex = (flags & PF_ALT) && base == 16 && len != 0;
     int alt_oct = (flags & PF_ALT) && base == 8 && (len == 0 || digits[len-1] != '0');
+    /* C99 7.19.6.1 "#"/"o": force the first digit to be 0. If a precision-
+     * driven leading zero is already coming (zeros > 0), emitting our
+     * own '0' prefix produces one more leading 0 than the spec calls for
+     * — e.g. "%#.3o" of 8 would render "0010" instead of "010". The
+     * zero==0 / precision==0 case is unaffected because zeros stays 0
+     * there and the `len == 0` arm still triggers a single '0'. */
+    if (alt_oct && zeros > 0) alt_oct = 0;
 
     int total = prefix_len + (alt_hex ? 2 : 0) + (alt_oct ? 1 : 0) + zeros + len;
     int pad = width > total ? width - total : 0;
@@ -160,11 +167,23 @@ static int do_format(struct sink *s, const char *fmt, va_list ap) {
             }
         }
 
-        /* Length modifier */
-        int lng = 0;        /* 1 = long, 2 = long long */
+        /* Length modifier.
+         *   0 = (default) int / unsigned int
+         *   1 = long / unsigned long  (also z, j, t)
+         *   2 = long long / unsigned long long
+         *  -1 = short / unsigned short
+         *  -2 = signed char / unsigned char
+         *
+         * h / hh matter because default argument promotions widen
+         * `(unsigned) short` and `(unsigned) char` to int (on lp64 where
+         * int can hold the full unsigned-short range) before the value
+         * reaches va_arg. So va_arg(ap, unsigned int) for a %hu/%hhu
+         * arg is UB even though it often "works" — we must read as
+         * int and narrow to the declared width. */
+        int lng = 0;
         switch (*p) {
-        case 'h':           /* short / char — promoted to int by va_arg */
-            p++; if (*p == 'h') p++; break;
+        case 'h':
+            p++; lng = -1; if (*p == 'h') { p++; lng = -2; } break;
         case 'l':
             p++; lng = 1; if (*p == 'l') { p++; lng = 2; } break;
         case 'z':
@@ -187,14 +206,21 @@ static int do_format(struct sink *s, const char *fmt, va_list ap) {
             break;
         }
         case 'd': case 'i': {
-            /* lng: 0 = int, 1 = long, 2 = long long. va_arg type must
-             * exactly match the *promoted* type the caller passed —
-             * mismatch is UB and breaks on ABIs where long != long long
-             * (ILP32, Win64). RV64 lp64 happens to have long == long
-             * long == 64-bit, but this is portable per-step. */
-            long long v = (lng == 2) ? va_arg(ap, long long)
-                        : (lng == 1) ? (long long)va_arg(ap, long)
-                        :              (long long)va_arg(ap, int);
+            /* lng: 0 = int, 1 = long, 2 = long long, -1 = short, -2 = char.
+             * va_arg type must exactly match the *promoted* type the
+             * caller passed — mismatch is UB and breaks on ABIs where
+             * long != long long (ILP32, Win64). RV64 lp64 happens to
+             * have long == long long == 64-bit, but this is portable
+             * per-step. For h/hh the underlying short/char is promoted
+             * to int by default argument promotions, so we read int
+             * and narrow back via a (short)/(signed char) cast — both
+             * sign-extend correctly when widened to long long. */
+            long long v;
+            if      (lng == 2)  v = va_arg(ap, long long);
+            else if (lng == 1)  v = (long long)va_arg(ap, long);
+            else if (lng == -1) v = (long long)(short)va_arg(ap, int);
+            else if (lng == -2) v = (long long)(signed char)va_arg(ap, int);
+            else                v = (long long)va_arg(ap, int);
             unsigned long long mag;
             char sign_ch = 0;
             if (v < 0) { mag = (unsigned long long)(-(v + 1)) + 1ULL; sign_ch = '-'; }
@@ -205,26 +231,36 @@ static int do_format(struct sink *s, const char *fmt, va_list ap) {
             break;
         }
         case 'u': {
-            unsigned long long v =
-                  (lng == 2) ? va_arg(ap, unsigned long long)
-                : (lng == 1) ? (unsigned long long)va_arg(ap, unsigned long)
-                :              (unsigned long long)va_arg(ap, unsigned int);
+            /* h/hh: arg promoted to int; read int and truncate to the
+             * requested unsigned width. Reading via va_arg(ap, unsigned
+             * int) here would be UB on lp64 where the actual promoted
+             * type is signed int. */
+            unsigned long long v;
+            if      (lng == 2)  v = va_arg(ap, unsigned long long);
+            else if (lng == 1)  v = (unsigned long long)va_arg(ap, unsigned long);
+            else if (lng == -1) v = (unsigned long long)(unsigned short)va_arg(ap, int);
+            else if (lng == -2) v = (unsigned long long)(unsigned char)va_arg(ap, int);
+            else                v = (unsigned long long)va_arg(ap, unsigned int);
             emit_num(s, v, 10, flags, width, precision, 0);
             break;
         }
         case 'o': {
-            unsigned long long v =
-                  (lng == 2) ? va_arg(ap, unsigned long long)
-                : (lng == 1) ? (unsigned long long)va_arg(ap, unsigned long)
-                :              (unsigned long long)va_arg(ap, unsigned int);
+            unsigned long long v;
+            if      (lng == 2)  v = va_arg(ap, unsigned long long);
+            else if (lng == 1)  v = (unsigned long long)va_arg(ap, unsigned long);
+            else if (lng == -1) v = (unsigned long long)(unsigned short)va_arg(ap, int);
+            else if (lng == -2) v = (unsigned long long)(unsigned char)va_arg(ap, int);
+            else                v = (unsigned long long)va_arg(ap, unsigned int);
             emit_num(s, v, 8, flags, width, precision, 0);
             break;
         }
         case 'x': case 'X': {
-            unsigned long long v =
-                  (lng == 2) ? va_arg(ap, unsigned long long)
-                : (lng == 1) ? (unsigned long long)va_arg(ap, unsigned long)
-                :              (unsigned long long)va_arg(ap, unsigned int);
+            unsigned long long v;
+            if      (lng == 2)  v = va_arg(ap, unsigned long long);
+            else if (lng == 1)  v = (unsigned long long)va_arg(ap, unsigned long);
+            else if (lng == -1) v = (unsigned long long)(unsigned short)va_arg(ap, int);
+            else if (lng == -2) v = (unsigned long long)(unsigned char)va_arg(ap, int);
+            else                v = (unsigned long long)va_arg(ap, unsigned int);
             int xflags = flags;
             if (*p == 'X') xflags |= PF_UPPER;
             emit_num(s, v, 16, xflags, width, precision, 0);
