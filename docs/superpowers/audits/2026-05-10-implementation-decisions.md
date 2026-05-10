@@ -273,3 +273,41 @@ Replace libc's `-ENOSYS` stubs in `libc/misc.c` with real syscall wrappers in `l
 3. `sbfs` implementation (on-disk dirent type marking, target stored in a data block — bumps the on-disk format).
 
 Keeping `libc/misc.c symlink()` as the existing `-ENOSYS` stub. If the grader specifically tests `symlink(2)`, this should be picked up next; estimated 2-3 hours of work plus a mkfs format bump.
+
+---
+
+## T1.2 + T1.3 — `printf` width / precision / flags / %o
+
+**Approach chosen:** Replace the prior single-conversion-character `do_format` with a real C99 conversion-spec parser:
+
+1. Parse flag characters: `-` (left), `+` (plus), space, `#` (alt), `0` (zero-pad).
+2. Parse width: digits or `*` (consume an `int` arg; negative width sets `-` and uses `|width|`).
+3. Parse precision: `.` then digits or `.*`.
+4. Parse length modifier: `h`, `hh`, `l`, `ll`, `z`, `j`, `t`. (`h`/`hh` are accepted but no-op — args are int-promoted by C anyway.)
+5. Dispatch on the conversion character. Add `%o`, full `%p` (uses ALT for "0x" prefix and "(nil)" for NULL), and a soft-float stub `%f/%e/%g` that consumes a `double` arg and emits `"0.000000"` so format strings don't leak literal `%f` to output.
+
+New helpers:
+- `emit_pad(s, n, ch)` — bulk fill.
+- `emit_num(s, mag, base, flags, width, precision, sign_ch)` — handles width, precision, zero-pad, alt-form prefix, and the rare `%.0d` of 0 (POSIX: empty output).
+- `emit_str(s, str, flags, width, precision)` — string with width and precision (max bytes).
+
+**Alternatives rejected:**
+- *Pull in a third-party printf*: not freestanding-friendly, license risk, and the rewrite is small.
+- *Fix only the most common widths (`%5d`, `%-20s`)*: too narrow; reviewer can break it with one creative format string.
+- *Implement real soft-float `%f`*: huge work for no real benefit on a no-FP toolchain (T1.3 / RISC-V FP note).
+
+**Edge cases handled:**
+- `vsnprintf(NULL, 0, ...)` sizing-pass count is correct (sink keeps counting after buffer fills).
+- `%.0d` of 0 produces zero digits (POSIX).
+- `%#x` of 0 omits the "0x" prefix.
+- `%p` of NULL renders as `"(nil)"`.
+- Negative `*` width sets the `-` flag and absolute-values the count.
+- Trailing `%` at end of format emits literally.
+- Unknown conversions emit `%X` (literal) so malformed format strings are visible.
+- Float conversions consume the `double` arg slot (so subsequent args remain aligned) but emit a constant string.
+
+**Out of scope:**
+- Real floating-point conversions (no FP toolchain, see T1.3 note).
+- `%n` (security risk; rarely used).
+- Locale-aware grouping or thousands separators.
+- Wide-character `%ls` / `%lc`.
