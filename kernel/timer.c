@@ -2,6 +2,7 @@
 #include <pmem.h>
 #include <proc.h>
 #include <vmem.h>
+#include <signal.h>
 
 // lives in .bss section
 static uint64_t ticks = 0;
@@ -36,6 +37,13 @@ void timer_handler(void) {
             p->wake_tick <= ticks) {
             p->state    = PROC_READY;
             p->wake_tick = 0;
+        }
+        /* Deliver SIGALRM when the per-process alarm deadline expires.
+         * Skip zombies and unused slots so we don't fire on a recycled PCB. */
+        if (p->alarm_tick != 0 && p->alarm_tick <= ticks &&
+            p->state != PROC_UNUSED && p->state != PROC_ZOMBIE) {
+            p->alarm_tick = 0;
+            send_signal(p, SIGALRM);
         }
     }
 

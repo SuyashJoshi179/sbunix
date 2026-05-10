@@ -115,6 +115,13 @@ int mount(const char *target, const char *fstype) {
     return (int)syscall_ret(ecall2(83, (long)target, (long)fstype));
 }
 
+/* alarm(): kernel returns prior remaining seconds (always >= 0). errno
+ * is not set by this syscall — POSIX promises no failure modes for
+ * alarm(). We bypass syscall_ret since negatives are not errors here. */
+unsigned alarm(unsigned secs) {
+    return (unsigned)ecall1(84, (long)secs);
+}
+
 /* POSIX getcwd: returns buf on success, NULL on error.
  * glibc extension: buf == NULL → allocate. With size==0 use PATH_MAX.
  * BusyBox ash relies on this extension (`getcwd(NULL, 0)`). */

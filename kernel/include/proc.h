@@ -67,6 +67,9 @@ struct pcb {
     // 0 means "not sleeping on a deadline" (sleeping on an event instead).
     uint64_t       wake_tick;
 
+    // Tick count at which to deliver SIGALRM (0 = no alarm pending).
+    uint64_t       alarm_tick;
+
     // Channel-based sleep: non-NULL while sleeping on a specific address.
     void          *sleep_chan;
 

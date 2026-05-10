@@ -147,6 +147,8 @@ struct pcb *alloc_proc(void) {
     p->user_sp    = 0;
     p->entry      = 0;
     p->sleep_chan = 0;
+    p->wake_tick  = 0;
+    p->alarm_tick = 0;
     p->vma_list   = 0;
     p->heap_vma   = 0;
     p->brk_start  = 0;

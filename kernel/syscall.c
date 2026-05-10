@@ -899,6 +899,7 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     }
     p->in_sighandler   = 0;
     p->delivering_segv = 0;
+    p->alarm_tick      = 0;        /* POSIX: pending alarm cleared on exec */
     p->did_exec        = 1;
 
     return 0;
@@ -1431,6 +1432,33 @@ static int64_t sys_mount(const char *u_target, const char *u_fstype) {
         return tmpfs_attach(target);
     return -EINVAL;
 }
+
+// ---------------------------------------------------------------------------
+// sys_alarm(secs) — schedule a SIGALRM after `secs` seconds.
+//
+// Replaces any prior pending alarm; returns the prior alarm's remaining
+// seconds (rounded up), or 0 if none was set. secs == 0 cancels.
+// ---------------------------------------------------------------------------
+static int64_t sys_alarm(unsigned secs) {
+    struct pcb *p = current_proc();
+    if (!p) return 0;
+
+    uint64_t now = timer_ticks();
+    uint64_t prior_remaining = 0;
+    if (p->alarm_tick != 0 && p->alarm_tick > now) {
+        uint64_t ticks_left = p->alarm_tick - now;
+        /* round up to whole seconds */
+        prior_remaining = (ticks_left + TICKS_PER_SEC - 1) / TICKS_PER_SEC;
+    }
+
+    if (secs == 0) {
+        p->alarm_tick = 0;
+    } else {
+        p->alarm_tick = now + (uint64_t)secs * TICKS_PER_SEC;
+        if (p->alarm_tick == 0) p->alarm_tick = 1;  /* never use sentinel */
+    }
+    return (int64_t)prior_remaining;
+}
 // ---------------------------------------------------------------------------
 // syscall_dispatch
 // ---------------------------------------------------------------------------
@@ -1619,6 +1647,9 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_mount:
             return sys_mount((const char *)trapframe[TF_A0],
                              (const char *)trapframe[TF_A1]);
+
+        case SYS_alarm:
+            return sys_alarm((unsigned)trapframe[TF_A0]);
 
         case SYS_wait4: {
             int pid_a       = (int)(int64_t)trapframe[TF_A0];

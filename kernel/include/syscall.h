@@ -51,6 +51,9 @@
 // Filesystem mount
 #define SYS_mount          83   // (const char *target, const char *fstype)
 
+// Phase 8a (cont.): alarm
+#define SYS_alarm          84   // (unsigned secs) -> prior remaining secs
+
 // Phase 8b: signals
 #define SYS_kill           90   // (pid, sig)
 #define SYS_sigaction      91   // (sig, const struct sigaction *act, struct sigaction *oldact)

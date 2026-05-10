@@ -48,11 +48,7 @@ void sync(void)                    { /* sbfs commits at end_op; nothing to do */
 int  fsync(int fd)                 { (void)fd; return 0; }
 int  fdatasync(int fd)             { (void)fd; return 0; }
 
-unsigned alarm(unsigned secs) {
-    /* No SIGALRM scheduler. Pretend no prior alarm was set. */
-    (void)secs;
-    return 0;
-}
+/* alarm() implementation is in libc/syscall.c (real syscall wrapper). */
 
 unsigned sleep(unsigned secs) {
     struct timespec req = { (int64_t)secs, 0 }, rem = { 0, 0 };

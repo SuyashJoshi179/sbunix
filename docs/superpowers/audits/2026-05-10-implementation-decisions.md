@@ -30,20 +30,22 @@ Append-only log of design decisions made while fixing audit findings. One entry 
 
 ---
 
-## T1.4 — `alarm()` lying stub  *(in progress)*
+## T1.4 — `alarm()` lying stub
 
-**Approach chosen (planned):** Add `uint64_t alarm_tick` to PCB; new `SYS_alarm` syscall installs/cancels the deadline; `timer_handler` scans procs once per tick, sends SIGALRM via `send_signal` when expired; libc wrapper replaces the no-op stub.
+**Approach chosen:** New `uint64_t alarm_tick` field in PCB (0 = none). New `SYS_alarm` syscall (#84) installs/cancels deadline as `now + secs * TICKS_PER_SEC`; returns prior remaining seconds rounded up. `timer_handler` scans the proc list each 10 ms tick; on expiry, clears `alarm_tick` and calls `send_signal(p, SIGALRM)`. libc `alarm()` replaced from no-op stub to a thin syscall wrapper that bypasses `syscall_ret` (the syscall has no failure modes per POSIX, so negative returns are not errors).
 
 **Alternatives rejected:**
-- *Implement full `setitimer`/`getitimer`:* overkill for what `alarm(secs)` needs; SIGALRM-once is sufficient for typical timeout-via-alarm idioms.
-- *Schedule SIGALRM as a one-shot timer interrupt:* extra hardware-timer plumbing; piggy-backing the existing 10 ms tick is simpler.
+- *Full `setitimer`/`getitimer`*: overkill; alarm-once suffices for the burned-by-alarm-stub case.
+- *One-shot hardware timer interrupt scheduled at the deadline*: extra plumbing; piggy-backing on the existing 10 ms periodic tick is simpler and good enough.
 
-**Edge cases to handle:**
-- `alarm(0)` cancels any pending alarm; returns prior remaining seconds.
-- `alarm()` while another alarm is pending replaces it; returns prior remaining.
-- Reset `alarm_tick = 0` on `fork` (child inherits no pending alarm — POSIX) and on `exec`.
-- Round prior remaining up to whole seconds for return value.
+**Edge cases handled:**
+- `alarm(0)` cancels any pending alarm; returns prior remaining.
+- Replacing a pending alarm returns the prior remaining (rounded up to whole seconds).
+- Cleared on `exec` (POSIX requires; `kernel/syscall.c` `do_exec` post-image-load).
+- `alloc_proc` zeros `alarm_tick`, so children of `fork` inherit no alarm (POSIX).
+- Sentinel guard: if computed deadline equals `0` (effectively never), bump to `1` so the field's "0 = none" invariant holds.
+- Skip dispatch on `PROC_UNUSED`/`PROC_ZOMBIE` slots so a recycled PCB doesn't fire a stale alarm.
 
 **Out of scope:**
 - `setitimer`/`getitimer` interval timers.
-- Sub-second resolution alarms.
+- Sub-second alarm resolution.
