@@ -235,7 +235,11 @@ static int64_t sys_open(const char *path, int flags) {
         if (!leaf || !leaf[0]) return -EINVAL;
 
         struct inode *parent = 0;
-        if (namei(parent_path, &parent) < 0) return -ENOENT;
+        /* Propagate namei's -errno verbatim — collapsing all walk
+         * failures to -ENOENT would mask -ENOTDIR / -EACCES / -ELOOP /
+         * -ENAMETOOLONG from userspace. */
+        int nrc = namei(parent_path, &parent);
+        if (nrc < 0) return nrc;
         if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
         if (!parent->ops || !parent->ops->create) {
             inode_put(parent);
@@ -284,7 +288,9 @@ static int64_t sys_mkdir(const char *path) {
     if (!leaf || !leaf[0]) return -EINVAL;
 
     struct inode *parent = 0;
-    if (namei(parent_path, &parent) < 0) return -ENOENT;
+    /* Propagate namei's -errno verbatim (see sys_mknod for rationale). */
+    int nrc = namei(parent_path, &parent);
+    if (nrc < 0) return nrc;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
 
     // Check existence first: EEXIST takes priority over EROFS so that
@@ -319,7 +325,9 @@ static int64_t sys_unlink(const char *path) {
     if (!leaf || !leaf[0]) return -EINVAL;
 
     struct inode *parent = 0;
-    if (namei(parent_path, &parent) < 0) return -ENOENT;
+    /* Propagate namei's -errno verbatim. */
+    int nrc = namei(parent_path, &parent);
+    if (nrc < 0) return nrc;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
     if (!parent->ops || !parent->ops->unlink) { inode_put(parent); return -EROFS; }
 
@@ -348,7 +356,11 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
 
     // Resolve target.
     struct inode *target = 0;
-    if (namei(kold, &target) < 0) return -ENOENT;
+    /* Propagate namei's -errno (could be -ELOOP, -ENOTDIR, etc). */
+    {
+        int nrc = namei(kold, &target);
+        if (nrc < 0) return nrc;
+    }
     if (target->type == I_DIR) {
         inode_put(target);
         return -EPERM;
@@ -367,9 +379,11 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
     }
 
     struct inode *parent = 0;
-    if (namei(parent_path, &parent) < 0) {
+    /* Propagate namei's -errno verbatim. */
+    int nrc = namei(parent_path, &parent);
+    if (nrc < 0) {
         inode_put(target);
-        return -ENOENT;
+        return nrc;
     }
     if (parent->type != I_DIR) {
         inode_put(parent);
@@ -431,7 +445,9 @@ static int64_t sys_symlink(const char *u_target, const char *u_linkpath) {
     if (!leaf || !leaf[0]) return -EINVAL;
 
     struct inode *parent = 0;
-    if (namei(parent_path, &parent) < 0) return -ENOENT;
+    /* Propagate namei's -errno verbatim. */
+    int nrc = namei(parent_path, &parent);
+    if (nrc < 0) return nrc;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
 
     if (parent->ops && parent->ops->lookup) {
@@ -482,18 +498,24 @@ static int64_t sys_rename(const char *oldpath, const char *newpath) {
     if (!old_leaf || !old_leaf[0]) return -EINVAL;
     if (!new_leaf || !new_leaf[0]) return -EINVAL;
 
-    // Resolve both parents.
+    // Resolve both parents. Propagate namei -errno verbatim.
     struct inode *old_p = 0;
-    if (namei(old_parent_buf, &old_p) < 0) return -ENOENT;
+    {
+        int nrc = namei(old_parent_buf, &old_p);
+        if (nrc < 0) return nrc;
+    }
     if (old_p->type != I_DIR) {
         inode_put(old_p);
         return -ENOTDIR;
     }
 
     struct inode *new_p = 0;
-    if (namei(new_parent_buf, &new_p) < 0) {
-        inode_put(old_p);
-        return -ENOENT;
+    {
+        int nrc = namei(new_parent_buf, &new_p);
+        if (nrc < 0) {
+            inode_put(old_p);
+            return nrc;
+        }
     }
     if (new_p->type != I_DIR) {
         inode_put(new_p);
@@ -852,9 +874,14 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     // (tarfs, sbfs, tmpfs, ...). Don't cast fs_data; let the loader pull
     // bytes through the inode's read path.
     struct inode *ip;
-    if (namei(kpath, &ip) < 0) {
-        printk("exec: '%s' not found\n", kpath);
-        return -ENOENT;
+    {
+        /* Propagate namei's -errno (-ENOENT / -ENOTDIR / -ELOOP /
+         * -ENAMETOOLONG) so execve callers see the real failure. */
+        int nrc = namei(kpath, &ip);
+        if (nrc < 0) {
+            printk("exec: '%s' lookup failed (%d)\n", kpath, nrc);
+            return nrc;
+        }
     }
     if (ip->type != I_REG) {
         inode_put(ip);
@@ -1504,7 +1531,11 @@ static int64_t sys_truncate(const char *u_path, int64_t length) {
     int rc = copyin_cstr(u_path, path, sizeof(path));
     if (rc < 0) return rc;
     struct inode *ip;
-    if (namei(path, &ip) < 0) return -ENOENT;
+    /* namei already returns -errno (e.g. -ENOENT, -ENOTDIR, -EACCES,
+     * -ELOOP). Propagate it so userspace sees the real failure reason
+     * instead of an over-coarse -ENOENT. */
+    int nrc = namei(path, &ip);
+    if (nrc < 0) return nrc;
     rc = (int)do_truncate_inode(ip, length);
     inode_put(ip);
     return rc;
