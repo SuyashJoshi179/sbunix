@@ -1,4 +1,5 @@
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -57,7 +58,7 @@ static void emit_pad(struct sink *s, int n, char pad) {
 /* Render `n` (already absolute-valued for signed) into a base-N string,
  * applying width / precision / flags. `sign_ch` is either 0 or one of
  * '-' / '+' / ' ' to be emitted before any "0x" prefix and any zeros. */
-static void emit_num(struct sink *s, unsigned long n, int base, int flags,
+static void emit_num(struct sink *s, unsigned long long n, int base, int flags,
                      int width, int precision, char sign_ch) {
     char digits[32];
     int  len = 0;
@@ -186,31 +187,44 @@ static int do_format(struct sink *s, const char *fmt, va_list ap) {
             break;
         }
         case 'd': case 'i': {
-            long v = (lng >= 1) ? va_arg(ap, long) : (long)va_arg(ap, int);
-            unsigned long mag;
+            /* lng: 0 = int, 1 = long, 2 = long long. va_arg type must
+             * exactly match the *promoted* type the caller passed —
+             * mismatch is UB and breaks on ABIs where long != long long
+             * (ILP32, Win64). RV64 lp64 happens to have long == long
+             * long == 64-bit, but this is portable per-step. */
+            long long v = (lng == 2) ? va_arg(ap, long long)
+                        : (lng == 1) ? (long long)va_arg(ap, long)
+                        :              (long long)va_arg(ap, int);
+            unsigned long long mag;
             char sign_ch = 0;
-            if (v < 0) { mag = (unsigned long)(-(v + 1)) + 1UL; sign_ch = '-'; }
-            else { mag = (unsigned long)v;
+            if (v < 0) { mag = (unsigned long long)(-(v + 1)) + 1ULL; sign_ch = '-'; }
+            else { mag = (unsigned long long)v;
                    if (flags & PF_PLUS) sign_ch = '+';
                    else if (flags & PF_SPACE) sign_ch = ' '; }
             emit_num(s, mag, 10, flags, width, precision, sign_ch);
             break;
         }
         case 'u': {
-            unsigned long v = (lng >= 1) ? va_arg(ap, unsigned long)
-                                         : (unsigned long)va_arg(ap, unsigned int);
+            unsigned long long v =
+                  (lng == 2) ? va_arg(ap, unsigned long long)
+                : (lng == 1) ? (unsigned long long)va_arg(ap, unsigned long)
+                :              (unsigned long long)va_arg(ap, unsigned int);
             emit_num(s, v, 10, flags, width, precision, 0);
             break;
         }
         case 'o': {
-            unsigned long v = (lng >= 1) ? va_arg(ap, unsigned long)
-                                         : (unsigned long)va_arg(ap, unsigned int);
+            unsigned long long v =
+                  (lng == 2) ? va_arg(ap, unsigned long long)
+                : (lng == 1) ? (unsigned long long)va_arg(ap, unsigned long)
+                :              (unsigned long long)va_arg(ap, unsigned int);
             emit_num(s, v, 8, flags, width, precision, 0);
             break;
         }
         case 'x': case 'X': {
-            unsigned long v = (lng >= 1) ? va_arg(ap, unsigned long)
-                                         : (unsigned long)va_arg(ap, unsigned int);
+            unsigned long long v =
+                  (lng == 2) ? va_arg(ap, unsigned long long)
+                : (lng == 1) ? (unsigned long long)va_arg(ap, unsigned long)
+                :              (unsigned long long)va_arg(ap, unsigned int);
             int xflags = flags;
             if (*p == 'X') xflags |= PF_UPPER;
             emit_num(s, v, 16, xflags, width, precision, 0);
@@ -218,21 +232,29 @@ static int do_format(struct sink *s, const char *fmt, va_list ap) {
         }
         case 'p': {
             void *ptr = va_arg(ap, void *);
+            /* %p ignores any user-supplied precision (POSIX leaves it
+             * implementation-defined and most libcs print a fixed-width
+             * hex representation). Clear PF_PREC so emit_str doesn't
+             * truncate "(nil)" / the stub to `precision` bytes. */
+            int pflags = flags & ~PF_PREC;
             if (!ptr) {
-                emit_str(s, "(nil)", flags, width, 0);
+                emit_str(s, "(nil)", pflags, width, 0);
             } else {
                 /* "0x" prefix + hex digits, width-aware. */
-                emit_num(s, (unsigned long)ptr, 16,
-                         flags | PF_ALT, width, precision, 0);
+                emit_num(s, (unsigned long long)(uintptr_t)ptr, 16,
+                         pflags | PF_ALT, width, 0, 0);
             }
             break;
         }
         case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': {
             /* Toolchain is soft-float (-mabi=lp64, no F/D ext). Stub
              * float conversions to "0.000000" with width respected so
-             * format strings using %f etc. don't emit a literal '%f'. */
+             * format strings using %f etc. don't emit a literal '%f'.
+             * Clear PF_PREC: a user-supplied precision (e.g. %.2f) was
+             * meant for the float formatter, not as a string-length cap
+             * for the stub — otherwise %.0f would emit nothing. */
             (void)va_arg(ap, double);   /* consume the arg slot */
-            emit_str(s, "0.000000", flags, width, 0);
+            emit_str(s, "0.000000", flags & ~PF_PREC, width, 0);
             break;
         }
         case '%':
