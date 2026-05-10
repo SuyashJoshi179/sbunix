@@ -219,3 +219,21 @@ A small inline helper `read_at(ip, off, buf, n)` wraps `generic_file_read` and t
 **Out of scope:**
 - Per-uid accounting. SBUnix doesn't have meaningful uids, so the global count is the cleanest mapping of NPROC semantics.
 - Enforcing on `vfork` or `clone` (we don't have those).
+
+---
+
+## T1.12 — Stack-grow gate too restrictive
+
+**Approach chosen:** Drop the `stval >= user_sp - PAGE_SIZE` heuristic in `user_page_fault`'s stack-grow branch. The remaining checks are: (a) fault below the existing stack VMA, (b) fault address ≥ rlimit-derived floor (`USER_STACK_TOP - rlim_stack`). Any below-stack fault inside that floor extends the VMA. Matches Linux semantics.
+
+**Alternatives rejected:**
+- *Keep the SP-distance heuristic but bump the threshold to 64 KB or 128 KB*: still arbitrary; gcc -O0 with very deep frames or alloca would bypass it. Pick a number high enough and it's effectively gone.
+- *Require explicit user-space stack-probe (`#pragma GCC stack_check`)*: not how user binaries are compiled. Burdens the user, helps no one.
+
+**Edge cases handled:**
+- Truly random pointer below stack: still rejected because the rlimit floor catches it (`stack_max` defaults to 8 MB; anything below `USER_STACK_TOP - 8 MB` faults out as before).
+- Massive `alloca(N)` or deep recursion that walks below the floor: returns `-1` → SIGSEGV, which is what POSIX requires when stack rlimit is reached.
+
+**Out of scope:**
+- Auto-bumping `RLIMIT_STACK` on demand (Linux has soft/hard distinction; we already do).
+- Reporting SIGSEGV with `si_code = SEGV_MAPERR` vs `SEGV_ACCERR` — we don't expose siginfo to user-space.

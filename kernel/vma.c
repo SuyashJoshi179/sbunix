@@ -146,6 +146,14 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
     struct vma *v = vma_find(p->vma_list, stval);
 
     if (!v) {
+        /* Stack auto-grow: extend the stack VMA downward as long as the
+         * fault address is below it but above the rlimit-derived floor.
+         * We deliberately do NOT gate on `stval >= user_sp - PAGE_SIZE`
+         * — gcc -O0 and Rust routinely allocate large stack frames in
+         * one bump and then probe deep into the new range; rejecting
+         * those would SIGSEGV the program even though the fault is
+         * within the rlimit. Linux does the same: any below-stack fault
+         * inside the rlimit floor extends the stack. */
         struct vma *sv = find_stack_vma(p->vma_list);
         rlim_t stack_max = p->rlim[RLIMIT_STACK].rlim_cur;
         uint64_t stack_cap = USER_STACK_TOP - USER_TEXT_BASE;
@@ -153,13 +161,8 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
             stack_max = stack_cap;
         uint64_t min_start = USER_STACK_TOP - stack_max;
         if (sv && stval < sv->start && fault_va >= min_start) {
-            uint64_t user_sp = trapframe ? trapframe[1] : sv->start;
-            if (stval >= user_sp - PAGE_SIZE) {
-                sv->start = fault_va;
-                v = sv;
-            } else {
-                return -1;
-            }
+            sv->start = fault_va;
+            v = sv;
         } else {
             return -1;
         }
