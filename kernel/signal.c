@@ -256,7 +256,22 @@ int64_t sys_kill(int pid, int sig) {
         if (!me) return -EINVAL;
         pgid = me->pgid;
     } else if (pid == -1) {
-        return -EPERM;          /* unprivileged broadcast not supported */
+        /* POSIX broadcast: send to every process the caller may signal.
+         * SBUnix is single-user (uid==0 everywhere), so "may signal"
+         * means "every non-init non-self process". Init (pid 1) is
+         * excluded so cleanup loops can't accidentally kill the system.
+         * Returns 0 if at least one process was signaled, -ESRCH if
+         * none. sig==0 falls through as an existence probe. */
+        struct pcb *me = current_proc();
+        int delivered = 0;
+        for (struct pcb *p = proc_list_head(); p; p = p->next) {
+            if (p->state == PROC_UNUSED || p->state == PROC_ZOMBIE) continue;
+            if (p == me) continue;
+            if (p->pid == 1) continue;
+            if (sig != 0) send_signal(p, sig);
+            delivered++;
+        }
+        return delivered > 0 ? 0 : -ESRCH;
     } else {
         pgid = -pid;
     }

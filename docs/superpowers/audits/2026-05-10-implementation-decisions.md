@@ -49,3 +49,23 @@ Append-only log of design decisions made while fixing audit findings. One entry 
 **Out of scope:**
 - `setitimer`/`getitimer` interval timers.
 - Sub-second alarm resolution.
+
+---
+
+## T1.6 — `kill(-1, sig)` returns `-EPERM`
+
+**Approach chosen:** Implement broadcast by walking the proc list and signaling every non-self, non-init, non-unused, non-zombie process. Returns 0 if at least one was signaled, `-ESRCH` if none. `sig == 0` follows the same path as an existence probe.
+
+**Alternatives rejected:**
+- *Reject `kill(-1, sig)` outright (status quo)*: violates POSIX; cleanup tooling and "kill all my children" idioms break.
+- *Include init (pid 1) in the broadcast*: would let any unprivileged process kill the system. POSIX excludes the caller's reach over privileged processes; SBUnix is single-user so the only meaningful guard is "don't kill init".
+- *Include the caller itself*: POSIX leaves this implementation-defined; excluding the caller is the safer default for a self-cleanup idiom (`kill(-1, SIGTERM)` to clean up children before the caller itself exits).
+
+**Edge cases handled:**
+- Skip `PROC_UNUSED` and `PROC_ZOMBIE` slots so we don't signal recycled or already-dead PCBs.
+- `sig == 0` short-circuits to an existence probe (no `send_signal` call), matching the named-pid / pgid behavior.
+- Returns `-ESRCH` only when zero non-self, non-init processes exist (rare in practice).
+
+**Out of scope:**
+- Multi-user permission checks (no uid system).
+- Limiting broadcast to the caller's session (SBUnix is single-session).
