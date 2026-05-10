@@ -14,10 +14,15 @@ int main(void) {
     int shell_pgid = getpgrp();
     ioctl(0, 0x5410 /* TIOCSPGRP */, &shell_pgid);
 
-    /* Run /etc/rc once at boot — prof's rc invokes `mount -t proc … /proc`
-     * and `mount -t disk … /mnt`. Selftest already pre-attached both, so
-     * these calls hit mount_fs idempotency and return 0. Failures are
-     * non-fatal: tests below still run. */
+    /* Run /etc/rc once at boot — mounts /proc, /mnt, /tmp.
+     *
+     * On develop the selftest pre-attaches /proc and /mnt, so these
+     * calls hit mount_fs idempotency and return 0. On release builds
+     * (selftest stripped) /etc/rc is the *only* path that mounts these
+     * filesystems for userspace.
+     *
+     * !!! DO NOT REMOVE — required on every build. The strip markers
+     * below delimit only the test block; this fork must survive. !!! */
     {
         int rc_pid = fork();
         if (rc_pid == 0) {
@@ -36,6 +41,12 @@ int main(void) {
         }
     }
 
+    /* ============================================================
+     * STRIP-BEGIN: TESTS
+     * Release-branch strip script removes everything between this
+     * marker and STRIP-END. The /etc/rc fork above and the shell
+     * loop below MUST survive the strip.
+     * ============================================================ */
     char *tests[] = {
         /* libc surface tests — kept first so a libc regression fails
          * fast, before any of the longer-running kernel tests. */
@@ -182,6 +193,9 @@ int main(void) {
         }
     }
     printf("init: %d/%d tests passed\n", pass, ntests);
+    /* ============================================================
+     * STRIP-END: TESTS
+     * ============================================================ */
 
     while (1) {
         printf("Starting /bin/sh\n");
