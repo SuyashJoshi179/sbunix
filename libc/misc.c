@@ -2,6 +2,7 @@
 #include <sys/utsname.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <time.h>
 
 /* Stubs for the long tail of POSIX odds and ends. SBUnix doesnt have
@@ -84,7 +85,7 @@ long fpathconf(int fd, int name)           { (void)fd;   (void)name; return -1; 
 long sysconf(int name) {
     switch (name) {
     case _SC_PAGESIZE:         return 4096;
-    case _SC_OPEN_MAX:         return 64;
+    case _SC_OPEN_MAX:         return OPEN_MAX;
     case _SC_NPROCESSORS_ONLN: return 1;
     case _SC_NPROCESSORS_CONF: return 1;
     case _SC_CLK_TCK:          return 100;
