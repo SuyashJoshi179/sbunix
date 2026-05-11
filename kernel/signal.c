@@ -115,10 +115,11 @@ static int sig_is_no_op(struct pcb *p, int i) {
     return 0;
 }
 
-/* Drop any pending signals that pick_actionable would consider no-ops
- * (POSIX: ignored signals are discarded, not held pending) and return
- * the lowest-numbered remaining deliverable signal, or 0. Used by both
- * the SA_RESTART picker in check_signals_after_syscall and the actual
+/* Drop any pending signals that are currently deliverable and that
+ * pick_actionable would consider no-ops (explicit SIG_IGN,
+ * default-ignore, or default-continue), then return the
+ * lowest-numbered remaining deliverable signal, or 0. Used by both the
+ * SA_RESTART picker in check_signals_after_syscall and the actual
  * delivery in check_signals so they always agree on which signal will
  * run. */
 static int pick_actionable(struct pcb *p) {
