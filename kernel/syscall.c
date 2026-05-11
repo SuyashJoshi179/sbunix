@@ -870,9 +870,10 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc_path < 0) return rc_path;
 
-    /* Capture argv[0] for /proc/<pid>/comm. Read from the OLD address space
-     * while it is still mapped; commit to p->comm only at the exec commit
-     * point so a later -ENOMEM leaves comm reflecting the old image. */
+    /* Capture argv[0] for p->comm (surfaced via /proc/<pid>/status and
+     * /proc/<pid>/stat). Read from the OLD address space while it is
+     * still mapped; commit to p->comm only at the exec commit point so
+     * a later -ENOMEM leaves comm reflecting the old image. */
     char comm_src[64];
     const char *comm_path = kpath;
     if (argv_user) {

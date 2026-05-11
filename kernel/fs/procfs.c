@@ -197,9 +197,6 @@ struct proc_snap {
     uint64_t     vm_size_pages;
     uint64_t     vm_text_pages;
     uint64_t     vm_data_pages;
-    /* String snapshots for /proc/<pid>/cwd and exe symlinks. */
-    char         cwd_path[256];
-    char         exe_path[256];
 };
 
 static int prod_status(char *out, int cap, const struct proc_snap *s) {
@@ -363,12 +360,12 @@ static int piddir_link_readlink(struct inode *ip, char *buf, uint64_t n) {
 
 static int piddir_link_stat(struct inode *ip, struct stat *st) {
     struct proc_node *pn = (struct proc_node *)ip->fs_data;
-    int slen = 0;
-    if (pn) {
-        char target[256];
-        int r = pcb_link_target(pn, target, (int)sizeof(target));
-        if (r >= 0) slen = r;
-    }
+    if (!pn) return -EIO;
+    char target[256];
+    int slen = pcb_link_target(pn, target, (int)sizeof(target));
+    /* Surface the same -errno (e.g. -ESRCH on stale pcb) that readlink
+     * would, so stat()/lstat() can't claim success when readlink fails. */
+    if (slen < 0) return slen;
     st->st_dev   = 3;
     st->st_ino   = (uint64_t)(uintptr_t)ip;
     st->st_mode  = ip->mode;
@@ -542,9 +539,9 @@ static int piddir_getdents(struct inode *dir, uint64_t off, void *buf,
         { "cmdline", DT_REG     },
         { "stat",    DT_REG     },
         { "statm",   DT_REG     },
-        { "cwd",     DT_UNKNOWN },  /* symlink — readers resolve via readlink */
-        { "exe",     DT_UNKNOWN },
-        { "root",    DT_UNKNOWN },
+        { "cwd",     DT_LNK },
+        { "exe",     DT_LNK },
+        { "root",    DT_LNK },
     };
     if (off >= (uint64_t)(sizeof(ents) / sizeof(ents[0]))) {
         if (out_next) *out_next = off;
@@ -586,10 +583,6 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
     snap.sid        = pcb->sid;
     for (int i = 0; i < (int)sizeof(snap.comm); i++)
         snap.comm[i] = pcb->comm[i];
-    for (int i = 0; i < (int)sizeof(snap.cwd_path); i++)
-        snap.cwd_path[i] = pcb->cwd_path[i];
-    for (int i = 0; i < (int)sizeof(snap.exe_path); i++)
-        snap.exe_path[i] = pcb->exe_path[i];
     uint64_t vm_bytes = 0;
     uint64_t text_bytes = 0;
     uint64_t data_bytes = 0;
