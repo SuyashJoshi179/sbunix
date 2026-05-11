@@ -336,7 +336,10 @@ static int pcb_link_target(const struct proc_node *pn, char *out, int cap) {
     }
     const char *src = (pn->kind == PK_CWD) ? pcb->cwd_path : pcb->exe_path;
     int slen = 0;
-    while (src[slen] && slen < 256) slen++;
+    /* Bound first: && evaluates left-to-right, so reading src[slen]
+     * before the bound check would touch src[256] on an unterminated
+     * 256-byte path. */
+    while (slen < 256 && src[slen]) slen++;
     int n = slen;
     if (n > cap - 1) n = cap - 1;
     for (int i = 0; i < n; i++) out[i] = src[i];
