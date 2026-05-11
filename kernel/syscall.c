@@ -979,6 +979,12 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     p->heap_vma   = heap_vma;
     p->brk_start  = brk;
     proc_set_comm_basename(p, comm_path);
+    {
+        int j;
+        for (j = 0; kpath[j] && j < (int)sizeof(p->exe_path) - 1; j++)
+            p->exe_path[j] = kpath[j];
+        p->exe_path[j] = '\0';
+    }
 
     trapframe[TF_SEPC] = entry;
     trapframe[1] = new_sp;   // x2 = sp

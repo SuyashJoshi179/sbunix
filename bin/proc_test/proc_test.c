@@ -129,6 +129,49 @@ int main(void) {
     int fd = open("/proc/999999/status", 0);
     check(fd == -1 && errno == ENOENT, "open /proc/999999/status -> ENOENT");
 
+    /* /proc/<pid>/cwd, /exe, /root: symlinks resolved via readlink. */
+    {
+        char lbuf[256];
+        long lr = readlink("/proc/self/cwd", lbuf, sizeof(lbuf) - 1);
+        if (lr > 0) lbuf[lr] = 0;
+        check(lr > 0 && lbuf[0] == '/', "/proc/self/cwd resolves to abs path");
+
+        lr = readlink("/proc/self/exe", lbuf, sizeof(lbuf) - 1);
+        if (lr > 0) lbuf[lr] = 0;
+        check(lr > 0 && contains(lbuf, "proc_test"),
+              "/proc/self/exe contains 'proc_test'");
+
+        lr = readlink("/proc/self/root", lbuf, sizeof(lbuf) - 1);
+        if (lr > 0) lbuf[lr] = 0;
+        check(lr == 1 && lbuf[0] == '/', "/proc/self/root is '/'");
+    }
+
+    /* /proc/<pid>/statm: 7 numbers, first one (size) must be > 0. */
+    {
+        char statm_path[64];
+        int off = 0;
+        static const char p[] = "/proc/";
+        static const char s[] = "/statm";
+        for (int i = 0; i < (int)sizeof(p) - 1; i++) statm_path[off++] = p[i];
+        off = append_uint(statm_path, off, (unsigned int)mypid);
+        for (int i = 0; i < (int)sizeof(s) - 1; i++) statm_path[off++] = s[i];
+        statm_path[off] = 0;
+
+        char sbuf[128];
+        int sn = read_all(statm_path, sbuf, sizeof(sbuf));
+        check(sn > 0, "/proc/<pid>/statm non-empty");
+
+        int spaces = 0;
+        for (int i = 0; sbuf[i] && sbuf[i] != '\n'; i++)
+            if (sbuf[i] == ' ') spaces++;
+        check(spaces == 6, "/proc/<pid>/statm has 7 fields");
+
+        int size_pages = 0;
+        for (int i = 0; sbuf[i] >= '0' && sbuf[i] <= '9'; i++)
+            size_pages = size_pages * 10 + (sbuf[i] - '0');
+        check(size_pages > 0, "statm: size pages > 0");
+    }
+
     long free_before = meminfo();
     check(free_before > 0, "meminfo before valid");
 

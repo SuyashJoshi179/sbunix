@@ -81,6 +81,10 @@ struct pcb {
     struct inode  *cwd;             // current working directory (refcounted)
     char           cwd_path[256];   // string form of cwd, kept in sync by chdir
 
+    // Absolute path of the last exec'd image (or kernel-spawn path); used
+    // by /proc/<pid>/exe. NUL-padded; empty for kernel threads.
+    char           exe_path[256];
+
     // Virtual memory areas (Phase 7)
     struct vma    *vma_list;        // sorted VMA list head
     struct vma    *heap_vma;        // pointer to heap VMA for fast sbrk
