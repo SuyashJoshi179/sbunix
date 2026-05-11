@@ -10,13 +10,18 @@
 #include <procfs.h>
 #include <proc.h>
 #include <riscv.h>
+#include <vma.h>
 
 enum proc_kind {
     PK_PIDDIR = 1,
     PK_STATUS,
     PK_CMDLINE,
     PK_STAT,
+    PK_STATM,
     PK_SELF,
+    PK_CWD,
+    PK_EXE,
+    PK_ROOT,
 };
 
 struct proc_node {
@@ -188,6 +193,10 @@ struct proc_snap {
     int          sid;
     char         comm[16];
     uint64_t     vm_size_kb;
+    /* Page-granularity totals for /proc/<pid>/statm. */
+    uint64_t     vm_size_pages;
+    uint64_t     vm_text_pages;
+    uint64_t     vm_data_pages;
 };
 
 static int prod_status(char *out, int cap, const struct proc_snap *s) {
@@ -231,6 +240,22 @@ static int prod_stat(char *out, int cap, const struct proc_snap *s) {
     if (n < cap) out[n++] = ' ';
     n = append_u64(out, cap, n, (uint64_t)s->parent_pid);
     n = append_str(out, cap, n, " 0 0 0 0 0\n");
+    return n;
+}
+
+/* /proc/<pid>/statm: "size resident shared text lib data dt" in pages.
+ * We don't track residency at PTE granularity, so resident == size.
+ * shared/lib/dt are deprecated and reported 0 (matches modern Linux). */
+static int prod_statm(char *out, int cap, const struct proc_snap *s) {
+    int n = 0;
+    n = append_u64(out, cap, n, s->vm_size_pages);
+    n = append_str(out, cap, n, " ");
+    n = append_u64(out, cap, n, s->vm_size_pages);
+    n = append_str(out, cap, n, " 0 ");
+    n = append_u64(out, cap, n, s->vm_text_pages);
+    n = append_str(out, cap, n, " 0 ");
+    n = append_u64(out, cap, n, s->vm_data_pages);
+    n = append_str(out, cap, n, " 0\n");
     return n;
 }
 
@@ -291,6 +316,99 @@ static const struct inode_ops piddir_file_ops = {
     .getdents = file_getdents_rofs,
     .release  = piddir_file_release,
 };
+
+/* Resolve the symlink target for /proc/<pid>/{cwd,exe,root}. Writes at
+ * most cap-1 chars + NUL into `out`. Returns target length (may exceed
+ * cap-1 if truncated) or -ESRCH if the pcb is gone. PK_ROOT is constant
+ * "/" and never touches the pcb. */
+static int pcb_link_target(const struct proc_node *pn, char *out, int cap) {
+    if (cap <= 0) return 0;
+    out[0] = '\0';
+    if (pn->kind == PK_ROOT) {
+        if (cap >= 2) { out[0] = '/'; out[1] = '\0'; }
+        return 1;
+    }
+    uint64_t sstatus = procfs_irq_save();
+    struct pcb *pcb = proc_find_by_pid(pn->pid);
+    if (!pcb || pcb->generation != pn->generation) {
+        procfs_irq_restore(sstatus);
+        return -ESRCH;
+    }
+    const char *src = (pn->kind == PK_CWD) ? pcb->cwd_path : pcb->exe_path;
+    int slen = 0;
+    /* Bound first: && evaluates left-to-right, so reading src[slen]
+     * before the bound check would touch src[256] on an unterminated
+     * 256-byte path. */
+    while (slen < 256 && src[slen]) slen++;
+    int n = slen;
+    if (n > cap - 1) n = cap - 1;
+    for (int i = 0; i < n; i++) out[i] = src[i];
+    out[n] = '\0';
+    procfs_irq_restore(sstatus);
+    return slen;
+}
+
+static int piddir_link_readlink(struct inode *ip, char *buf, uint64_t n) {
+    struct proc_node *pn = (struct proc_node *)ip->fs_data;
+    if (!pn) return -EIO;
+    char target[256];
+    int slen = pcb_link_target(pn, target, (int)sizeof(target));
+    if (slen < 0) return slen;
+    int copy = slen;
+    if (copy > (int)sizeof(target) - 1) copy = (int)sizeof(target) - 1;
+    if ((uint64_t)copy > n) copy = (int)n;
+    for (int i = 0; i < copy; i++) buf[i] = target[i];
+    return copy;
+}
+
+static int piddir_link_stat(struct inode *ip, struct stat *st) {
+    struct proc_node *pn = (struct proc_node *)ip->fs_data;
+    if (!pn) return -EIO;
+    char target[256];
+    int slen = pcb_link_target(pn, target, (int)sizeof(target));
+    /* Surface the same -errno (e.g. -ESRCH on stale pcb) that readlink
+     * would, so stat()/lstat() can't claim success when readlink fails. */
+    if (slen < 0) return slen;
+    st->st_dev   = 3;
+    st->st_ino   = (uint64_t)(uintptr_t)ip;
+    st->st_mode  = ip->mode;
+    st->st_nlink = 1;
+    st->st_uid = st->st_gid = 0;
+    st->st_size  = (uint64_t)slen;
+    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    st->st_blksize = 512;
+    st->st_blocks  = (st->st_size + 511) / 512;
+    return 0;
+}
+
+static const struct inode_ops piddir_link_ops = {
+    .stat     = piddir_link_stat,
+    .readlink = piddir_link_readlink,
+    .release  = piddir_file_release,
+};
+
+static struct proc_node *piddir_link_make(int pid, uint64_t gen,
+                                           enum proc_kind kind) {
+    struct proc_node *pn = pool_alloc();
+    if (!pn) return 0;
+    pn->kind       = kind;
+    pn->pid        = pid;
+    pn->generation = gen;
+
+    pn->ino.type        = I_LNK;
+    pn->ino.mode        = S_IFLNK | 0777;
+    pn->ino.uid         = 0;
+    pn->ino.gid         = 0;
+    pn->ino.size        = 0;
+    pn->ino.mtime       = 0;
+    pn->ino.nlink       = 1;
+    pn->ino.refcnt      = 1;
+    pn->ino.ops         = &piddir_link_ops;
+    pn->ino.fs_data     = pn;
+    pn->ino.mount_child = 0;
+    pn->ino.mount_parent = 0;
+    return pn;
+}
 
 static int parse_pid(const char *s, int *out_pid) {
     if (!s || !s[0]) return -1;
@@ -377,12 +495,19 @@ static int piddir_lookup(struct inode *dir, const char *name,
     }
 
     enum proc_kind kind = 0;
+    int is_link = 0;
     if (strcmp(name, "status") == 0) kind = PK_STATUS;
     else if (strcmp(name, "cmdline") == 0) kind = PK_CMDLINE;
     else if (strcmp(name, "stat") == 0) kind = PK_STAT;
+    else if (strcmp(name, "statm") == 0) kind = PK_STATM;
+    else if (strcmp(name, "cwd") == 0) { kind = PK_CWD; is_link = 1; }
+    else if (strcmp(name, "exe") == 0) { kind = PK_EXE; is_link = 1; }
+    else if (strcmp(name, "root") == 0) { kind = PK_ROOT; is_link = 1; }
     else return -ENOENT;
 
-    struct proc_node *file = piddir_file_make(pn->pid, pn->generation, kind);
+    struct proc_node *file = is_link
+        ? piddir_link_make(pn->pid, pn->generation, kind)
+        : piddir_file_make(pn->pid, pn->generation, kind);
     if (!file) return -ENOMEM;
     *out = &file->ino;
     return 0;
@@ -412,14 +537,22 @@ static int emit_dirent(void *buf, uint64_t n, uint64_t off, uint64_t ino,
 
 static int piddir_getdents(struct inode *dir, uint64_t off, void *buf,
                             uint64_t n, uint64_t *out_next) {
-    static const char *ents[] = { "status", "cmdline", "stat" };
+    static const struct { const char *name; uint8_t dt; } ents[] = {
+        { "status",  DT_REG     },
+        { "cmdline", DT_REG     },
+        { "stat",    DT_REG     },
+        { "statm",   DT_REG     },
+        { "cwd",     DT_LNK },
+        { "exe",     DT_LNK },
+        { "root",    DT_LNK },
+    };
     if (off >= (uint64_t)(sizeof(ents) / sizeof(ents[0]))) {
         if (out_next) *out_next = off;
         return 0;
     }
 
-    return emit_dirent(buf, n, off, (uint64_t)(uintptr_t)dir, DT_REG,
-                       ents[(int)off], out_next);
+    return emit_dirent(buf, n, off, (uint64_t)(uintptr_t)dir, ents[(int)off].dt,
+                       ents[(int)off].name, out_next);
 }
 
 static int piddir_file_stat(struct inode *ip, struct stat *st) {
@@ -454,9 +587,22 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
     for (int i = 0; i < (int)sizeof(snap.comm); i++)
         snap.comm[i] = pcb->comm[i];
     uint64_t vm_bytes = 0;
-    for (struct vma *v = pcb->vma_list; v; v = v->next)
-        vm_bytes += v->end - v->start;
-    snap.vm_size_kb = vm_bytes / 1024;
+    uint64_t text_bytes = 0;
+    uint64_t data_bytes = 0;
+    for (struct vma *v = pcb->vma_list; v; v = v->next) {
+        /* VMA start is always page-aligned; end may not be (sbrk sets
+         * heap_vma->end to the raw brk). Round end up so a partial
+         * trailing page is still counted — the kernel will allocate a
+         * full page on access. */
+        uint64_t bytes = page_round_up(v->end) - v->start;
+        vm_bytes += bytes;
+        if (v->prot & VMA_PROT_X) text_bytes += bytes;
+        else                      data_bytes += bytes;
+    }
+    snap.vm_size_kb    = vm_bytes / 1024;
+    snap.vm_size_pages = vm_bytes / PAGE_SIZE;
+    snap.vm_text_pages = text_bytes / PAGE_SIZE;
+    snap.vm_data_pages = data_bytes / PAGE_SIZE;
     procfs_irq_restore(sstatus);
 
     char tmp[512];
@@ -465,6 +611,7 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
     case PK_STATUS:  total = prod_status(tmp, (int)sizeof(tmp), &snap); break;
     case PK_CMDLINE: total = prod_cmdline(tmp, (int)sizeof(tmp), &snap); break;
     case PK_STAT:    total = prod_stat(tmp, (int)sizeof(tmp), &snap); break;
+    case PK_STATM:   total = prod_statm(tmp, (int)sizeof(tmp), &snap); break;
     default:         return -ENOENT;
     }
 

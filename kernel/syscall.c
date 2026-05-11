@@ -870,9 +870,10 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc_path < 0) return rc_path;
 
-    /* Capture argv[0] for /proc/<pid>/comm. Read from the OLD address space
-     * while it is still mapped; commit to p->comm only at the exec commit
-     * point so a later -ENOMEM leaves comm reflecting the old image. */
+    /* Capture argv[0] for p->comm (surfaced via /proc/<pid>/status and
+     * /proc/<pid>/stat). Read from the OLD address space while it is
+     * still mapped; commit to p->comm only at the exec commit point so
+     * a later -ENOMEM leaves comm reflecting the old image. */
     char comm_src[64];
     const char *comm_path = kpath;
     if (argv_user) {
@@ -979,6 +980,12 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     p->heap_vma   = heap_vma;
     p->brk_start  = brk;
     proc_set_comm_basename(p, comm_path);
+    {
+        int j;
+        for (j = 0; kpath[j] && j < (int)sizeof(p->exe_path) - 1; j++)
+            p->exe_path[j] = kpath[j];
+        p->exe_path[j] = '\0';
+    }
 
     trapframe[TF_SEPC] = entry;
     trapframe[1] = new_sp;   // x2 = sp

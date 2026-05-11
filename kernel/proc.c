@@ -164,6 +164,7 @@ struct pcb *alloc_proc(void) {
     p->did_exec   = 0;
     p->is_user    = 0;
     for (int i = 0; i < (int)sizeof(p->comm); i++) p->comm[i] = '\0';
+    for (int i = 0; i < (int)sizeof(p->exe_path); i++) p->exe_path[i] = '\0';
     p->pagetable  = 0;
     p->user_entry = 0;
     p->user_sp    = 0;
@@ -335,6 +336,8 @@ int proc_fork_current(void) {
     child->sid        = parent->sid;
     for (int i = 0; i < (int)sizeof(child->comm); i++)
         child->comm[i] = parent->comm[i];
+    for (int i = 0; i < (int)sizeof(child->exe_path); i++)
+        child->exe_path[i] = parent->exe_path[i];
     child->last_signal = 0;
     child->stopped_reported = 0;
     child->continued_pending = 0;

@@ -54,6 +54,8 @@ struct pcb {
     uint8_t        is_user;         // 1 for user processes, 0 for kernel threads
 
     // Executable name (basename of last exec'd path or argv[0]); NUL-padded.
+    // Surfaced via the Name: field in /proc/<pid>/status and the comm in
+    // /proc/<pid>/stat — there is no separate /proc/<pid>/comm file.
     char           comm[16];
 
     void         (*entry)(void);    // entry function (kernel threads only)
@@ -80,6 +82,11 @@ struct pcb {
     struct file   *ofile[NOFILE];   // open files; null = free slot
     struct inode  *cwd;             // current working directory (refcounted)
     char           cwd_path[256];   // string form of cwd, kept in sync by chdir
+
+    // Path of the last exec'd image (or kernel-spawn path), copied verbatim
+    // from the caller-supplied string — may be relative. NUL-terminated;
+    // empty for kernel threads. Used by /proc/<pid>/exe.
+    char           exe_path[256];
 
     // Virtual memory areas (Phase 7)
     struct vma    *vma_list;        // sorted VMA list head
@@ -113,8 +120,9 @@ struct pcb *alloc_proc(void);
 void        free_proc(struct pcb *p);
 
 // Set p->comm to the basename of `src` (truncated, NUL-terminated). Used by
-// proc_spawn (init image) and do_exec (argv[0] basename) so /proc/<pid>/comm
-// and ps reflect the running program.
+// proc_spawn (init image) and do_exec (argv[0] basename) so the Name: field
+// in /proc/<pid>/status and the comm in /proc/<pid>/stat (and ps) reflect
+// the running program.
 void        proc_set_comm_basename(struct pcb *p, const char *src);
 
 void proc_exit_current(int status);

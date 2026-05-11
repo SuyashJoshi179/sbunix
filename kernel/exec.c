@@ -186,6 +186,12 @@ struct pcb *proc_spawn(const char *path) {
     if (!p) return 0;
 
     proc_set_comm_basename(p, path);
+    if (path) {
+        int j;
+        for (j = 0; path[j] && j < (int)sizeof(p->exe_path) - 1; j++)
+            p->exe_path[j] = path[j];
+        p->exe_path[j] = '\0';
+    }
 
     p->pagetable = create_user_pgtable();
     if (!p->pagetable) {
