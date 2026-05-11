@@ -870,6 +870,26 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc_path < 0) return rc_path;
 
+    /* Capture argv[0] for /proc/<pid>/comm. Read from the OLD address space
+     * while it is still mapped; commit to p->comm only at the exec commit
+     * point so a later -ENOMEM leaves comm reflecting the old image. */
+    char comm_src[64];
+    const char *comm_path = kpath;
+    if (argv_user) {
+        uint64_t uarg0 = 0;
+        int rc_comm = -EFAULT;
+        if (copyin(&uarg0, (const char *)argv_user, sizeof(uint64_t)) == 0
+            && uarg0) {
+            rc_comm = copyin_cstr((const char *)(uintptr_t)uarg0,
+                                  comm_src, sizeof(comm_src));
+        }
+        /* copyin_cstr returns -ENAMETOOLONG with a NUL-terminated truncated
+         * buffer; accept that since p->comm is 15 chars anyway. */
+        if ((rc_comm == 0 || rc_comm == -ENAMETOOLONG) && comm_src[0]) {
+            comm_path = comm_src;
+        }
+    }
+
     // Resolve through VFS — works for any filesystem with a readpage op
     // (tarfs, sbfs, tmpfs, ...). Don't cast fs_data; let the loader pull
     // bytes through the inode's read path.
@@ -958,6 +978,7 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     p->vma_list   = vlist;
     p->heap_vma   = heap_vma;
     p->brk_start  = brk;
+    proc_set_comm_basename(p, comm_path);
 
     trapframe[TF_SEPC] = entry;
     trapframe[1] = new_sp;   // x2 = sp

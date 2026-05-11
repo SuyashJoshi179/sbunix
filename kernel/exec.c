@@ -185,6 +185,8 @@ struct pcb *proc_spawn(const char *path) {
     struct pcb *p = alloc_proc();
     if (!p) return 0;
 
+    proc_set_comm_basename(p, path);
+
     p->pagetable = create_user_pgtable();
     if (!p->pagetable) {
         printk("proc_spawn: create_user_pgtable failed\n");

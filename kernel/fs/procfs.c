@@ -184,32 +184,49 @@ struct proc_snap {
     proc_state_t state;
     int          pid;
     int          parent_pid;
+    int          pgid;
+    int          sid;
+    char         comm[16];
+    uint64_t     vm_size_kb;
 };
 
 static int prod_status(char *out, int cap, const struct proc_snap *s) {
+    const char *cm = (s->comm[0]) ? s->comm : "proc";
     int n = 0;
-    n = append_str(out, cap, n, "Name:\tproc\nState:\t");
+    n = append_str(out, cap, n, "Name:\t");
+    n = append_str(out, cap, n, cm);
+    n = append_str(out, cap, n, "\nState:\t");
     if (n < cap) out[n++] = state_letter(s->state);
     n = append_str(out, cap, n, "\nPid:\t");
     n = append_u64(out, cap, n, (uint64_t)s->pid);
     n = append_str(out, cap, n, "\nPPid:\t");
     n = append_u64(out, cap, n, (uint64_t)s->parent_pid);
-    n = append_str(out, cap, n, "\nUid:\t0\nGid:\t0\nVmSize:\t0 kB\n");
+    n = append_str(out, cap, n, "\nPgid:\t");
+    n = append_u64(out, cap, n, (uint64_t)s->pgid);
+    n = append_str(out, cap, n, "\nSid:\t");
+    n = append_u64(out, cap, n, (uint64_t)s->sid);
+    n = append_str(out, cap, n, "\nUid:\t0\nGid:\t0\nVmSize:\t");
+    n = append_u64(out, cap, n, s->vm_size_kb);
+    n = append_str(out, cap, n, " kB\n");
     return n;
 }
 
 static int prod_cmdline(char *out, int cap, const struct proc_snap *s) {
-    (void)s;
-    static const char str[] = "proc";
+    const char *src = (s->comm[0]) ? s->comm : "proc";
     int n = 0;
-    for (int i = 0; i < (int)sizeof(str) && n < cap; i++) out[n++] = str[i];
+    for (int i = 0; src[i] && n < cap; i++) out[n++] = src[i];
+    /* Linux-style: each argv element is NUL-terminated. We only have argv[0]. */
+    if (n < cap) out[n++] = '\0';
     return n;
 }
 
 static int prod_stat(char *out, int cap, const struct proc_snap *s) {
+    const char *cm = (s->comm[0]) ? s->comm : "proc";
     int n = 0;
     n = append_u64(out, cap, n, (uint64_t)s->pid);
-    n = append_str(out, cap, n, " (proc) ");
+    n = append_str(out, cap, n, " (");
+    n = append_str(out, cap, n, cm);
+    n = append_str(out, cap, n, ") ");
     if (n < cap) out[n++] = state_letter(s->state);
     if (n < cap) out[n++] = ' ';
     n = append_u64(out, cap, n, (uint64_t)s->parent_pid);
@@ -432,6 +449,14 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
     snap.state      = pcb->state;
     snap.pid        = pcb->pid;
     snap.parent_pid = pcb->parent_pid;
+    snap.pgid       = pcb->pgid;
+    snap.sid        = pcb->sid;
+    for (int i = 0; i < (int)sizeof(snap.comm); i++)
+        snap.comm[i] = pcb->comm[i];
+    uint64_t vm_bytes = 0;
+    for (struct vma *v = pcb->vma_list; v; v = v->next)
+        vm_bytes += v->end - v->start;
+    snap.vm_size_kb = vm_bytes / 1024;
     procfs_irq_restore(sstatus);
 
     char tmp[512];

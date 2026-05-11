@@ -115,6 +115,27 @@ static void proc_destroy(struct pcb *p) {
     page_free(p);
 }
 
+void proc_set_comm_basename(struct pcb *p, const char *src) {
+    if (!p) return;
+    /* Zero-fill so the trailing bytes after the terminator can't leak
+     * stale data from a prior longer comm. */
+    for (int i = 0; i < (int)sizeof(p->comm); i++) p->comm[i] = '\0';
+    if (!src || !src[0]) return;
+    int last_sep = -1;
+    for (int i = 0; src[i]; i++) if (src[i] == '/') last_sep = i;
+    int s = last_sep + 1;
+    for (int j = 0; src[s + j] && j < (int)sizeof(p->comm) - 1; j++) {
+        unsigned char c = (unsigned char)src[s + j];
+        /* argv[0] is user-controlled and surfaces verbatim in
+         * /proc/<pid>/stat (where comm is wrapped in parens) and
+         * /proc/<pid>/status (line-oriented). Replace any byte that
+         * would break those parsers with '_'. */
+        if (c < 0x20 || c == 0x7f || c == '(' || c == ')')
+            c = '_';
+        p->comm[j] = (char)c;
+    }
+}
+
 // ----------------------------------------------------------------
 // alloc_proc — allocate a PCB + kernel stack from physical memory
 // ----------------------------------------------------------------
@@ -142,6 +163,7 @@ struct pcb *alloc_proc(void) {
     p->continued_pending = 0;
     p->did_exec   = 0;
     p->is_user    = 0;
+    for (int i = 0; i < (int)sizeof(p->comm); i++) p->comm[i] = '\0';
     p->pagetable  = 0;
     p->user_entry = 0;
     p->user_sp    = 0;
@@ -311,6 +333,8 @@ int proc_fork_current(void) {
     /* Inherit pgid/sid; pid-derived defaults from alloc_proc are overwritten. */
     child->pgid       = parent->pgid;
     child->sid        = parent->sid;
+    for (int i = 0; i < (int)sizeof(child->comm); i++)
+        child->comm[i] = parent->comm[i];
     child->last_signal = 0;
     child->stopped_reported = 0;
     child->continued_pending = 0;
