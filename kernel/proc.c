@@ -124,8 +124,16 @@ void proc_set_comm_basename(struct pcb *p, const char *src) {
     int last_sep = -1;
     for (int i = 0; src[i]; i++) if (src[i] == '/') last_sep = i;
     int s = last_sep + 1;
-    for (int j = 0; src[s + j] && j < (int)sizeof(p->comm) - 1; j++)
-        p->comm[j] = src[s + j];
+    for (int j = 0; src[s + j] && j < (int)sizeof(p->comm) - 1; j++) {
+        unsigned char c = (unsigned char)src[s + j];
+        /* argv[0] is user-controlled and surfaces verbatim in
+         * /proc/<pid>/stat (where comm is wrapped in parens) and
+         * /proc/<pid>/status (line-oriented). Replace any byte that
+         * would break those parsers with '_'. */
+        if (c < 0x20 || c == 0x7f || c == '(' || c == ')')
+            c = '_';
+        p->comm[j] = (char)c;
+    }
 }
 
 // ----------------------------------------------------------------
