@@ -232,6 +232,70 @@ static const struct inode_ops null_ops = {
 };
 static struct inode null_inode;
 
+/* ----------------------------------------------------------------
+ * /dev/zero — read fills the buffer with NUL bytes; write discards.
+ * `buf` here is the kernel bounce buffer (see sys_read in syscall.c),
+ * so we can memset it directly without copyout. Linux (major,minor) is
+ * (1,5).
+ * ---------------------------------------------------------------- */
+static int zero_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
+    (void)ip; (void)off;
+    memset(buf, 0, n);
+    return (int)n;
+}
+static int zero_write(struct inode *ip, uint64_t off, const void *buf, uint64_t n) {
+    (void)ip; (void)off; (void)buf;
+    return (int)n;
+}
+static int zero_stat(struct inode *ip, struct stat *st) {
+    st->st_dev   = 2;
+    st->st_ino   = (uint64_t)(uintptr_t)ip;
+    st->st_mode  = ip->mode;
+    st->st_nlink = 1;
+    st->st_uid   = st->st_gid = 0;
+    st->st_size  = 0;
+    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    st->st_rdev  = MKDEV(1, 5);
+    st->st_blksize = 512;
+    st->st_blocks  = 0;
+    return 0;
+}
+static const struct inode_ops zero_ops = {
+    .read  = zero_read,
+    .write = zero_write,
+    .stat  = zero_stat,
+};
+static struct inode zero_inode;
+
+/* ----------------------------------------------------------------
+ * /dev/tty — process's controlling terminal. In SBUnix the only
+ * terminal is the console, so read/write/ioctl delegate to the same
+ * function pointers; the distinct inode lets us report a different
+ * (major,minor) = (5,0) and st_ino than /dev/console = (5,1).
+ * ---------------------------------------------------------------- */
+static int tty_stat(struct inode *ip, struct stat *st) {
+    st->st_dev   = 2;
+    st->st_ino   = (uint64_t)(uintptr_t)ip;
+    st->st_mode  = ip->mode;
+    st->st_nlink = 1;
+    st->st_uid   = st->st_gid = 0;
+    st->st_size  = 0;
+    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    st->st_rdev  = MKDEV(5, 0);
+    st->st_blksize = 512;
+    st->st_blocks  = 0;
+    return 0;
+}
+static const struct inode_ops tty_ops = {
+    .read     = console_read,
+    .write    = console_write,
+    .ioctl    = console_ioctl,
+    .stat     = tty_stat,
+    .lookup   = console_lookup,
+    .getdents = console_getdents,
+};
+static struct inode tty_inode;
+
 static int devroot_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
     (void)ip; (void)off; (void)buf; (void)n;
     return -EISDIR;
@@ -272,6 +336,14 @@ static int devroot_lookup(struct inode *dir, const char *name,
         *out = inode_get(&null_inode);
         return 0;
     }
+    if (streq(name, "zero")) {
+        *out = inode_get(&zero_inode);
+        return 0;
+    }
+    if (streq(name, "tty")) {
+        *out = inode_get(&tty_inode);
+        return 0;
+    }
     return -ENOENT;
 }
 static int devroot_getdents(struct inode *dir, uint64_t off, void *buf,
@@ -286,6 +358,8 @@ static int devroot_getdents(struct inode *dir, uint64_t off, void *buf,
         { "console", &console_inode, DT_CHR },
         { "loop",    &loop_inode,    DT_LNK },
         { "null",    &null_inode,    DT_CHR },
+        { "zero",    &zero_inode,    DT_CHR },
+        { "tty",     &tty_inode,     DT_CHR },
     };
     int nent = (int)(sizeof(ents) / sizeof(ents[0]));
 
@@ -381,6 +455,32 @@ void devfs_init(void) {
     null_inode.fs_data     = 0;
     null_inode.mount_child = 0;
     null_inode.mount_parent = 0;
+
+    zero_inode.type        = I_CHR;
+    zero_inode.mode        = S_IFCHR | 0666;
+    zero_inode.uid         = 0;
+    zero_inode.gid         = 0;
+    zero_inode.size        = 0;
+    zero_inode.mtime       = 0;
+    zero_inode.nlink       = 1;
+    zero_inode.refcnt      = 1;
+    zero_inode.ops         = &zero_ops;
+    zero_inode.fs_data     = 0;
+    zero_inode.mount_child = 0;
+    zero_inode.mount_parent = 0;
+
+    tty_inode.type         = I_CHR;
+    tty_inode.mode         = S_IFCHR | 0666;
+    tty_inode.uid          = 0;
+    tty_inode.gid          = 0;
+    tty_inode.size         = 0;
+    tty_inode.mtime        = 0;
+    tty_inode.nlink        = 1;
+    tty_inode.refcnt       = 1;
+    tty_inode.ops          = &tty_ops;
+    tty_inode.fs_data      = 0;
+    tty_inode.mount_child  = 0;
+    tty_inode.mount_parent = 0;
 
     // Mount devfs at /dev (requires tarfs "/" to already be mounted).
     mount_fs("/dev", &devroot_inode);

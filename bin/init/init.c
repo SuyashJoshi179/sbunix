@@ -53,6 +53,7 @@ int main(void) {
         "/bin/sleep_test",
         "/bin/yield_test",
         "/bin/fd_test",
+        "/bin/dev_zero_tty_test",
         "/bin/stat_test",
         "/bin/getdents_test",
         "/bin/chdir_test",
