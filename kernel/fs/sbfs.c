@@ -206,8 +206,11 @@ struct inode *sbfs_iget(uint32_t inum) {
             return &icache[i].vnode;
         }
     }
+    /* All SBFS_ICACHE_MAX slots are pinned by live refs — caller can't
+     * cache this inode right now. Returning NULL lets the open/lookup
+     * path surface an errno (-ENFILE / -ENOSPC) instead of taking the
+     * whole kernel down on a userspace fd-storm. */
     fs_unlock();
-    panic("sbfs: inode cache exhausted");
     return 0;
 }
 
