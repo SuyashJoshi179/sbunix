@@ -206,8 +206,12 @@ struct inode *sbfs_iget(uint32_t inum) {
             return &icache[i].vnode;
         }
     }
+    /* All SBFS_ICACHE_MAX slots are pinned by live refs — caller can't
+     * cache this inode right now. Returning 0 (NULL inode) lets callers
+     * map the failure to their normal errnos (lookup → -ENOENT,
+     * create/mkdir → -ENOSPC, sbfs_attach → -ENOMEM) instead of taking
+     * the whole kernel down on a userspace fd-storm. */
     fs_unlock();
-    panic("sbfs: inode cache exhausted");
     return 0;
 }
 
@@ -256,7 +260,20 @@ struct inode *sbfs_ialloc(uint16_t type) {
             d->mtime = sbfs_now();
             log_write(bp);
             brelse(bp);
-            return sbfs_iget(inum);
+            struct inode *ip = sbfs_iget(inum);
+            if (!ip) {
+                /* Roll back the on-disk allocation within the same
+                 * transaction so a future ialloc can reuse this inum.
+                 * Without this, type stays nonzero and the dinode is
+                 * leaked permanently. */
+                struct buf *bp2 = bread(block);
+                struct sb_dinode *d2 = (struct sb_dinode *)(bp2->data + offset);
+                d2->type = 0;
+                log_write(bp2);
+                brelse(bp2);
+                return 0;
+            }
+            return ip;
         }
         brelse(bp);
     }
