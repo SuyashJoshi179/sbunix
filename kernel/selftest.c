@@ -928,6 +928,63 @@ static void test_vma_split(void) {
     st_check(list == 0, "vma_split: exact match removes VMA");
 }
 
+/*
+ * F-A02 regression: page-table pages must be released via page_put, not
+ * page_free.
+ *
+ * Pre-fix `free_user_pages_level` (and `free_user_pgtable`) called
+ * page_free on every intermediate / root page-table page, which panics
+ * if the page's refcount is anything other than 1. Today every
+ * page-table page has refcount = 1 because page_alloc set it and no
+ * call site ever bumps it, but the panic-on-mismatch made the kernel
+ * brittle to a future change (shared inner page tables, COW page-table
+ * sharing, etc.).
+ *
+ * This test pins one intermediate (L1) page-table page by page_get'ing
+ * it after vmem_map populates the directory chain, then frees the user
+ * page table and asserts the bumped page is still allocated with
+ * refcount 1 (page_put decremented 2 → 1). On the pre-fix kernel the
+ * page_free path would panic and the run halts mid-test.
+ */
+static void test_pgtable_page_put(void) {
+    printk("[SELFTEST] -- pgtable_page_put --\n");
+
+    pgtable_t pt = create_user_pgtable();
+    st_check(pt != 0, "pgtable_page_put: create_user_pgtable");
+    if (!pt) return;
+
+    void *data = page_alloc();
+    st_check(data != 0, "pgtable_page_put: data page alloc");
+    if (!data) { free_user_pgtable(pt); return; }
+
+    /* Map at USER_TEXT_BASE — get_pte allocates L1 + L0 intermediates
+     * on the way down. */
+    vmem_map(pt, USER_TEXT_BASE,
+             virt_to_phys((unsigned long)data),
+             PAGE_SIZE, PTE_R | PTE_W | PTE_U);
+
+    /* Pull the L1 intermediate's phys addr out of the L2 slot. */
+    pte_t l2pte = pt[get_ptindx(2, USER_TEXT_BASE)];
+    st_check((l2pte & PTE_V) != 0, "pgtable_page_put: L2 entry valid");
+    unsigned long l1_pa = pte_to_phyaddr(l2pte);
+
+    /* Pin the L1 page so refcount becomes 2. free_user_pages_level
+     * must decrement (not page_free, which panics on != 1). */
+    st_check(page_ref_get(l1_pa) == 1, "pgtable_page_put: L1 ref=1 pre-pin");
+    page_get(l1_pa);
+    st_check(page_ref_get(l1_pa) == 2, "pgtable_page_put: L1 ref=2 after page_get");
+
+    /* Pre-fix: panics in here. Post-fix: returns cleanly. */
+    free_user_pgtable(pt);
+
+    st_check(page_ref_get(l1_pa) == 1,
+             "pgtable_page_put: L1 ref=1 after free_user_pgtable (page_put used)");
+
+    /* Drop our pin so the L1 page actually returns to the freelist. */
+    page_put(l1_pa);
+    st_check(page_ref_get(l1_pa) == 0, "pgtable_page_put: L1 ref=0 after release");
+}
+
 // ----------------------------------------------------------------------------
 // Phase 8 selftests
 // ----------------------------------------------------------------------------
@@ -1108,6 +1165,7 @@ void selftest_run(void) {
     test_vma_list_dup();
     test_vma_remove();
     test_vma_split();
+    test_pgtable_page_put();
     test_signal_defaults();
     test_signal_pending_bitops();
     test_termios_defaults();
