@@ -47,5 +47,9 @@ void timer_handler(void) {
         }
     }
 
-    yield();   // preempt the current thread on each tick
+    /* No yield here: preemption from in-kernel timer traps would violate
+     * the "IRQ-off is the lock" model — kernel critical sections that
+     * happened to be running with interrupts on could lose CPU to another
+     * proc mid-update. The trap handler gates the preempt on SPP=0
+     * (interrupted user mode) instead. */
 }
