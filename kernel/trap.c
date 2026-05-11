@@ -108,9 +108,13 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
         // U-mode ecall: advance sepc past the ecall before dispatching so
         // that yield() inside a syscall resumes at the instruction after ecall.
         trapframe[TF_SEPC] += 4;
+        /* Snapshot a0 before dispatch overwrites it with the return value;
+         * needed so check_signals_after_syscall can restore it when a
+         * SA_RESTART handler asks the syscall to replay. */
+        uint64_t orig_a0 = trapframe[TF_A0];
         int64_t ret = syscall_dispatch(trapframe[TF_A7], trapframe);
         trapframe[TF_A0] = (uint64_t)ret;
-        check_signals(trapframe);
+        check_signals_after_syscall(trapframe, ret, orig_a0);
         check_user_return(trapframe, "ecall-ret");
         return;
     }

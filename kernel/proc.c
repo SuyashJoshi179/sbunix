@@ -556,7 +556,7 @@ int proc_wait4_current(int pid, int *status, int options) {
 
         if (!found_child) return -ECHILD;
         if (options & WNOHANG_K) return 0;
-        if (sig_has_actionable(current)) return -EINTR;
+        if (sig_has_actionable(current)) return -ERESTARTSYS;
         proc_sleep(current);
     }
 }

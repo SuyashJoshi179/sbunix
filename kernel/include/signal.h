@@ -43,6 +43,10 @@ struct sigaction {
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
 
+/* sigaction sa_flags (matches libc/include/signal.h). Only SA_RESTART is
+ * honored by the kernel today; other flags are stored but ignored. */
+#define SA_RESTART  0x10000000
+
 /* Signal frame written by kernel onto user stack during delivery */
 #define SIGFRAME_MAGIC 0x5342534947464DULL  /* "SBSIGFRM" */
 
@@ -66,6 +70,17 @@ void send_signal(struct pcb *target, int sig);
 void send_signal_by_pid(int pid, int sig);
 int  send_signal_pgrp(int pgid, int sig);
 void check_signals(uint64_t *trapframe);
+
+/* Called from trap_handler at the end of a U-mode ecall. `ret` is the
+ * kernel's syscall return value (already written to trapframe[TF_A0]);
+ * `orig_a0` is the first syscall argument captured before dispatch.
+ *
+ * If `ret == -ERESTARTSYS` (sentinel from a blocking op interrupted by a
+ * signal) and the signal about to be delivered has a custom handler with
+ * SA_RESTART set, the trapframe is rewound to re-execute the ecall after
+ * sigreturn. Otherwise the sentinel is translated to -EINTR. */
+void check_signals_after_syscall(uint64_t *trapframe, int64_t ret,
+                                 uint64_t orig_a0);
 
 /* Signal syscall implementations (kernel/signal.c). */
 int64_t sys_kill(int pid, int sig);

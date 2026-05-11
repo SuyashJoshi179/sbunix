@@ -177,9 +177,12 @@ void uart_rx_isr(void) {
  * uart_rx_get — blocking get of one byte from the committed-line ring
  *
  * Returns:
- *   1   — byte written into *out (normal)
- *   0   — EOF (Ctrl-D sentinel received)
- *  -1   — error
+ *   1              — byte written into *out (normal)
+ *   0              — EOF (Ctrl-D sentinel received)
+ *  -1              — no current process / generic error
+ *  -ERESTARTSYS    — interrupted by an actionable signal; caller (the
+ *                    U-mode ecall trap path) must translate this to
+ *                    -EINTR or replay the syscall per SA_RESTART
  * ---------------------------------------------------------------- */
 
 int uart_rx_get(char *out) {
@@ -191,7 +194,7 @@ int uart_rx_get(char *out) {
         proc_sleep(p);
         /* Resumed by proc_wakeup in uart_rx_isr / line_commit. */
         if (sig_has_actionable(p))
-            return -EINTR;
+            return -ERESTARTSYS;
     }
 
     char c = line_buf[line_head];

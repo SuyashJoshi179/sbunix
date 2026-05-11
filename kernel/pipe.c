@@ -57,7 +57,7 @@ int pipe_read(struct pipe *p, char *buf, int n) {
     while (p->nread == p->nwrite && p->writeopen) {
         proc_sleep_chan(p);
         if (sig_has_actionable(current_proc()))
-            return -EINTR;
+            return -ERESTARTSYS;
     }
 
     int i;
@@ -83,7 +83,7 @@ int pipe_write(struct pipe *p, const char *buf, int n) {
             proc_wakeup_chan(p);
             proc_sleep_chan(p);
             if (sig_has_actionable(current_proc()))
-                return i > 0 ? i : -EINTR;
+                return i > 0 ? i : -ERESTARTSYS;
         }
         if (!p->readopen) {
             send_signal(current_proc(), SIGPIPE);

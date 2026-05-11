@@ -41,7 +41,11 @@ static int console_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
     for (uint64_t i = 0; i < n; ) {
         char c;
         int r = uart_rx_get(&c);
-        if (r == -EINTR) return i > 0 ? (int)i : -EINTR;
+        /* Propagate the restart sentinel so SA_RESTART handlers can replay
+         * the read; non-restart callers will see -EINTR after translation
+         * in check_signals_after_syscall. Partial read short-circuits to
+         * the byte count already accumulated. */
+        if (r == -ERESTARTSYS) return i > 0 ? (int)i : -ERESTARTSYS;
         if (r < 0) return (int)i;    // error
         if (r == 0) {                // EOF (Ctrl-D)
             if (i == 0) return 0;
