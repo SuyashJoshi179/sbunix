@@ -877,11 +877,15 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     const char *comm_path = kpath;
     if (argv_user) {
         uint64_t uarg0 = 0;
+        int rc_comm = -EFAULT;
         if (copyin(&uarg0, (const char *)argv_user, sizeof(uint64_t)) == 0
-            && uarg0
-            && copyin_cstr((const char *)(uintptr_t)uarg0,
-                           comm_src, sizeof(comm_src)) >= 0
-            && comm_src[0]) {
+            && uarg0) {
+            rc_comm = copyin_cstr((const char *)(uintptr_t)uarg0,
+                                  comm_src, sizeof(comm_src));
+        }
+        /* copyin_cstr returns -ENAMETOOLONG with a NUL-terminated truncated
+         * buffer; accept that since p->comm is 15 chars anyway. */
+        if ((rc_comm == 0 || rc_comm == -ENAMETOOLONG) && comm_src[0]) {
             comm_path = comm_src;
         }
     }

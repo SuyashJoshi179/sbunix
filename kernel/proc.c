@@ -117,14 +117,15 @@ static void proc_destroy(struct pcb *p) {
 
 void proc_set_comm_basename(struct pcb *p, const char *src) {
     if (!p) return;
-    if (!src || !src[0]) { p->comm[0] = '\0'; return; }
+    /* Zero-fill so the trailing bytes after the terminator can't leak
+     * stale data from a prior longer comm. */
+    for (int i = 0; i < (int)sizeof(p->comm); i++) p->comm[i] = '\0';
+    if (!src || !src[0]) return;
     int last_sep = -1;
     for (int i = 0; src[i]; i++) if (src[i] == '/') last_sep = i;
     int s = last_sep + 1;
-    int j;
-    for (j = 0; src[s + j] && j < (int)sizeof(p->comm) - 1; j++)
+    for (int j = 0; src[s + j] && j < (int)sizeof(p->comm) - 1; j++)
         p->comm[j] = src[s + j];
-    p->comm[j] = '\0';
 }
 
 // ----------------------------------------------------------------
