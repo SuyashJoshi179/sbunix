@@ -1014,7 +1014,7 @@ static int64_t do_exec(const char *path, char *const *argv_user,
 // ---------------------------------------------------------------------------
 static int64_t sys_sbrk(int64_t incr) {
     struct pcb *p = current_proc();
-    if (!p || !p->heap_vma) return -1;
+    if (!p || !p->heap_vma) return -EINVAL;
 
     uint64_t old_end = p->heap_vma->end;
     uint64_t new_end = old_end + (uint64_t)incr;
@@ -1184,7 +1184,7 @@ static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
 // ---------------------------------------------------------------------------
 static int64_t sys_munmap(uint64_t addr, uint64_t len) {
     struct pcb *p = current_proc();
-    if (!p) return -1;
+    if (!p) return -EINVAL;
     if (addr & (PAGE_SIZE - 1)) return -EINVAL;
     if (len == 0) return -EINVAL;
     len = page_round_up(len);
