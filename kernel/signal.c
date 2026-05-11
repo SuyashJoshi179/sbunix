@@ -260,26 +260,34 @@ void check_signals_after_syscall(uint64_t *trapframe, int64_t ret,
     if (ret == -ERESTARTSYS) {
         trapframe[TF_A0] = (uint64_t)(int64_t)-EINTR;
 
+        /* Pick the lowest-numbered *actionable* pending signal (i.e. the
+         * one check_signals will actually deliver). Skipping SIG_IGN and
+         * default-ignored signals here matters: those are dropped without
+         * ever invoking a handler, so they must not block the SA_RESTART
+         * of a higher-numbered actionable signal. */
         uint64_t deliverable = p->sig_pending & ~p->sig_blocked;
-        if (deliverable) {
-            int sig = 0;
-            for (int i = 1; i < NSIG; i++) {
-                if (deliverable & (1ULL << i)) { sig = i; break; }
-            }
-            if (sig) {
-                sighandler_t h = p->sig_handlers[sig].sa_handler;
-                int has_custom  = (h != SIG_DFL && h != SIG_IGN);
-                int restart_set = (p->sig_handlers[sig].sa_flags & SA_RESTART) != 0;
-                if (has_custom && restart_set) {
-                    /* Rewind to the ecall instruction. Other syscall
-                     * argument registers (a1..a6, a7) are untouched in
-                     * the trapframe after entry, so only a0 needs to be
-                     * reset to its pre-dispatch value. The handler runs
-                     * with this rewound trapframe saved in the sigframe;
-                     * sigreturn restores it and the ecall replays. */
-                    trapframe[TF_SEPC] -= 4;
-                    trapframe[TF_A0]   = orig_a0;
-                }
+        int sig = 0;
+        for (int i = 1; i < NSIG; i++) {
+            if (!(deliverable & (1ULL << i))) continue;
+            sighandler_t hi = p->sig_handlers[i].sa_handler;
+            if (hi == SIG_IGN) continue;
+            if (hi == SIG_DFL && default_action[i] == ACT_IGN) continue;
+            sig = i;
+            break;
+        }
+        if (sig) {
+            sighandler_t h = p->sig_handlers[sig].sa_handler;
+            int has_custom  = (h != SIG_DFL && h != SIG_IGN);
+            int restart_set = (p->sig_handlers[sig].sa_flags & SA_RESTART) != 0;
+            if (has_custom && restart_set) {
+                /* Rewind to the ecall instruction. Other syscall
+                 * argument registers (a1..a6, a7) are untouched in
+                 * the trapframe after entry, so only a0 needs to be
+                 * reset to its pre-dispatch value. The handler runs
+                 * with this rewound trapframe saved in the sigframe;
+                 * sigreturn restores it and the ecall replays. */
+                trapframe[TF_SEPC] -= 4;
+                trapframe[TF_A0]   = orig_a0;
             }
         }
     }
