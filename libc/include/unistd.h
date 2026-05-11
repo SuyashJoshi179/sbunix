@@ -9,6 +9,14 @@
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 
+/* POSIX requires SEEK_SET/CUR/END to be visible via unistd.h (for lseek).
+ * Keep values in lockstep with stdio.h. */
+#ifndef SEEK_SET
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+#endif
+
 long  write(int fd, const void *buf, long len);
 long  read(int fd, void *buf, long len);
 int   open(const char *path, int flags, ...);
