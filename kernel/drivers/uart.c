@@ -191,7 +191,7 @@ int uart_rx_get(char *out) {
         proc_sleep(p);
         /* Resumed by proc_wakeup in uart_rx_isr / line_commit. */
         if (sig_has_actionable(p))
-            return -EINTR;
+            return -ERESTARTSYS;
     }
 
     char c = line_buf[line_head];

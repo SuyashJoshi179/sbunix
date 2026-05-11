@@ -246,6 +246,47 @@ void check_signals(uint64_t *trapframe) {
     build_sigframe_and_redirect(p, trapframe, sig, h);
 }
 
+void check_signals_after_syscall(uint64_t *trapframe, int64_t ret,
+                                 uint64_t orig_a0) {
+    struct pcb *p = current_proc();
+    if (!p || !p->is_user) {
+        check_signals(trapframe);
+        return;
+    }
+
+    /* Default policy for the kernel-internal -ERESTARTSYS sentinel: surface
+     * EINTR to userspace. The SA_RESTART branch below overrides this by
+     * rewinding sepc instead, so the syscall replays after the handler. */
+    if (ret == -ERESTARTSYS) {
+        trapframe[TF_A0] = (uint64_t)(int64_t)-EINTR;
+
+        uint64_t deliverable = p->sig_pending & ~p->sig_blocked;
+        if (deliverable) {
+            int sig = 0;
+            for (int i = 1; i < NSIG; i++) {
+                if (deliverable & (1ULL << i)) { sig = i; break; }
+            }
+            if (sig) {
+                sighandler_t h = p->sig_handlers[sig].sa_handler;
+                int has_custom  = (h != SIG_DFL && h != SIG_IGN);
+                int restart_set = (p->sig_handlers[sig].sa_flags & SA_RESTART) != 0;
+                if (has_custom && restart_set) {
+                    /* Rewind to the ecall instruction. Other syscall
+                     * argument registers (a1..a6, a7) are untouched in
+                     * the trapframe after entry, so only a0 needs to be
+                     * reset to its pre-dispatch value. The handler runs
+                     * with this rewound trapframe saved in the sigframe;
+                     * sigreturn restores it and the ecall replays. */
+                    trapframe[TF_SEPC] -= 4;
+                    trapframe[TF_A0]   = orig_a0;
+                }
+            }
+        }
+    }
+
+    check_signals(trapframe);
+}
+
 /* ----------------------------------------------------------------
  * sys_kill
  * ---------------------------------------------------------------- */

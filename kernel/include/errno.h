@@ -33,3 +33,9 @@
 #define EXDEV        18    /* cross-device link */
 #define ENOEXEC       8    /* exec format error */
 #define EAGAIN       11    /* resource temporarily unavailable */
+
+/* Kernel-internal sentinels (must never reach userspace). Translated to
+ * a real errno (typically EINTR) or used to trigger syscall restart by
+ * check_signals_after_syscall on the ecall return path. Out of the POSIX
+ * errno range so a stray leak is immediately visible. */
+#define ERESTARTSYS  512

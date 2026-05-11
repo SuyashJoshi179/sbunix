@@ -118,6 +118,7 @@ int main(void) {
         "/bin/sigpipe_test",
         "/bin/sigsegv_handler_test",
         "/bin/eintr_test",
+        "/bin/sa_restart_test",
         "/bin/termios_test",
         "/bin/copyio_test",
         "/bin/copyio_fuzz_test",
