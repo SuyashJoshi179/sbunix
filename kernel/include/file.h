@@ -20,8 +20,8 @@ struct file {
     struct pipe  *pipe;
 };
 
-#define NFILE  128  /* global open-file table size */
-#define NOFILE 16   /* per-process fd table size   */
+#define NFILE  256  /* global open-file table size */
+#define NOFILE 64   /* per-process fd table size   */
 
 /* Seek whence values (match POSIX) */
 #define SEEK_SET  0

@@ -235,7 +235,11 @@ static int64_t sys_open(const char *path, int flags) {
         if (!leaf || !leaf[0]) return -EINVAL;
 
         struct inode *parent = 0;
-        if (namei(parent_path, &parent) < 0) return -ENOENT;
+        /* Propagate namei's -errno verbatim — collapsing all walk
+         * failures to -ENOENT would mask -ENOTDIR / -EACCES / -ELOOP /
+         * -ENAMETOOLONG from userspace. */
+        int nrc = namei(parent_path, &parent);
+        if (nrc < 0) return nrc;
         if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
         if (!parent->ops || !parent->ops->create) {
             inode_put(parent);
@@ -284,7 +288,9 @@ static int64_t sys_mkdir(const char *path) {
     if (!leaf || !leaf[0]) return -EINVAL;
 
     struct inode *parent = 0;
-    if (namei(parent_path, &parent) < 0) return -ENOENT;
+    /* Propagate namei's -errno verbatim (see sys_mknod for rationale). */
+    int nrc = namei(parent_path, &parent);
+    if (nrc < 0) return nrc;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
 
     // Check existence first: EEXIST takes priority over EROFS so that
@@ -319,7 +325,9 @@ static int64_t sys_unlink(const char *path) {
     if (!leaf || !leaf[0]) return -EINVAL;
 
     struct inode *parent = 0;
-    if (namei(parent_path, &parent) < 0) return -ENOENT;
+    /* Propagate namei's -errno verbatim. */
+    int nrc = namei(parent_path, &parent);
+    if (nrc < 0) return nrc;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
     if (!parent->ops || !parent->ops->unlink) { inode_put(parent); return -EROFS; }
 
@@ -348,7 +356,11 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
 
     // Resolve target.
     struct inode *target = 0;
-    if (namei(kold, &target) < 0) return -ENOENT;
+    /* Propagate namei's -errno (could be -ELOOP, -ENOTDIR, etc). */
+    {
+        int nrc = namei(kold, &target);
+        if (nrc < 0) return nrc;
+    }
     if (target->type == I_DIR) {
         inode_put(target);
         return -EPERM;
@@ -367,9 +379,11 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
     }
 
     struct inode *parent = 0;
-    if (namei(parent_path, &parent) < 0) {
+    /* Propagate namei's -errno verbatim. */
+    int nrc = namei(parent_path, &parent);
+    if (nrc < 0) {
         inode_put(target);
-        return -ENOENT;
+        return nrc;
     }
     if (parent->type != I_DIR) {
         inode_put(parent);
@@ -409,6 +423,53 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_symlink — create a symbolic link at `linkpath` whose target string
+// is `target`. Unlike hard link, target is NOT resolved: it's stored
+// literally and only walked when something later traverses the link.
+//
+// Errors: -ENOENT (parent dir missing), -EEXIST (linkpath exists),
+// -ENOTDIR (parent not a dir), -EROFS (fs lacks symlink op),
+// -EINVAL (empty target / bad path), -ENAMETOOLONG (target too long).
+// ---------------------------------------------------------------------------
+static int64_t sys_symlink(const char *u_target, const char *u_linkpath) {
+    char ktarget[PATH_MAX_LOCAL], klinkpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(u_target, ktarget, sizeof(ktarget));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(u_linkpath, klinkpath, sizeof(klinkpath));
+    if (rc < 0) return rc;
+    if (ktarget[0] == '\0') return -EINVAL;
+
+    char parent_path[PATH_MAX_LOCAL];
+    const char *leaf = 0;
+    if (path_split(klinkpath, parent_path, &leaf) < 0) return -EINVAL;
+    if (!leaf || !leaf[0]) return -EINVAL;
+
+    struct inode *parent = 0;
+    /* Propagate namei's -errno verbatim. */
+    int nrc = namei(parent_path, &parent);
+    if (nrc < 0) return nrc;
+    if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
+
+    if (parent->ops && parent->ops->lookup) {
+        struct inode *existing = 0;
+        if (parent->ops->lookup(parent, leaf, &existing) == 0) {
+            inode_put(existing);
+            inode_put(parent);
+            return -EEXIST;
+        }
+    }
+
+    if (!parent->ops || !parent->ops->symlink) {
+        inode_put(parent);
+        return -EROFS;
+    }
+
+    int r = parent->ops->symlink(parent, leaf, ktarget);
+    inode_put(parent);
+    return r;
+}
+
+// ---------------------------------------------------------------------------
 // sys_rename — atomically move oldpath to newpath.
 //
 // POSIX rules implemented:
@@ -437,18 +498,24 @@ static int64_t sys_rename(const char *oldpath, const char *newpath) {
     if (!old_leaf || !old_leaf[0]) return -EINVAL;
     if (!new_leaf || !new_leaf[0]) return -EINVAL;
 
-    // Resolve both parents.
+    // Resolve both parents. Propagate namei -errno verbatim.
     struct inode *old_p = 0;
-    if (namei(old_parent_buf, &old_p) < 0) return -ENOENT;
+    {
+        int nrc = namei(old_parent_buf, &old_p);
+        if (nrc < 0) return nrc;
+    }
     if (old_p->type != I_DIR) {
         inode_put(old_p);
         return -ENOTDIR;
     }
 
     struct inode *new_p = 0;
-    if (namei(new_parent_buf, &new_p) < 0) {
-        inode_put(old_p);
-        return -ENOENT;
+    {
+        int nrc = namei(new_parent_buf, &new_p);
+        if (nrc < 0) {
+            inode_put(old_p);
+            return nrc;
+        }
     }
     if (new_p->type != I_DIR) {
         inode_put(new_p);
@@ -803,26 +870,35 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc_path < 0) return rc_path;
 
-    // Resolve through VFS.
+    // Resolve through VFS — works for any filesystem with a readpage op
+    // (tarfs, sbfs, tmpfs, ...). Don't cast fs_data; let the loader pull
+    // bytes through the inode's read path.
     struct inode *ip;
-    if (namei(kpath, &ip) < 0) {
-        printk("exec: '%s' not found\n", kpath);
-        return -ENOENT;
+    {
+        /* Propagate namei's -errno (-ENOENT / -ENOTDIR / -ELOOP /
+         * -ENAMETOOLONG) so execve callers see the real failure. */
+        int nrc = namei(kpath, &ip);
+        if (nrc < 0) {
+            printk("exec: '%s' lookup failed (%d)\n", kpath, nrc);
+            return nrc;
+        }
     }
-    unsigned long img_sz = ip->size;
-    struct { const char *data; unsigned long file_size; } *td = ip->fs_data;
-    const void *img = td->data;
-    inode_put(ip);
-
-    if (!img) return -ENOENT;
+    if (ip->type != I_REG) {
+        inode_put(ip);
+        return -EACCES;
+    }
 
     pgtable_t new_pt = create_user_pgtable();
-    if (!new_pt) return -ENOMEM;
+    if (!new_pt) {
+        inode_put(ip);
+        return -ENOMEM;
+    }
 
     struct vma *vlist = 0;
     uint64_t brk = 0;
     unsigned long entry;
-    int load_rc = load_user_elf(new_pt, img, img_sz, &entry, &vlist, &brk);
+    int load_rc = load_user_elf(new_pt, ip, &entry, &vlist, &brk);
+    inode_put(ip);
     if (load_rc < 0) {
         free_user_pgtable(new_pt);
         return load_rc;
@@ -899,6 +975,7 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     }
     p->in_sighandler   = 0;
     p->delivering_segv = 0;
+    p->alarm_tick      = 0;        /* POSIX: pending alarm cleared on exec */
     p->did_exec        = 1;
 
     return 0;
@@ -915,7 +992,20 @@ static int64_t sys_sbrk(int64_t incr) {
     uint64_t new_end = old_end + (uint64_t)incr;
 
     if (incr > 0) {
-        if (new_end > HEAP_MAX) return -ENOMEM;
+        if (new_end < old_end) return -ENOMEM;  /* size_t overflow */
+        /* Cap at the lowest VMA start above the current heap end so the
+         * heap does not collide with libc's fixed arena, prior mmap'd
+         * regions, or the user stack. With no VMA above, allow growth up
+         * to MMAP_BASE (start of the dynamic mmap region). No artificial
+         * fixed ceiling — limit is whatever the address space actually
+         * has free. */
+        uint64_t ceiling = MMAP_BASE;
+        for (struct vma *v = p->vma_list; v; v = v->next) {
+            if (v == p->heap_vma) continue;
+            if (v->start >= old_end && v->start < ceiling)
+                ceiling = v->start;
+        }
+        if (new_end > ceiling) return -ENOMEM;
         p->heap_vma->end = new_end;
     } else if (incr < 0) {
         if (new_end < p->heap_vma->start) return -EINVAL;
@@ -1418,6 +1508,74 @@ static int64_t sys_mount(const char *u_target, const char *u_fstype) {
         return tmpfs_attach(target);
     return -EINVAL;
 }
+
+// ---------------------------------------------------------------------------
+// sys_truncate / sys_ftruncate — set a file's length.
+//
+// Currently only `length == 0` is supported (full truncate); any other
+// length returns -EINVAL because the underlying fs ops only know how to
+// drop all data blocks. Extending or partial-shrink would need a richer
+// truncate-to(ip, length) op which is left for a future change.
+// ---------------------------------------------------------------------------
+static int64_t do_truncate_inode(struct inode *ip, int64_t length) {
+    if (ip->type != I_REG) return -EINVAL;
+    if (length < 0) return -EINVAL;
+    if (length == (int64_t)ip->size) return 0;          /* no-op */
+    if (length != 0) return -EINVAL;                    /* see comment */
+    if (!ip->ops || !ip->ops->truncate) return -EROFS;
+    return ip->ops->truncate(ip);
+}
+
+static int64_t sys_truncate(const char *u_path, int64_t length) {
+    char path[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(u_path, path, sizeof(path));
+    if (rc < 0) return rc;
+    struct inode *ip;
+    /* namei already returns -errno (e.g. -ENOENT, -ENOTDIR, -EACCES,
+     * -ELOOP). Propagate it so userspace sees the real failure reason
+     * instead of an over-coarse -ENOENT. */
+    int nrc = namei(path, &ip);
+    if (nrc < 0) return nrc;
+    rc = (int)do_truncate_inode(ip, length);
+    inode_put(ip);
+    return rc;
+}
+
+static int64_t sys_ftruncate(int fd, int64_t length) {
+    struct pcb *p = current_proc();
+    if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
+    struct file *f = p->ofile[fd];
+    if (!f->writable) return -EBADF;
+    if (!f->ip) return -EINVAL;
+    return do_truncate_inode(f->ip, length);
+}
+
+// ---------------------------------------------------------------------------
+// sys_alarm(secs) — schedule a SIGALRM after `secs` seconds.
+//
+// Replaces any prior pending alarm; returns the prior alarm's remaining
+// seconds (rounded up), or 0 if none was set. secs == 0 cancels.
+// ---------------------------------------------------------------------------
+static int64_t sys_alarm(unsigned secs) {
+    struct pcb *p = current_proc();
+    if (!p) return 0;
+
+    uint64_t now = timer_ticks();
+    uint64_t prior_remaining = 0;
+    if (p->alarm_tick != 0 && p->alarm_tick > now) {
+        uint64_t ticks_left = p->alarm_tick - now;
+        /* round up to whole seconds */
+        prior_remaining = (ticks_left + TICKS_PER_SEC - 1) / TICKS_PER_SEC;
+    }
+
+    if (secs == 0) {
+        p->alarm_tick = 0;
+    } else {
+        p->alarm_tick = now + (uint64_t)secs * TICKS_PER_SEC;
+        if (p->alarm_tick == 0) p->alarm_tick = 1;  /* never use sentinel */
+    }
+    return (int64_t)prior_remaining;
+}
 // ---------------------------------------------------------------------------
 // syscall_dispatch
 // ---------------------------------------------------------------------------
@@ -1606,6 +1764,21 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_mount:
             return sys_mount((const char *)trapframe[TF_A0],
                              (const char *)trapframe[TF_A1]);
+
+        case SYS_alarm:
+            return sys_alarm((unsigned)trapframe[TF_A0]);
+
+        case SYS_truncate:
+            return sys_truncate((const char *)trapframe[TF_A0],
+                                (int64_t)trapframe[TF_A1]);
+
+        case SYS_ftruncate:
+            return sys_ftruncate((int)(int64_t)trapframe[TF_A0],
+                                 (int64_t)trapframe[TF_A1]);
+
+        case SYS_symlink:
+            return sys_symlink((const char *)trapframe[TF_A0],
+                               (const char *)trapframe[TF_A1]);
 
         case SYS_wait4: {
             int pid_a       = (int)(int64_t)trapframe[TF_A0];

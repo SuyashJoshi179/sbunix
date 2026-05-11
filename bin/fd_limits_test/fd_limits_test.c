@@ -1,8 +1,8 @@
 // fd_limits_test: verify per-process fd table limits and error conditions.
 //
 // Tests:
-//   1. Can open up to NOFILE-3 = 13 extra files (fds 3..15 after stdio).
-//   2. The (NOFILE-3+1) = 14th extra open returns a negative error (EMFILE).
+//   1. Can open up to OPEN_MAX-3 extra files (fds 3..OPEN_MAX-1 after stdio).
+//   2. The (OPEN_MAX-3+1)th extra open returns a negative error (EMFILE).
 //   3. After closing all extra fds, new opens succeed again.
 //   4. Opening a non-existent path returns a negative error (ENOENT).
 //   5. Opening with a file-as-directory component returns negative (ENOTDIR).
@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <limits.h>
 
 static int pass_cnt = 0, fail_cnt = 0;
 
@@ -19,9 +20,8 @@ static void chk(int cond, const char *msg) {
     else       { printf("[fd_limits_test] FAIL %s\n", msg); fail_cnt++; }
 }
 
-// Per-process fd table is NOFILE=16; fds 0/1/2 are stdin/stdout/stderr.
-// So we can open 13 more files (fds 3–15) before hitting EMFILE.
-#define EXTRA_FDS  13
+// Per-process fd table is OPEN_MAX; fds 0/1/2 are stdin/stdout/stderr.
+#define EXTRA_FDS  (OPEN_MAX - 3)
 
 int main(void) {
     int fds[EXTRA_FDS];
@@ -42,9 +42,9 @@ int main(void) {
     pass_cnt++;
     printf("[fd_limits_test] PASS opened %d extra fds\n", EXTRA_FDS);
 
-    // 2. One more open should fail with EMFILE (all 16 slots taken).
+    // 2. One more open should fail with EMFILE (all OPEN_MAX slots taken).
     int extra = open("/etc/rc", O_RDONLY);
-    chk(extra < 0, "EMFILE: 14th extra open returns negative");
+    chk(extra < 0, "EMFILE: extra open beyond OPEN_MAX returns negative");
     if (extra >= 0) close(extra);   // clean up if unexpectedly succeeded
 
     // 3. Close all extra fds; a subsequent open must succeed.

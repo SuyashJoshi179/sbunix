@@ -55,7 +55,7 @@ sighandler_t signal(int sig, sighandler_t handler) {
     sa.sa_restorer = __sigtramp;
 
     if (sigaction(sig, &sa, &old) < 0)
-        return SIG_IGN;
+        return SIG_ERR;
     return old.sa_handler;
 }
 

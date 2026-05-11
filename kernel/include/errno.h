@@ -31,3 +31,5 @@
 #define ENOTSUP      95
 #define ELOOP        40
 #define EXDEV        18    /* cross-device link */
+#define ENOEXEC       8    /* exec format error */
+#define EAGAIN       11    /* resource temporarily unavailable */

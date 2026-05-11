@@ -4,8 +4,9 @@
 
 struct pcb;
 struct vma;
+struct inode;
 
-int load_user_elf(pgtable_t pt, const void *img, unsigned long img_size,
+int load_user_elf(pgtable_t pt, struct inode *ip,
                   unsigned long *entry_out, struct vma **vma_list_out,
                   uint64_t *brk_out);
 

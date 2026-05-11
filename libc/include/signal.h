@@ -87,6 +87,7 @@ typedef uint64_t sigset_t;
 typedef void (*sighandler_t)(int);
 #define SIG_DFL ((sighandler_t)0)
 #define SIG_IGN ((sighandler_t)1)
+#define SIG_ERR ((sighandler_t)-1)
 
 struct sigaction {
     /* Only write(2) and _exit(2) are async-signal-safe in this libc. */

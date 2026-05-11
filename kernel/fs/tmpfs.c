@@ -104,6 +104,8 @@ static int  tmpfs_op_unlink  (struct inode *, const char *);
 static int  tmpfs_op_link    (struct inode *, struct inode *, const char *);
 static int  tmpfs_op_rename  (struct inode *, const char *,
                               struct inode *, const char *);
+static int  tmpfs_op_symlink (struct inode *, const char *, const char *);
+static int  tmpfs_op_readlink(struct inode *, char *, uint64_t);
 
 static const struct inode_ops tmpfs_iops = {
     .read     = tmpfs_op_read,
@@ -113,11 +115,13 @@ static const struct inode_ops tmpfs_iops = {
     .getdents = tmpfs_op_getdents,
     .truncate = tmpfs_op_truncate,
     .release  = tmpfs_op_release,
+    .readlink = tmpfs_op_readlink,
     .create   = tmpfs_op_create,
     .mkdir    = tmpfs_op_mkdir,
     .unlink   = tmpfs_op_unlink,
     .link     = tmpfs_op_link,
     .rename   = tmpfs_op_rename,
+    .symlink  = tmpfs_op_symlink,
 };
 
 /* ------------------------------------------------------------------ */
@@ -133,8 +137,9 @@ static struct tmpfs_inode *tmpfs_ialloc(int type) {
             memset(ti, 0, sizeof(*ti));
             ti->in_use         = 1;
             ti->vnode.type     = type;
-            ti->vnode.mode     = (type == I_DIR) ? (S_IFDIR | 0777)
-                                                 : (S_IFREG | 0666);
+            ti->vnode.mode     = (type == I_DIR) ? (S_IFDIR | 0777) :
+                                 (type == I_LNK) ? (S_IFLNK | 0777) :
+                                                   (S_IFREG | 0666);
             ti->vnode.refcnt   = 1;
             ti->vnode.nlink    = 1;
             ti->vnode.size     = 0;
@@ -150,7 +155,10 @@ static struct tmpfs_inode *tmpfs_ialloc(int type) {
 /* Free an inode's storage (pages or dirents) and mark slot free.
  * Caller has confirmed nlink == 0 && refcnt == 0. */
 static void tmpfs_ifree(struct tmpfs_inode *ti) {
-    if (ti->vnode.type == I_REG) {
+    if (ti->vnode.type == I_REG || ti->vnode.type == I_LNK) {
+        /* Symlinks reuse file_pages[0] for the target string; the loop
+         * below covers both REG and LNK because all other slots are NULL
+         * on a symlink. */
         for (int i = 0; i < TMPFS_PAGES_PER_FILE; i++) {
             if (ti->file_pages[i]) {
                 page_free(ti->file_pages[i]);
@@ -438,7 +446,9 @@ static int tmpfs_op_getdents(struct inode *dir, uint64_t off, void *buf,
     while (d && skip > 0) { d = d->next; skip--; }
     while (d) {
         if (d->target) {
-            uint8_t dtype = (d->target->vnode.type == I_DIR) ? DT_DIR : DT_REG;
+            uint8_t dtype = (d->target->vnode.type == I_DIR) ? DT_DIR :
+                            (d->target->vnode.type == I_LNK) ? DT_LNK :
+                                                               DT_REG;
             EMIT(d->name, (uint64_t)(uintptr_t)d->target, dtype);
         }
         d = d->next;
@@ -654,6 +664,73 @@ static int tmpfs_op_rename(struct inode *old_p, const char *old_name,
     src->vnode.mtime = tmpfs_now();
     fs_unlock();
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Symbolic links                                                     */
+/* ------------------------------------------------------------------ */
+
+static int tmpfs_op_symlink(struct inode *parent, const char *name,
+                            const char *target) {
+    struct tmpfs_inode *td = (struct tmpfs_inode *)parent;
+    if (td->vnode.type != I_DIR) return -ENOTDIR;
+    if (!tmpfs_name_ok(name)) return -ENAMETOOLONG;
+    if (!target || target[0] == '\0') return -EINVAL;
+
+    /* Target must fit in one tmpfs page (4 KiB) including the trailing NUL.
+     * Real PATH_MAX is 4096 so this is just defense against pathological
+     * inputs that wouldn't survive readlink either. */
+    uint64_t tlen = 0;
+    while (target[tlen] && tlen < TMPFS_PAGE_SIZE) tlen++;
+    if (tlen == TMPFS_PAGE_SIZE) return -ENAMETOOLONG;  /* unterminated within page */
+
+    fs_lock();
+    if (tmpfs_dirfind(td, name)) { fs_unlock(); return -EEXIST; }
+    struct tmpfs_inode *ni = tmpfs_ialloc(I_LNK);
+    if (!ni) { fs_unlock(); return -ENOSPC; }
+
+    /* Store target in file_pages[0]. Bypasses the regular write path
+     * (which sanity-checks I_REG); symlinks reuse the storage but not
+     * the read/write ops. */
+    void *page = page_alloc();
+    if (!page) {
+        tmpfs_ifree(ni);
+        fs_unlock();
+        return -ENOSPC;
+    }
+    for (uint64_t i = 0; i < tlen; i++) ((char *)page)[i] = target[i];
+    ((char *)page)[tlen] = '\0';
+    ni->file_pages[0] = page;
+    ni->vnode.size = tlen;
+
+    int rc = tmpfs_dirlink(td, name, ni);
+    if (rc < 0) {
+        page_free(page);
+        ni->file_pages[0] = 0;
+        tmpfs_ifree(ni);
+        fs_unlock();
+        return rc;
+    }
+    td->vnode.mtime = tmpfs_now();
+    fs_unlock();
+    /* tmpfs_dirlink doesn't bump nlink — and our caller will inode_put
+     * the inode if we returned it. We don't return it, so drop the
+     * ialloc'd refcnt to match (the dirent holds the alias). */
+    inode_put(&ni->vnode);
+    return 0;
+}
+
+static int tmpfs_op_readlink(struct inode *ip, char *buf, uint64_t n) {
+    struct tmpfs_inode *ti = (struct tmpfs_inode *)ip;
+    if (ti->vnode.type != I_LNK) return -EINVAL;
+    fs_lock();
+    void *page = ti->file_pages[0];
+    uint64_t tlen = ti->vnode.size;
+    if (!page || tlen == 0) { fs_unlock(); return -EINVAL; }
+    uint64_t copy = tlen < n ? tlen : n;
+    for (uint64_t i = 0; i < copy; i++) buf[i] = ((const char *)page)[i];
+    fs_unlock();
+    return (int)copy;
 }
 
 /* ------------------------------------------------------------------ */

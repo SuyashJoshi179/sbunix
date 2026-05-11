@@ -1,5 +1,6 @@
 #include <drivers/uart.h>
 #include <errno.h>
+#include <page_cache.h>
 #include <page_ref.h>
 #include <pmem.h>   // pmem_rebase
 #include <printk.h>
@@ -163,7 +164,14 @@ static void free_user_pages_level(pgtable_t pt, int level) {
         if (level == 2 && pte == kernel_pgtable[i]) continue;
         unsigned long pa = pte_to_phyaddr(pte);
         if (pte & (PTE_R | PTE_W | PTE_X)) {
-            page_put(pa);
+            /* Symmetric guard with uvmcow_share: pcache slot pages are
+             * never tracked through page_get/page_put (their refs[] slot
+             * stays at 1 for the slot's lifetime). A stray page_put here
+             * — e.g. if a caller forgets vma_drop_file_pages before
+             * free_user_pgtable — would underflow and prematurely free
+             * the slot's backing page. Cheap insurance. */
+            if (!pcache_pa_to_slot(pa))
+                page_put(pa);
         } else if (level > 0) {
             // Pointer PTE — recurse into child page table, then free it
             pgtable_t child = (pgtable_t)phys_to_virt(pa);
@@ -211,7 +219,19 @@ pgtable_t uvmcow_share(pgtable_t parent_pt) {
                 if (!(pte & (PTE_R | PTE_W | PTE_X))) continue;
 
                 unsigned long pa = pte_to_phyaddr(pte);
-                page_get(pa);
+                /* Skip page_get for pcache slot pages. Pcache slots own
+                 * their backing page (page_refs[slot_pfn]=1 from
+                 * page_alloc in pcache_init) for the slot's lifetime;
+                 * faulting maps install a pcache PTE without page_get
+                 * and the matching vma_drop_file_pages tears it down
+                 * without page_put. Forks that bump page_refs here are
+                 * never paired with a page_put, so each shared pcache
+                 * PTE leaks one ref permanently — eventually tripping
+                 * "page_get: refcount overflow" at 65535. The child's
+                 * fault-time pcache pin is taken by vma_dup_file_pages
+                 * via pp->refcnt, which is the right currency. */
+                if (!pcache_pa_to_slot(pa))
+                    page_get(pa);
 
                 unsigned long perm = pte & (PTE_R | PTE_W | PTE_X | PTE_U);
                 if (perm & PTE_W) {
@@ -243,7 +263,10 @@ void uvmunmap_range(pgtable_t pt, unsigned long va_start, unsigned long va_end) 
         if (!pte || !(*pte & PTE_V)) continue;
         if (!(*pte & (PTE_R | PTE_W | PTE_X))) continue;
         unsigned long pa = pte_to_phyaddr(*pte);
-        page_put(pa);
+        /* Same pcache guard as free_user_pages_level: pcache slot pages
+         * stay outside the page_ref accounting. */
+        if (!pcache_pa_to_slot(pa))
+            page_put(pa);
         *pte = 0;
     }
     flush_tlb();

@@ -1,4 +1,5 @@
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -40,57 +41,270 @@ static void sink_put(struct sink *s, char c) {
     s->pos++;
 }
 
-static void sink_num(struct sink *s, unsigned long n, int base, int sign) {
-    if (sign && (long)n < 0) {
-        sink_put(s, '-');
-        n = (unsigned long)(-(long)n);
-    }
-    char tmp[24];
+/* Conversion-flag bits (lower-cased C99 set). */
+#define PF_LEFT   (1 << 0)   /* '-' : left-justify */
+#define PF_PLUS   (1 << 1)   /* '+' : show sign on signed ints */
+#define PF_SPACE  (1 << 2)   /* ' ' : leading space on positive signed ints */
+#define PF_ALT    (1 << 3)   /* '#' : alternate form (0x for hex, 0 for octal) */
+#define PF_ZERO   (1 << 4)   /* '0' : zero-pad numerics */
+#define PF_UPPER  (1 << 5)   /* uppercase hex */
+#define PF_SIGNED (1 << 6)   /* arg is signed */
+#define PF_PREC   (1 << 7)   /* explicit precision provided */
+
+static void emit_pad(struct sink *s, int n, char pad) {
+    while (n-- > 0) sink_put(s, pad);
+}
+
+/* Render `n` (already absolute-valued for signed) into a base-N string,
+ * applying width / precision / flags. `sign_ch` is either 0 or one of
+ * '-' / '+' / ' ' to be emitted before any "0x" prefix and any zeros. */
+static void emit_num(struct sink *s, unsigned long long n, int base, int flags,
+                     int width, int precision, char sign_ch) {
+    char digits[32];
     int  len = 0;
-    if (n == 0) tmp[len++] = '0';
-    else while (n) { tmp[len++] = "0123456789abcdef"[n % (unsigned)base]; n /= (unsigned)base; }
-    for (int i = len - 1; i >= 0; i--) sink_put(s, tmp[i]);
+    const char *alphabet = (flags & PF_UPPER) ? "0123456789ABCDEF"
+                                              : "0123456789abcdef";
+    if (n == 0 && (flags & PF_PREC) && precision == 0) {
+        /* "%.0d" of 0 produces no digits at all. */
+    } else if (n == 0) {
+        digits[len++] = '0';
+    } else {
+        while (n) { digits[len++] = alphabet[n % (unsigned)base]; n /= (unsigned)base; }
+    }
+
+    /* Precision: minimum number of digits (zero-pad on the left). */
+    int zeros = 0;
+    if ((flags & PF_PREC) && precision > len) zeros = precision - len;
+
+    int prefix_len = sign_ch ? 1 : 0;
+    int alt_hex = (flags & PF_ALT) && base == 16 && len != 0;
+    int alt_oct = (flags & PF_ALT) && base == 8 && (len == 0 || digits[len-1] != '0');
+    /* C99 7.19.6.1 "#"/"o": force the first digit to be 0. If a precision-
+     * driven leading zero is already coming (zeros > 0), emitting our
+     * own '0' prefix produces one more leading 0 than the spec calls for
+     * — e.g. "%#.3o" of 8 would render "0010" instead of "010". The
+     * zero==0 / precision==0 case is unaffected because zeros stays 0
+     * there and the `len == 0` arm still triggers a single '0'. */
+    if (alt_oct && zeros > 0) alt_oct = 0;
+
+    int total = prefix_len + (alt_hex ? 2 : 0) + (alt_oct ? 1 : 0) + zeros + len;
+    int pad = width > total ? width - total : 0;
+
+    /* Field padding: '0' flag applies only when no precision and not left. */
+    int pad_before_digits = 0;
+    if (!(flags & PF_LEFT) && (flags & PF_ZERO) && !(flags & PF_PREC)) {
+        pad_before_digits = pad;
+        pad = 0;
+    }
+
+    if (!(flags & PF_LEFT)) emit_pad(s, pad, ' ');
+    if (sign_ch) sink_put(s, sign_ch);
+    if (alt_hex) { sink_put(s, '0'); sink_put(s, (flags & PF_UPPER) ? 'X' : 'x'); }
+    if (alt_oct) { sink_put(s, '0'); }
+    emit_pad(s, pad_before_digits, '0');
+    emit_pad(s, zeros, '0');
+    for (int i = len - 1; i >= 0; i--) sink_put(s, digits[i]);
+    if (flags & PF_LEFT) emit_pad(s, pad, ' ');
+}
+
+/* Emit a string with optional precision (max bytes from string) and width.
+ * NULL str rendered as "(null)" per glibc convention. */
+static void emit_str(struct sink *s, const char *str, int flags,
+                     int width, int precision) {
+    if (!str) str = "(null)";
+    int len = 0;
+    if (flags & PF_PREC) {
+        while (str[len] && len < precision) len++;
+    } else {
+        while (str[len]) len++;
+    }
+    int pad = width > len ? width - len : 0;
+    if (!(flags & PF_LEFT)) emit_pad(s, pad, ' ');
+    for (int i = 0; i < len; i++) sink_put(s, str[i]);
+    if (flags & PF_LEFT) emit_pad(s, pad, ' ');
 }
 
 static int do_format(struct sink *s, const char *fmt, va_list ap) {
     for (const char *p = fmt; *p; p++) {
         if (*p != '%') { sink_put(s, *p); continue; }
         p++;
-        int lng = 0;
-        if (*p == 'l') { lng = 1; p++; if (*p == 'l') p++; }
-        else if (*p == 'z') { lng = 1; p++; }
-        switch (*p) {
-        case 's': {
-            const char *str = va_arg(ap, const char *);
-            if (!str) str = "(null)";
-            while (*str) sink_put(s, *str++);
+
+        /* Flag characters */
+        int flags = 0;
+        for (;; p++) {
+            switch (*p) {
+            case '-': flags |= PF_LEFT;  continue;
+            case '+': flags |= PF_PLUS;  continue;
+            case ' ': flags |= PF_SPACE; continue;
+            case '#': flags |= PF_ALT;   continue;
+            case '0': flags |= PF_ZERO;  continue;
+            }
             break;
         }
-        case 'd': case 'i':
-            sink_num(s, lng ? (unsigned long)va_arg(ap, long)
-                            : (unsigned long)va_arg(ap, int), 10, 1);
+
+        /* Width */
+        int width = 0;
+        if (*p == '*') {
+            int w = va_arg(ap, int);
+            if (w < 0) { flags |= PF_LEFT; w = -w; }
+            width = w;
+            p++;
+        } else while (*p >= '0' && *p <= '9') {
+            width = width * 10 + (*p - '0'); p++;
+        }
+
+        /* Precision */
+        int precision = 0;
+        if (*p == '.') {
+            p++;
+            flags |= PF_PREC;
+            if (*p == '*') {
+                int q = va_arg(ap, int);
+                if (q >= 0) precision = q; else flags &= ~PF_PREC;
+                p++;
+            } else while (*p >= '0' && *p <= '9') {
+                precision = precision * 10 + (*p - '0'); p++;
+            }
+        }
+
+        /* Length modifier.
+         *   0 = (default) int / unsigned int
+         *   1 = long / unsigned long  (also z, j, t)
+         *   2 = long long / unsigned long long
+         *  -1 = short / unsigned short
+         *  -2 = signed char / unsigned char
+         *
+         * h / hh matter because default argument promotions widen
+         * `(unsigned) short` and `(unsigned) char` to int (on lp64 where
+         * int can hold the full unsigned-short range) before the value
+         * reaches va_arg. So va_arg(ap, unsigned int) for a %hu/%hhu
+         * arg is UB even though it often "works" — we must read as
+         * int and narrow to the declared width. */
+        int lng = 0;
+        switch (*p) {
+        case 'h':
+            p++; lng = -1; if (*p == 'h') { p++; lng = -2; } break;
+        case 'l':
+            p++; lng = 1; if (*p == 'l') { p++; lng = 2; } break;
+        case 'z':
+        case 'j':
+        case 't':
+            p++; lng = 1; break;
+        }
+
+        /* Conversion */
+        switch (*p) {
+        case 's':
+            emit_str(s, va_arg(ap, const char *), flags, width, precision);
             break;
-        case 'u':
-            sink_num(s, lng ? va_arg(ap, unsigned long)
-                            : (unsigned long)va_arg(ap, unsigned int), 10, 0);
+        case 'c': {
+            char c = (char)va_arg(ap, int);
+            int pad = width > 1 ? width - 1 : 0;
+            if (!(flags & PF_LEFT)) emit_pad(s, pad, ' ');
+            sink_put(s, c);
+            if (flags & PF_LEFT)  emit_pad(s, pad, ' ');
             break;
-        case 'x': case 'X':
-            sink_num(s, lng ? va_arg(ap, unsigned long)
-                            : (unsigned long)va_arg(ap, unsigned int), 16, 0);
+        }
+        case 'd': case 'i': {
+            /* lng: 0 = int, 1 = long, 2 = long long, -1 = short, -2 = char.
+             * va_arg type must exactly match the *promoted* type the
+             * caller passed — mismatch is UB and breaks on ABIs where
+             * long != long long (ILP32, Win64). RV64 lp64 happens to
+             * have long == long long == 64-bit, but this is portable
+             * per-step. For h/hh the underlying short/char is promoted
+             * to int by default argument promotions, so we read int
+             * and narrow back via a (short)/(signed char) cast — both
+             * sign-extend correctly when widened to long long. */
+            long long v;
+            if      (lng == 2)  v = va_arg(ap, long long);
+            else if (lng == 1)  v = (long long)va_arg(ap, long);
+            else if (lng == -1) v = (long long)(short)va_arg(ap, int);
+            else if (lng == -2) v = (long long)(signed char)va_arg(ap, int);
+            else                v = (long long)va_arg(ap, int);
+            unsigned long long mag;
+            char sign_ch = 0;
+            if (v < 0) { mag = (unsigned long long)(-(v + 1)) + 1ULL; sign_ch = '-'; }
+            else { mag = (unsigned long long)v;
+                   if (flags & PF_PLUS) sign_ch = '+';
+                   else if (flags & PF_SPACE) sign_ch = ' '; }
+            emit_num(s, mag, 10, flags, width, precision, sign_ch);
             break;
-        case 'p':
-            sink_put(s, '0'); sink_put(s, 'x');
-            sink_num(s, (unsigned long)va_arg(ap, void *), 16, 0);
+        }
+        case 'u': {
+            /* h/hh: arg promoted to int; read int and truncate to the
+             * requested unsigned width. Reading via va_arg(ap, unsigned
+             * int) here would be UB on lp64 where the actual promoted
+             * type is signed int. */
+            unsigned long long v;
+            if      (lng == 2)  v = va_arg(ap, unsigned long long);
+            else if (lng == 1)  v = (unsigned long long)va_arg(ap, unsigned long);
+            else if (lng == -1) v = (unsigned long long)(unsigned short)va_arg(ap, int);
+            else if (lng == -2) v = (unsigned long long)(unsigned char)va_arg(ap, int);
+            else                v = (unsigned long long)va_arg(ap, unsigned int);
+            emit_num(s, v, 10, flags, width, precision, 0);
             break;
-        case 'c':
-            sink_put(s, (char)va_arg(ap, int));
+        }
+        case 'o': {
+            unsigned long long v;
+            if      (lng == 2)  v = va_arg(ap, unsigned long long);
+            else if (lng == 1)  v = (unsigned long long)va_arg(ap, unsigned long);
+            else if (lng == -1) v = (unsigned long long)(unsigned short)va_arg(ap, int);
+            else if (lng == -2) v = (unsigned long long)(unsigned char)va_arg(ap, int);
+            else                v = (unsigned long long)va_arg(ap, unsigned int);
+            emit_num(s, v, 8, flags, width, precision, 0);
             break;
+        }
+        case 'x': case 'X': {
+            unsigned long long v;
+            if      (lng == 2)  v = va_arg(ap, unsigned long long);
+            else if (lng == 1)  v = (unsigned long long)va_arg(ap, unsigned long);
+            else if (lng == -1) v = (unsigned long long)(unsigned short)va_arg(ap, int);
+            else if (lng == -2) v = (unsigned long long)(unsigned char)va_arg(ap, int);
+            else                v = (unsigned long long)va_arg(ap, unsigned int);
+            int xflags = flags;
+            if (*p == 'X') xflags |= PF_UPPER;
+            emit_num(s, v, 16, xflags, width, precision, 0);
+            break;
+        }
+        case 'p': {
+            void *ptr = va_arg(ap, void *);
+            /* %p ignores any user-supplied precision (POSIX leaves it
+             * implementation-defined and most libcs print a fixed-width
+             * hex representation). Clear PF_PREC so emit_str doesn't
+             * truncate "(nil)" / the stub to `precision` bytes. */
+            int pflags = flags & ~PF_PREC;
+            if (!ptr) {
+                emit_str(s, "(nil)", pflags, width, 0);
+            } else {
+                /* "0x" prefix + hex digits, width-aware. */
+                emit_num(s, (unsigned long long)(uintptr_t)ptr, 16,
+                         pflags | PF_ALT, width, 0, 0);
+            }
+            break;
+        }
+        case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': {
+            /* Toolchain is soft-float (-mabi=lp64, no F/D ext). Stub
+             * float conversions to "0.000000" with width respected so
+             * format strings using %f etc. don't emit a literal '%f'.
+             * Clear PF_PREC: a user-supplied precision (e.g. %.2f) was
+             * meant for the float formatter, not as a string-length cap
+             * for the stub — otherwise %.0f would emit nothing. */
+            (void)va_arg(ap, double);   /* consume the arg slot */
+            emit_str(s, "0.000000", flags & ~PF_PREC, width, 0);
+            break;
+        }
         case '%':
             sink_put(s, '%');
             break;
-        default:
+        case '\0':
+            /* Trailing '%': emit it literally and stop scanning. */
             sink_put(s, '%');
-            if (lng) sink_put(s, 'l');
+            p--;
+            break;
+        default:
+            /* Unknown conversion — emit verbatim so a malformed format
+             * is visible rather than silently swallowed. */
+            sink_put(s, '%');
             sink_put(s, *p);
             break;
         }

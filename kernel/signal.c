@@ -63,6 +63,18 @@ void send_signal(struct pcb *target, int sig) {
 
     target->sig_pending |= (1ULL << sig);
 
+    /* SIGKILL must terminate a stopped process. Without this, kill -KILL
+     * on a Ctrl-Z'd job hangs forever (the stopped proc never runs
+     * check_signals to notice the pending kill). Force it back to READY
+     * so the scheduler picks it up and the default ACT_TERM action runs. */
+    if (sig == SIGKILL && target->state == PROC_STOPPED) {
+        target->state = PROC_READY;
+        target->wake_tick = 0;
+        /* Notify parent that the stopped child is moving (will exit
+         * shortly via check_signals → proc_exit_current). */
+        send_signal_by_pid(target->parent_pid, SIGCHLD);
+    }
+
     /* Wake a sleeping process if the signal is now deliverable. */
     if (target->state == PROC_SLEEPING &&
         sig_has_pending(target->sig_pending, target->sig_blocked)) {
@@ -256,7 +268,27 @@ int64_t sys_kill(int pid, int sig) {
         if (!me) return -EINVAL;
         pgid = me->pgid;
     } else if (pid == -1) {
-        return -EPERM;          /* unprivileged broadcast not supported */
+        /* POSIX broadcast: send to every process the caller may signal.
+         * SBUnix is single-user (uid==0 everywhere), so "may signal"
+         * means "every non-init non-self user process". Kernel threads
+         * (is_user == 0) are excluded because send_signal is a no-op for
+         * them — counting them in `delivered` would let kill(-1, sig)
+         * spuriously report success on a system that contains only kernel
+         * threads and the caller. Init (pid 1) is excluded so cleanup
+         * loops can't accidentally kill the system. Returns 0 if at
+         * least one signal was actually delivered, -ESRCH if none.
+         * sig == 0 falls through as an existence probe. */
+        struct pcb *me = current_proc();
+        int delivered = 0;
+        for (struct pcb *p = proc_list_head(); p; p = p->next) {
+            if (p->state == PROC_UNUSED || p->state == PROC_ZOMBIE) continue;
+            if (!p->is_user) continue;
+            if (p == me) continue;
+            if (p->pid == 1) continue;
+            if (sig != 0) send_signal(p, sig);
+            delivered++;
+        }
+        return delivered > 0 ? 0 : -ESRCH;
     } else {
         pgid = -pid;
     }

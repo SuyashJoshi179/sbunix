@@ -37,6 +37,35 @@ int main(void) {
     CHECK(w2 == 10);
     CHECK(strlen(small) == 7);
 
+    /* printf alt-form octal with precision: %#.3o of 8 must emit "010",
+     * not "0010" (the alt prefix should be suppressed when precision-
+     * driven zeros already supply a leading 0). */
+    char obuf[16];
+    snprintf(obuf, sizeof(obuf), "%#.3o", 8);
+    CHECK(strcmp(obuf, "010") == 0);
+    snprintf(obuf, sizeof(obuf), "%#o", 8);
+    CHECK(strcmp(obuf, "010") == 0);
+    snprintf(obuf, sizeof(obuf), "%#.0o", 0);
+    CHECK(strcmp(obuf, "0") == 0);
+    snprintf(obuf, sizeof(obuf), "%#.4o", 8);
+    CHECK(strcmp(obuf, "0010") == 0);
+
+    /* %hd / %hhd / %hu / %hhu must narrow to short/char before
+     * widening. Without h/hh tracking, %hhu of 0x101 would print 257
+     * instead of 1, and reading via va_arg(ap, unsigned int) for a
+     * promoted-from-short arg would be UB. */
+    char hbuf[16];
+    snprintf(hbuf, sizeof(hbuf), "%hhu", 0x101);
+    CHECK(strcmp(hbuf, "1") == 0);
+    snprintf(hbuf, sizeof(hbuf), "%hu", 0x10001);
+    CHECK(strcmp(hbuf, "1") == 0);
+    snprintf(hbuf, sizeof(hbuf), "%hhd", -1);
+    CHECK(strcmp(hbuf, "-1") == 0);
+    snprintf(hbuf, sizeof(hbuf), "%hd", -1);
+    CHECK(strcmp(hbuf, "-1") == 0);
+    snprintf(hbuf, sizeof(hbuf), "%hhx", 0x1ff);
+    CHECK(strcmp(hbuf, "ff") == 0);
+
     /* fprintf to stdout/stderr */
     fprintf(stdout, "header_test: stdout fprintf ok\n");
 

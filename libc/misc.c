@@ -2,6 +2,7 @@
 #include <sys/utsname.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 #include <time.h>
 
 /* Stubs for the long tail of POSIX odds and ends. SBUnix doesnt have
@@ -48,11 +49,7 @@ void sync(void)                    { /* sbfs commits at end_op; nothing to do */
 int  fsync(int fd)                 { (void)fd; return 0; }
 int  fdatasync(int fd)             { (void)fd; return 0; }
 
-unsigned alarm(unsigned secs) {
-    /* No SIGALRM scheduler. Pretend no prior alarm was set. */
-    (void)secs;
-    return 0;
-}
+/* alarm() implementation is in libc/syscall.c (real syscall wrapper). */
 
 unsigned sleep(unsigned secs) {
     struct timespec req = { (int64_t)secs, 0 }, rem = { 0, 0 };
@@ -60,13 +57,11 @@ unsigned sleep(unsigned secs) {
     return (unsigned)rem.tv_sec;
 }
 
-int ftruncate(int fd, off_t len)              { (void)fd; (void)len; errno = ENOSYS; return -1; }
-int truncate(const char *path, off_t len)     { (void)path; (void)len; errno = ENOSYS; return -1; }
+/* truncate() / ftruncate() implementations live in libc/syscall.c. */
 int chown(const char *p, uid_t u, gid_t g)    { (void)p; (void)u; (void)g; return 0; }
 int fchown(int fd, uid_t u, gid_t g)          { (void)fd; (void)u; (void)g; return 0; }
 int lchown(const char *p, uid_t u, gid_t g)   { (void)p; (void)u; (void)g; return 0; }
-/* link() is now a real syscall — see libc/syscall.c. */
-int symlink(const char *t, const char *l)     { (void)t; (void)l; errno = ENOSYS; return -1; }
+/* link() / symlink() are real syscalls — see libc/syscall.c. */
 int rmdir(const char *p)                      { return unlink(p); }
 
 char *ttyname(int fd) {
@@ -90,7 +85,7 @@ long fpathconf(int fd, int name)           { (void)fd;   (void)name; return -1; 
 long sysconf(int name) {
     switch (name) {
     case _SC_PAGESIZE:         return 4096;
-    case _SC_OPEN_MAX:         return 32;
+    case _SC_OPEN_MAX:         return OPEN_MAX;
     case _SC_NPROCESSORS_ONLN: return 1;
     case _SC_NPROCESSORS_CONF: return 1;
     case _SC_CLK_TCK:          return 100;

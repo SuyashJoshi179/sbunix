@@ -147,6 +147,8 @@ struct pcb *alloc_proc(void) {
     p->user_sp    = 0;
     p->entry      = 0;
     p->sleep_chan = 0;
+    p->wake_tick  = 0;
+    p->alarm_tick = 0;
     p->vma_list   = 0;
     p->heap_vma   = 0;
     p->brk_start  = 0;
@@ -170,8 +172,8 @@ struct pcb *alloc_proc(void) {
     }
     p->rlim[RLIMIT_STACK].rlim_cur  = DEFAULT_STACK_SOFT;
     p->rlim[RLIMIT_STACK].rlim_max  = DEFAULT_STACK_HARD;
-    p->rlim[RLIMIT_NOFILE].rlim_cur = 16;
-    p->rlim[RLIMIT_NOFILE].rlim_max = 64;
+    p->rlim[RLIMIT_NOFILE].rlim_cur = NOFILE;
+    p->rlim[RLIMIT_NOFILE].rlim_max = NOFILE;
     // context is zeroed by page_alloc; set sp and ra
     p->context.sp = (uint64_t)p->kstack_page + KSTACK_SIZE;
     p->context.ra = (uint64_t)forkret;
@@ -233,6 +235,20 @@ void forkret(void) {
 int proc_fork_current(void) {
     struct pcb *parent = current;
     if (!parent || !parent->is_user) return -1;
+
+    /* Enforce RLIMIT_NPROC (number of processes for the same uid). SBUnix
+     * is single-user, so we count every non-unused, non-zombie process
+     * other than init (pid 1). */
+    rlim_t nproc_max = parent->rlim[RLIMIT_NPROC].rlim_cur;
+    if (nproc_max != RLIM_INFINITY) {
+        rlim_t live = 0;
+        for (struct pcb *q = proc_list_head(); q; q = q->next) {
+            if (q->state == PROC_UNUSED || q->state == PROC_ZOMBIE) continue;
+            if (q->pid == 1) continue;
+            live++;
+        }
+        if (live >= nproc_max) return -EAGAIN;
+    }
 
     struct pcb *child = alloc_proc();
     if (!child) return -ENOMEM;
@@ -617,7 +633,7 @@ void proc_sleep_ms(uint64_t ms) {
 // ----------------------------------------------------------------
 
 void sched_init(void) {
-    struct pcb *init = proc_spawn("bin/init");
+    struct pcb *init = proc_spawn("/bin/init");
     if (!init) panic("sched_init: failed to spawn init");
     init_pid = init->pid;
 
