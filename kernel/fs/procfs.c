@@ -590,7 +590,11 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
     uint64_t text_bytes = 0;
     uint64_t data_bytes = 0;
     for (struct vma *v = pcb->vma_list; v; v = v->next) {
-        uint64_t bytes = v->end - v->start;
+        /* VMA start is always page-aligned; end may not be (sbrk sets
+         * heap_vma->end to the raw brk). Round end up so a partial
+         * trailing page is still counted — the kernel will allocate a
+         * full page on access. */
+        uint64_t bytes = page_round_up(v->end) - v->start;
         vm_bytes += bytes;
         if (v->prot & VMA_PROT_X) text_bytes += bytes;
         else                      data_bytes += bytes;
