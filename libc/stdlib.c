@@ -191,13 +191,16 @@ static int env_reserve(unsigned want_cap) {
     if (env_cap >= want_cap) return 0;
     unsigned new_cap = env_cap * 2;
     if (new_cap < want_cap) new_cap = want_cap;
-    char **na = realloc(env_arr, sizeof(char *) * (new_cap + 1));
-    if (!na) return -1;
-    env_arr = na;
-    environ = env_arr;
+    /* Grow env_owned first. If env_arr's realloc then fails, env_owned
+     * just has a few extra bytes — env_cap still matches the old caps
+     * so no caller can observe a half-committed environ pointer. */
     unsigned char *no = realloc(env_owned, new_cap);
     if (!no) return -1;
     env_owned = no;
+    char **na = realloc(env_arr, sizeof(char *) * (new_cap + 1));
+    if (!na) return -1;
+    env_arr   = na;
+    environ   = env_arr;
     env_cap   = new_cap;
     return 0;
 }
@@ -233,11 +236,24 @@ int setenv(const char *name, const char *value, int overwrite) {
         return -1;
     }
     if (!value) value = "";
+    size_t nlen = strlen(name);
+
+    /* If the var already exists and !overwrite, this is a no-op — scan
+     * environ directly so we don't allocate dynamic storage to discover
+     * that. */
+    if (!overwrite) {
+        char **e = environ;
+        if (e) {
+            for (unsigned i = 0; e[i]; i++) {
+                if (strncmp(e[i], name, nlen) == 0 && e[i][nlen] == '=')
+                    return 0;
+            }
+        }
+    }
+
     if (env_reserve(env_len + 2) < 0) { errno = ENOMEM; return -1; }
 
-    size_t nlen = strlen(name);
     int idx = env_find(name, nlen);
-    if (idx >= 0 && !overwrite) return 0;
 
     size_t vlen = strlen(value);
     char *entry = malloc(nlen + 1 + vlen + 1);
@@ -264,8 +280,22 @@ int unsetenv(const char *name) {
         errno = EINVAL;
         return -1;
     }
-    if (env_reserve(env_len + 1) < 0) { errno = ENOMEM; return -1; }
     size_t nlen = strlen(name);
+
+    /* If the var isn't present, unsetenv is a no-op — scan environ
+     * directly so the no-op path doesn't allocate dynamic storage. */
+    char **e = environ;
+    if (!e) return 0;
+    unsigned found = 0;
+    for (unsigned i = 0; e[i]; i++) {
+        if (strncmp(e[i], name, nlen) == 0 && e[i][nlen] == '=') {
+            found = 1;
+            break;
+        }
+    }
+    if (!found) return 0;
+
+    if (env_reserve(env_len + 1) < 0) { errno = ENOMEM; return -1; }
     int idx = env_find(name, nlen);
     if (idx < 0) return 0;
     if (env_owned[idx]) free(env_arr[idx]);
