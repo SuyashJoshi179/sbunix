@@ -15,6 +15,8 @@ struct stat {
     uint64_t st_mtime;
     uint64_t st_ctime;
     uint64_t st_rdev;
+    uint64_t st_blksize;
+    uint64_t st_blocks;
 };
 
 #define S_IFMT   0170000
