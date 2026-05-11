@@ -154,7 +154,7 @@ lldiv_t lldiv(long long num, long long den) {
  * at the dynamic array.
  *
  * Ownership tracking matters because POSIX `putenv` installs the
- * caller's pointer directly (no copy), while `setenv` malloc's its
+ * caller's pointer directly (no copy), while `setenv` mallocs its
  * own buffer. On overwrite/unset, we only free strings we own. The
  * kernel does not propagate envp across execv so the array resets to
  * empty in every fresh process — by design. */
@@ -217,6 +217,27 @@ static int env_find(const char *name, size_t nlen) {
     return -1;
 }
 
+/* Remove every entry from index `from` onward whose name matches
+ * `name[0..nlen)`. Used to keep getenv() deterministic when the
+ * caller-supplied initial environ contained duplicate names: setenv
+ * and putenv overwrite the first match, then call this to strip the
+ * remaining ones; unsetenv calls it with from=0 to remove them all. */
+static void env_strip_dupes(unsigned from, const char *name, size_t nlen) {
+    for (unsigned i = from; i < env_len; ) {
+        if (strncmp(env_arr[i], name, nlen) == 0 && env_arr[i][nlen] == '=') {
+            if (env_owned[i]) free(env_arr[i]);
+            for (unsigned k = i; k < env_len - 1; k++) {
+                env_arr[k]   = env_arr[k + 1];
+                env_owned[k] = env_owned[k + 1];
+            }
+            env_len--;
+            env_arr[env_len] = NULL;
+        } else {
+            i++;
+        }
+    }
+}
+
 char *getenv(const char *name) {
     if (!name || !*name) return NULL;
     size_t nlen = strlen(name);
@@ -266,6 +287,7 @@ int setenv(const char *name, const char *value, int overwrite) {
         if (env_owned[idx]) free(env_arr[idx]);
         env_arr[idx]   = entry;
         env_owned[idx] = 1;
+        env_strip_dupes((unsigned)idx + 1, name, nlen);
     } else {
         env_arr[env_len]   = entry;
         env_owned[env_len] = 1;
@@ -296,15 +318,8 @@ int unsetenv(const char *name) {
     if (!found) return 0;
 
     if (env_reserve(env_len + 1) < 0) { errno = ENOMEM; return -1; }
-    int idx = env_find(name, nlen);
-    if (idx < 0) return 0;
-    if (env_owned[idx]) free(env_arr[idx]);
-    for (unsigned i = (unsigned)idx; i < env_len - 1; i++) {
-        env_arr[i]   = env_arr[i + 1];
-        env_owned[i] = env_owned[i + 1];
-    }
-    env_len--;
-    env_arr[env_len] = NULL;
+    /* POSIX: unsetenv removes every matching entry, not just the first. */
+    env_strip_dupes(0, name, nlen);
     return 0;
 }
 
@@ -326,6 +341,7 @@ int putenv(char *string) {
         if (env_owned[idx]) free(env_arr[idx]);
         env_arr[idx]   = string;
         env_owned[idx] = 0;
+        env_strip_dupes((unsigned)idx + 1, string, nlen);
     } else {
         env_arr[env_len]   = string;
         env_owned[env_len] = 0;
