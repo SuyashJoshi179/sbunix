@@ -232,16 +232,31 @@ static void test_pcache_uvmcow_refleak(void) {
 
     unsigned short refs_before = page_ref_get(pcache_pa);
     int ok = 1;
+    int refs_stable_after_share = 1;
     for (int i = 0; i < 256; i++) {
         pgtable_t child_pt = uvmcow_share(parent_pt);
         if (!child_pt) { ok = 0; break; }
+        /* Critical assertion: page_refs[pcache_pa] must NOT have been
+         * bumped by uvmcow_share. The pre-fix code called page_get on
+         * every leaf PTE regardless, so this read would have observed
+         * refs_before + 1 here. A symmetric share+free (which calls
+         * page_put in teardown) would mask the leak in real fork+exit
+         * flow where vma_drop_file_pages clears the PTE before
+         * free_user_pgtable runs — so checking refs *between* share
+         * and free is the only way to catch the leak in the absence of
+         * a full vma_drop_file_pages simulation. */
+        if (page_ref_get(pcache_pa) != refs_before) {
+            refs_stable_after_share = 0;
+        }
         free_user_pgtable(child_pt);
     }
     unsigned short refs_after = page_ref_get(pcache_pa);
 
     st_check(ok, "pcache_uvmcow: 256 share+free cycles complete");
+    st_check(refs_stable_after_share,
+             "pcache_uvmcow: page_refs[pcache_pfn] not bumped by uvmcow_share");
     st_check(refs_after == refs_before,
-             "pcache_uvmcow: page_refs[pcache_pfn] unchanged across forks");
+             "pcache_uvmcow: page_refs[pcache_pfn] balanced after teardown");
 
     /* Tear down parent. uvmunmap_range/free_user_pages_level must skip
      * page_put on the pcache PTE (symmetric guard) — otherwise we'd
