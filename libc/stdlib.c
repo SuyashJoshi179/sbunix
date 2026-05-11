@@ -2,6 +2,7 @@
 #include <signal.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #include <inttypes.h>
 
 void _Exit(int status) { exit(status); }
@@ -143,11 +144,167 @@ lldiv_t lldiv(long long num, long long den) {
     return r;
 }
 
-int    setenv(const char *name, const char *value, int overwrite) {
-    (void)name; (void)value; (void)overwrite; return 0;
+/* Process environment storage.
+ *
+ * Initial state: `env_arr == NULL` and the global `environ` (defined in
+ * libc/exec.c) points at the static empty array installed by crt. On
+ * the first mutation we malloc a dynamic array, copy any pre-existing
+ * entries from `environ` into it (marking them as not-owned so we
+ * won't free caller-supplied strings), and switch `environ` to point
+ * at the dynamic array.
+ *
+ * Ownership tracking matters because POSIX `putenv` installs the
+ * caller's pointer directly (no copy), while `setenv` malloc's its
+ * own buffer. On overwrite/unset, we only free strings we own. The
+ * kernel does not propagate envp across execv so the array resets to
+ * empty in every fresh process — by design. */
+static char         **env_arr;
+static unsigned char *env_owned;
+static unsigned       env_len;
+static unsigned       env_cap;
+
+/* Ensure env_arr is allocated and has capacity for at least `want_cap`
+ * pointer slots plus the trailing NULL terminator. Returns 0 on
+ * success, -1 on allocation failure (caller sets errno). */
+static int env_reserve(unsigned want_cap) {
+    if (!env_arr) {
+        unsigned n = 0;
+        char **src = environ;
+        if (src) while (src[n]) n++;
+        unsigned cap = n + 8;
+        if (cap < want_cap) cap = want_cap;
+        char **na = malloc(sizeof(char *) * (cap + 1));
+        if (!na) return -1;
+        unsigned char *no = malloc(cap);
+        if (!no) { free(na); return -1; }
+        for (unsigned i = 0; i < n; i++) {
+            na[i] = src[i];
+            no[i] = 0;
+        }
+        na[n] = NULL;
+        env_arr   = na;
+        env_owned = no;
+        env_len   = n;
+        env_cap   = cap;
+        environ   = env_arr;
+    }
+    if (env_cap >= want_cap) return 0;
+    unsigned new_cap = env_cap * 2;
+    if (new_cap < want_cap) new_cap = want_cap;
+    char **na = realloc(env_arr, sizeof(char *) * (new_cap + 1));
+    if (!na) return -1;
+    env_arr = na;
+    environ = env_arr;
+    unsigned char *no = realloc(env_owned, new_cap);
+    if (!no) return -1;
+    env_owned = no;
+    env_cap   = new_cap;
+    return 0;
 }
-int    unsetenv(const char *name) { (void)name; return 0; }
-int    putenv(char *string)       { (void)string; return 0; }
+
+/* Linear scan of env_arr for an entry whose name (prefix before '=')
+ * is exactly `name[0..nlen)`. Returns -1 if not found or not yet
+ * initialized. */
+static int env_find(const char *name, size_t nlen) {
+    if (!env_arr) return -1;
+    for (unsigned i = 0; i < env_len; i++) {
+        if (strncmp(env_arr[i], name, nlen) == 0 && env_arr[i][nlen] == '=')
+            return (int)i;
+    }
+    return -1;
+}
+
+char *getenv(const char *name) {
+    if (!name || !*name) return NULL;
+    size_t nlen = strlen(name);
+    if (memchr(name, '=', nlen)) return NULL;
+    char **e = environ;
+    if (!e) return NULL;
+    for (unsigned i = 0; e[i]; i++) {
+        if (strncmp(e[i], name, nlen) == 0 && e[i][nlen] == '=')
+            return e[i] + nlen + 1;
+    }
+    return NULL;
+}
+
+int setenv(const char *name, const char *value, int overwrite) {
+    if (!name || !*name || strchr(name, '=')) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!value) value = "";
+    if (env_reserve(env_len + 2) < 0) { errno = ENOMEM; return -1; }
+
+    size_t nlen = strlen(name);
+    int idx = env_find(name, nlen);
+    if (idx >= 0 && !overwrite) return 0;
+
+    size_t vlen = strlen(value);
+    char *entry = malloc(nlen + 1 + vlen + 1);
+    if (!entry) { errno = ENOMEM; return -1; }
+    memcpy(entry, name, nlen);
+    entry[nlen] = '=';
+    memcpy(entry + nlen + 1, value, vlen + 1);
+
+    if (idx >= 0) {
+        if (env_owned[idx]) free(env_arr[idx]);
+        env_arr[idx]   = entry;
+        env_owned[idx] = 1;
+    } else {
+        env_arr[env_len]   = entry;
+        env_owned[env_len] = 1;
+        env_len++;
+        env_arr[env_len]   = NULL;
+    }
+    return 0;
+}
+
+int unsetenv(const char *name) {
+    if (!name || !*name || strchr(name, '=')) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (env_reserve(env_len + 1) < 0) { errno = ENOMEM; return -1; }
+    size_t nlen = strlen(name);
+    int idx = env_find(name, nlen);
+    if (idx < 0) return 0;
+    if (env_owned[idx]) free(env_arr[idx]);
+    for (unsigned i = (unsigned)idx; i < env_len - 1; i++) {
+        env_arr[i]   = env_arr[i + 1];
+        env_owned[i] = env_owned[i + 1];
+    }
+    env_len--;
+    env_arr[env_len] = NULL;
+    return 0;
+}
+
+/* POSIX putenv: install the caller's pointer directly. The caller
+ * owns the storage and must not free or modify the string while it
+ * remains in the environment. A glibc-compatible extension treats a
+ * string without '=' as a request to remove the variable named by it.
+ */
+int putenv(char *string) {
+    if (!string || !*string) { errno = EINVAL; return -1; }
+    char *eq = strchr(string, '=');
+    if (!eq) return unsetenv(string);
+    if (eq == string) { errno = EINVAL; return -1; }
+    if (env_reserve(env_len + 2) < 0) { errno = ENOMEM; return -1; }
+
+    size_t nlen = (size_t)(eq - string);
+    int idx = env_find(string, nlen);
+    if (idx >= 0) {
+        if (env_owned[idx]) free(env_arr[idx]);
+        env_arr[idx]   = string;
+        env_owned[idx] = 0;
+    } else {
+        env_arr[env_len]   = string;
+        env_owned[env_len] = 0;
+        env_len++;
+        env_arr[env_len]   = NULL;
+    }
+    return 0;
+}
+
 int    system(const char *cmd)    { (void)cmd; return -1; }
 
 int    mblen(const char *s, size_t n) {
@@ -183,8 +340,6 @@ int rand(void) {
     return (int)((_rand_state >> 16) & 0x7fffffff);
 }
 void srand(unsigned seed) { _rand_state = seed; }
-
-char *getenv(const char *name) { (void)name; return 0; }
 
 int atexit(void (*func)(void)) { (void)func; return 0; }
 
