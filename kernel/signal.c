@@ -103,6 +103,38 @@ int send_signal_pgrp(int pgid, int sig) {
     return hits;
 }
 
+/* True if the signal would have no observable effect on a running
+ * process: explicit SIG_IGN, default-ignore, or default-continue. */
+static int sig_is_no_op(struct pcb *p, int i) {
+    sighandler_t h = p->sig_handlers[i].sa_handler;
+    if (h == SIG_IGN) return 1;
+    if (h == SIG_DFL) {
+        uint8_t act = default_action[i];
+        if (act == ACT_IGN || act == ACT_CONT) return 1;
+    }
+    return 0;
+}
+
+/* Drop any pending signals that pick_actionable would consider no-ops
+ * (POSIX: ignored signals are discarded, not held pending) and return
+ * the lowest-numbered remaining deliverable signal, or 0. Used by both
+ * the SA_RESTART picker in check_signals_after_syscall and the actual
+ * delivery in check_signals so they always agree on which signal will
+ * run. */
+static int pick_actionable(struct pcb *p) {
+    uint64_t deliverable = p->sig_pending & ~p->sig_blocked;
+    int found = 0;
+    for (int i = 1; i < NSIG; i++) {
+        if (!(deliverable & (1ULL << i))) continue;
+        if (sig_is_no_op(p, i)) {
+            p->sig_pending &= ~(1ULL << i);
+        } else if (!found) {
+            found = i;
+        }
+    }
+    return found;
+}
+
 int sig_has_actionable(struct pcb *p) {
     if (!p) return 0;
     uint64_t deliverable = p->sig_pending & ~p->sig_blocked;
@@ -110,9 +142,7 @@ int sig_has_actionable(struct pcb *p) {
 
     for (int i = 1; i < NSIG; i++) {
         if (!(deliverable & (1ULL << i))) continue;
-        sighandler_t h = p->sig_handlers[i].sa_handler;
-        if (h == SIG_IGN) continue;
-        if (h == SIG_DFL && default_action[i] == ACT_IGN) continue;
+        if (sig_is_no_op(p, i)) continue;
         return 1;
     }
     return 0;
@@ -175,23 +205,18 @@ void check_signals(uint64_t *trapframe) {
     struct pcb *p = current_proc();
     if (!p || !p->is_user) return;
 
-    uint64_t deliverable = p->sig_pending & ~p->sig_blocked;
-    if (deliverable == 0) {
-        /* sigsuspend wakeup with no deliverable left (race / spurious): still
-         * restore the caller's mask so we satisfy POSIX. */
+    int sig = pick_actionable(p);
+    if (sig == 0) {
+        /* Nothing actionable (deliverable was empty, or only ignored
+         * signals were pending and pick_actionable just discarded
+         * them). Still restore the caller's mask if sigsuspend was
+         * active so we satisfy POSIX. */
         if (p->sig_suspend_active) {
             p->sig_blocked = p->sig_suspend_saved_mask;
             p->sig_suspend_active = 0;
         }
         return;
     }
-
-    /* Pick lowest-numbered deliverable signal. */
-    int sig = 0;
-    for (int i = 1; i < NSIG; i++) {
-        if (deliverable & (1ULL << i)) { sig = i; break; }
-    }
-    if (sig == 0) return;
 
     p->sig_pending &= ~(1ULL << sig);
 
@@ -213,20 +238,11 @@ void check_signals(uint64_t *trapframe) {
 
     sighandler_t h = p->sig_handlers[sig].sa_handler;
 
-    /* Helper: restore caller's mask if sigsuspend wakeup landed on a path
-     * that returns without invoking build_sigframe. */
-#define SIGSUSPEND_FALLBACK_RESTORE() do { \
-        if (p->sig_suspend_active) { \
-            p->sig_blocked = p->sig_suspend_saved_mask; \
-            p->sig_suspend_active = 0; \
-        } \
-    } while (0)
-
-    if (h == SIG_IGN) { SIGSUSPEND_FALLBACK_RESTORE(); return; }
-
+    /* pick_actionable filters SIG_IGN / default-IGN / default-CONT, so
+     * only SIG_DFL with TERM/CORE/STOP semantics or a custom handler
+     * can reach here. */
     if (h == SIG_DFL) {
         uint8_t act = (sig < NSIG) ? default_action[sig] : ACT_TERM;
-        if (act == ACT_IGN || act == ACT_CONT) { SIGSUSPEND_FALLBACK_RESTORE(); return; }
         if (act == ACT_STOP) {
             p->state = PROC_STOPPED;
             p->last_signal = sig;
@@ -260,21 +276,12 @@ void check_signals_after_syscall(uint64_t *trapframe, int64_t ret,
     if (ret == -ERESTARTSYS) {
         trapframe[TF_A0] = (uint64_t)(int64_t)-EINTR;
 
-        /* Pick the lowest-numbered *actionable* pending signal (i.e. the
-         * one check_signals will actually deliver). Skipping SIG_IGN and
-         * default-ignored signals here matters: those are dropped without
-         * ever invoking a handler, so they must not block the SA_RESTART
-         * of a higher-numbered actionable signal. */
-        uint64_t deliverable = p->sig_pending & ~p->sig_blocked;
-        int sig = 0;
-        for (int i = 1; i < NSIG; i++) {
-            if (!(deliverable & (1ULL << i))) continue;
-            sighandler_t hi = p->sig_handlers[i].sa_handler;
-            if (hi == SIG_IGN) continue;
-            if (hi == SIG_DFL && default_action[i] == ACT_IGN) continue;
-            sig = i;
-            break;
-        }
+        /* Use the same picker that check_signals will use, so the signal
+         * we rewind sepc for is the one whose handler actually runs on
+         * this trap return. pick_actionable also drops no-op signals
+         * from sig_pending, which is what stops them from re-selecting
+         * on a subsequent replay. */
+        int sig = pick_actionable(p);
         if (sig) {
             sighandler_t h = p->sig_handlers[sig].sa_handler;
             int has_custom  = (h != SIG_DFL && h != SIG_IGN);
