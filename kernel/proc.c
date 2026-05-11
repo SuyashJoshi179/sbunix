@@ -115,6 +115,18 @@ static void proc_destroy(struct pcb *p) {
     page_free(p);
 }
 
+void proc_set_comm_basename(struct pcb *p, const char *src) {
+    if (!p) return;
+    if (!src || !src[0]) { p->comm[0] = '\0'; return; }
+    int last_sep = -1;
+    for (int i = 0; src[i]; i++) if (src[i] == '/') last_sep = i;
+    int s = last_sep + 1;
+    int j;
+    for (j = 0; src[s + j] && j < (int)sizeof(p->comm) - 1; j++)
+        p->comm[j] = src[s + j];
+    p->comm[j] = '\0';
+}
+
 // ----------------------------------------------------------------
 // alloc_proc — allocate a PCB + kernel stack from physical memory
 // ----------------------------------------------------------------
@@ -142,6 +154,7 @@ struct pcb *alloc_proc(void) {
     p->continued_pending = 0;
     p->did_exec   = 0;
     p->is_user    = 0;
+    for (int i = 0; i < (int)sizeof(p->comm); i++) p->comm[i] = '\0';
     p->pagetable  = 0;
     p->user_entry = 0;
     p->user_sp    = 0;
@@ -311,6 +324,8 @@ int proc_fork_current(void) {
     /* Inherit pgid/sid; pid-derived defaults from alloc_proc are overwritten. */
     child->pgid       = parent->pgid;
     child->sid        = parent->sid;
+    for (int i = 0; i < (int)sizeof(child->comm); i++)
+        child->comm[i] = parent->comm[i];
     child->last_signal = 0;
     child->stopped_reported = 0;
     child->continued_pending = 0;

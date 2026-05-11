@@ -53,6 +53,9 @@ struct pcb {
 
     uint8_t        is_user;         // 1 for user processes, 0 for kernel threads
 
+    // Executable name (basename of last exec'd path or argv[0]); NUL-padded.
+    char           comm[16];
+
     void         (*entry)(void);    // entry function (kernel threads only)
 
     // User process fields (populated by exec/spawn; 0 for kernel threads)
@@ -108,6 +111,11 @@ struct pcb *proc_list_head(void);  // for timer_handler sleeper scan
 struct pcb *proc_find_by_pid(int pid);
 struct pcb *alloc_proc(void);
 void        free_proc(struct pcb *p);
+
+// Set p->comm to the basename of `src` (truncated, NUL-terminated). Used by
+// proc_spawn (init image) and do_exec (argv[0] basename) so /proc/<pid>/comm
+// and ps reflect the running program.
+void        proc_set_comm_basename(struct pcb *p, const char *src);
 
 void proc_exit_current(int status);
 int  proc_wait_current(int *status);
