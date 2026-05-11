@@ -950,7 +950,12 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     heap_vma->end   = brk;
     heap_vma->prot  = VMA_PROT_R | VMA_PROT_W;
     heap_vma->type  = VMA_TYPE_HEAP;
-    vma_insert(&vlist, heap_vma);
+    if (vma_insert(&vlist, heap_vma) < 0) {
+        vma_free(heap_vma);
+        vma_list_free(&vlist);
+        free_user_pgtable(new_pt);
+        return -EINVAL;
+    }
 
     // Stack VMA
     struct vma *stack_vma = vma_alloc();
@@ -963,7 +968,12 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     stack_vma->end   = USER_STACK_TOP;
     stack_vma->prot  = VMA_PROT_R | VMA_PROT_W;
     stack_vma->type  = VMA_TYPE_STACK;
-    vma_insert(&vlist, stack_vma);
+    if (vma_insert(&vlist, stack_vma) < 0) {
+        vma_free(stack_vma);
+        vma_list_free(&vlist);
+        free_user_pgtable(new_pt);
+        return -EINVAL;
+    }
 
     // Free old VMAs and page table
     for (struct vma *vv = p->vma_list; vv; vv = vv->next) {
@@ -1175,7 +1185,11 @@ static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
     } else {
         v->type = VMA_TYPE_ANON;
     }
-    vma_insert(&proc->vma_list, v);
+    if (vma_insert(&proc->vma_list, v) < 0) {
+        if (fip) inode_put(fip);
+        vma_free(v);
+        return -EINVAL;
+    }
     return (int64_t)search;
 }
 

@@ -147,7 +147,11 @@ int load_user_elf(pgtable_t pt, struct inode *ip,
         if (ph.p_flags & PF_W) seg_vma->prot |= VMA_PROT_W;
         if (ph.p_flags & PF_X) seg_vma->prot |= VMA_PROT_X;
         seg_vma->type = VMA_TYPE_ANON;
-        vma_insert(&vlist, seg_vma);
+        if (vma_insert(&vlist, seg_vma) < 0) {
+            vma_free(seg_vma);
+            vma_list_free(&vlist);
+            return -EINVAL;
+        }
 
         if (va_end > highest_end)
             highest_end = va_end;
@@ -242,7 +246,11 @@ struct pcb *proc_spawn(const char *path) {
     heap_vma->end   = brk;
     heap_vma->prot  = VMA_PROT_R | VMA_PROT_W;
     heap_vma->type  = VMA_TYPE_HEAP;
-    vma_insert(&vlist, heap_vma);
+    if (vma_insert(&vlist, heap_vma) < 0) {
+        vma_free(heap_vma);
+        free_proc(p);
+        return 0;
+    }
 
     // Stack VMA
     struct vma *stack_vma = vma_alloc();
@@ -254,7 +262,11 @@ struct pcb *proc_spawn(const char *path) {
     stack_vma->end   = USER_STACK_TOP;
     stack_vma->prot  = VMA_PROT_R | VMA_PROT_W;
     stack_vma->type  = VMA_TYPE_STACK;
-    vma_insert(&vlist, stack_vma);
+    if (vma_insert(&vlist, stack_vma) < 0) {
+        vma_free(stack_vma);
+        free_proc(p);
+        return 0;
+    }
 
     p->heap_vma   = heap_vma;
     p->brk_start  = brk;
