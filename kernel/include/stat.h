@@ -13,6 +13,8 @@ struct stat {
     uint64_t st_mtime;
     uint64_t st_ctime;
     uint64_t st_rdev;       /* device id for char/block special files */
+    uint64_t st_blksize;    /* preferred I/O block size */
+    uint64_t st_blocks;     /* number of 512-byte blocks allocated */
 };
 
 #define S_IFMT   0170000

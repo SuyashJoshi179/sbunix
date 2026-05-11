@@ -358,6 +358,20 @@ static int tmpfs_op_stat(struct inode *ip, struct stat *st) {
     st->st_atime = ti->vnode.mtime;
     st->st_mtime = ti->vnode.mtime;
     st->st_ctime = ti->vnode.mtime;
+    /* tmpfs storage is page-based: report the page size as the preferred
+     * I/O size, and count actually-allocated pages (not ceil(size/512))
+     * so sparse holes don't inflate st_blocks. Each st_block is 512 B. */
+    st->st_blksize = TMPFS_PAGE_SIZE;
+    uint64_t npages = 0;
+    if (ti->vnode.type == I_REG) {
+        for (int i = 0; i < TMPFS_PAGES_PER_FILE; i++) {
+            if (ti->file_pages[i]) npages++;
+        }
+    } else if (ti->vnode.type == I_DIR) {
+        /* tmpfs_dirlink allocates one full page per dirent. */
+        for (struct tmpfs_dirent *d = ti->dirents; d; d = d->next) npages++;
+    }
+    st->st_blocks = npages * (TMPFS_PAGE_SIZE / 512);
     fs_unlock();
     return 0;
 }
