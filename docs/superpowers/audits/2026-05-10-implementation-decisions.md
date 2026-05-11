@@ -375,4 +375,48 @@ New helpers:
 **Out of scope:**
 - A general "PTE → owning subsystem" registry. Pcache is the only refcount-immune mapping today; if more land, the linear-scan helper can be replaced with a dispatch table.
 - `MAP_SHARED` writeback ordering during fork — already handled by `vma_drop_file_pages` MAP_SHARED branch; this fix only changes the page_refs side.
-- Wide-character `%ls` / `%lc`.
+
+**Selftest refinement** (commit `3ccf509`): the first cut of `test_pcache_uvmcow_refleak` measured `page_refs[pcache_pa]` only before and after a symmetric `uvmcow_share + free_user_pgtable` cycle. Pre-fix that cycle was *also* refs-neutral (page_get during share matched by page_put during teardown), so the test passed on the broken code too. Real production leak shows up only because `vma_drop_file_pages` clears file PTEs *before* `free_user_pgtable`, bypassing the would-be page_put. Selftest now samples `page_ref_get(pcache_pa)` right after `uvmcow_share`, before teardown — the one window where pre-fix observes `+1` and post-fix observes unchanged. Three assertions: (a) loop completes, (b) refs not bumped after share, (c) refs balanced after teardown.
+
+---
+
+## Post-PR review-comment fixes
+
+Reviewer comments arrived in batches after the initial 17 Tier-1 commits landed. Each batch addressed below, with rationale for the fix shape.
+
+### Batch 1 — printf type / flag bleeding (`4a9c5c5`)
+**Issues:**
+1. `case 'd'/'i'`: read width-mismatched via `va_arg(ap, long long)` regardless of `lng`. UB on ABIs where `long != long long`; happens to work on RV64 lp64 by coincidence but breaks portability.
+2. `%p` and the `%f/%e/%g` stub inherited `PF_PREC` from the caller's format string. `%.0p` of NULL would render as `""` (precision=0 truncating the `"(nil)"` literal).
+
+**Fix:** Width-aware promotion (`lng == 2 ? long long : lng == 1 ? long : int`). `%p` clears `PF_PREC` from a local flags copy; same for `%f/%e/%g`.
+
+### Batch 2 — kernel review-comment trio (`2567378`)
+**Issues:**
+1. `log.c`: bounds-check rejected only block 0 and the log range. A header entry pointing at block 1 (sbfs superblock) or beyond `disk_size` (out-of-range bio) would still be replayed.
+2. `signal.c`: `kill(-1, sig)` counted `delivered` for every PCB including kernel threads (`is_user == 0`) — `send_signal` is a no-op on those, so a system with only kernel threads + the caller spuriously returned 0 instead of `-ESRCH`.
+3. `exec.c`: `load_user_elf` collapsed every read failure to `-ENOEXEC`, masking real `-EIO` from disk faults.
+
+**Fix:** `log_init` gained a `disk_size` parameter; `recover_from_log` rejects block 0, block 1, the log range, and anything `>= disk_size`. `kill(-1)` skips `!p->is_user`. `read_at` returns the filesystem's errno verbatim on real I/O failure, reserves `-ENOEXEC` for short reads, and `load_user_elf` propagates the underlying code.
+
+### Batch 3 — `sysconf(_SC_OPEN_MAX)` drift (`ca393da`)
+**Issue:** `sysconf(_SC_OPEN_MAX)` hardcoded `64`. If `OPEN_MAX` in `<limits.h>` ever moves again, sysconf drifts behind silently.
+
+**Fix:** Return `OPEN_MAX` (from `<limits.h>`).
+
+### Batch 4 — printf `%#.3o` extra zero + `h`/`hh` va_arg UB (`fbef927`)
+**Issues:**
+1. `emit_num`'s octal alt-form (`#`) emitted a leading `0` even when precision-driven zero-padding already supplied one. `%#.3o` of 8 → `"0010"` instead of `"010"`.
+2. Length modifier parser accepted `h` and `hh` but didn't record them, so `%hu`/`%hhu`/`%hx`/`%hhx` read via `va_arg(ap, unsigned int)`. On lp64, default argument promotions widen `(unsigned) short` and `(unsigned) char` to signed `int` (int can hold the full unsigned-short range), so the `unsigned int` read is UB. Also no narrowing on `%hd`/`%hhd`, so `%hd` of `(int)0x10001` printed `65537` instead of `1`.
+
+**Fix:**
+1. Suppress alt-form `0` prefix when `zeros > 0`. Value==0 + precision==0 case unaffected (zeros stays 0, the `len == 0` arm still triggers alt to emit a single `0`).
+2. Track `h`/`hh` as `lng = -1` / `-2`. Each integer conversion reads `va_arg(ap, int)` and narrows via `(short)` / `(signed char)` / `(unsigned short)` / `(unsigned char)` before widening. Regression assertions added to `bin/header_test`.
+
+### Batch 5 — `namei` errno propagation (`b02eadb`)
+**Issue:** `sys_truncate` and `sys_symlink` collapsed every `namei` failure to `-ENOENT`, masking `-ENOTDIR`/`-EACCES`/`-ELOOP`/`-ENAMETOOLONG`. Same pattern existed in seven other path-based syscalls.
+
+**Fix:** Capture `namei`'s return and propagate verbatim across all eight call sites: `sys_mknod`, `sys_mkdir`, `sys_unlink`, `sys_link` (target + parent), `sys_rename` (both parents), `do_exec`, `sys_truncate`, `sys_symlink`. `namei` already returns `-errno`; over-collapsing was load-bearing for nothing.
+
+### Self-review cycle — selftest refinement (`3ccf509`)
+Covered in T1.13 entry above. Bug found in the verification, not the fix — the original test asserted a property that pre-fix already satisfied. Replaced with an assertion that genuinely distinguishes the two code states.
