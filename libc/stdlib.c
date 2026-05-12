@@ -5,7 +5,7 @@
 #include <errno.h>
 #include <inttypes.h>
 
-void _Exit(int status) { exit(status); }
+void _Exit(int status) { _exit(status); }
 
 void abort(void) {
     raise(SIGABRT);
@@ -386,8 +386,6 @@ int rand(void) {
     return (int)((_rand_state >> 16) & 0x7fffffff);
 }
 void srand(unsigned seed) { _rand_state = seed; }
-
-int atexit(void (*func)(void)) { (void)func; return 0; }
 
 /* Insertion sort — fine for small N; user code should not feed huge arrays. */
 void qsort(void *base, size_t nmemb, size_t size,

@@ -3,13 +3,17 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-/* Hardcoded mount table: tarfs at / and sbfs at /mnt. We don't have
- * /etc/mtab on disk, so setmntent ignores its arguments and walks this
- * fixed list once per opened stream. */
+/* Hardcoded mount table used in lieu of an on-disk /etc/mtab. setmntent
+ * ignores its arguments and walks this fixed list once per opened
+ * stream. Keep entries in sync with the real mount sources: tarfs at /
+ * is mounted by the kernel during boot (kernel/fs/tarfs.c), while sbfs
+ * at /mnt and tmpfs at /tmp come from userspace `mount` invocations in
+ * rootfs/etc/rc. */
 
 static const struct mntent table[] = {
     { (char *)"tarfs", (char *)"/",     (char *)"tarfs", (char *)"ro,defaults", 0, 0 },
-    { (char *)"sbfs",  (char *)"/mnt", (char *)"sbfs",  (char *)"rw,defaults", 0, 0 },
+    { (char *)"sbfs",  (char *)"/mnt",  (char *)"sbfs",  (char *)"rw,defaults", 0, 0 },
+    { (char *)"tmpfs", (char *)"/tmp",  (char *)"tmpfs", (char *)"rw,defaults", 0, 0 },
 };
 
 #define TABLE_LEN (int)(sizeof(table) / sizeof(table[0]))
