@@ -3,13 +3,15 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-/* Hardcoded mount table: tarfs at / and sbfs at /mnt. We don't have
- * /etc/mtab on disk, so setmntent ignores its arguments and walks this
- * fixed list once per opened stream. */
+/* Hardcoded mount table: every fs the kernel attaches at boot. We don't
+ * have /etc/mtab on disk, so setmntent ignores its arguments and walks
+ * this fixed list once per opened stream. Keep in sync with selftest.c's
+ * mount_fs calls in main_setup. */
 
 static const struct mntent table[] = {
     { (char *)"tarfs", (char *)"/",     (char *)"tarfs", (char *)"ro,defaults", 0, 0 },
-    { (char *)"sbfs",  (char *)"/mnt", (char *)"sbfs",  (char *)"rw,defaults", 0, 0 },
+    { (char *)"sbfs",  (char *)"/mnt",  (char *)"sbfs",  (char *)"rw,defaults", 0, 0 },
+    { (char *)"tmpfs", (char *)"/tmp",  (char *)"tmpfs", (char *)"rw,defaults", 0, 0 },
 };
 
 #define TABLE_LEN (int)(sizeof(table) / sizeof(table[0]))
