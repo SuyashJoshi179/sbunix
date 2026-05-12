@@ -262,8 +262,10 @@ static int64_t sys_open(const char *path, int flags) {
     f->readable = ((flags & 3) == 0 || (flags & 3) == 2) ? 1 : 0;
     f->writable = ((flags & 3) == 1 || (flags & 3) == 2) ? 1 : 0;
     if (ip->type == I_CHR) { f->readable = 1; f->writable = 1; }
-    // O_APPEND: start writes at end
-    if (flags & 02000) f->off = ip->size;
+    // O_APPEND: every write must reposition to EOF first (handled in
+    // filewrite). Set off here too so a caller that immediately stat()s
+    // or reads the position sees the post-open value.
+    if (flags & 02000) { f->append = 1; f->off = ip->size; }
     // O_TRUNC: truncate to zero length, freeing any data blocks.
     if ((flags & 01000) && f->writable && ip->type == I_REG && ip->ops->truncate) {
         ip->ops->truncate(ip);
