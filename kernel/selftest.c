@@ -1,5 +1,6 @@
 #include <bio.h>
 #include <drivers/rtc.h>
+#include <errno.h>
 #include <exec.h>
 #include <file.h>
 #include <inode.h>
@@ -1008,6 +1009,56 @@ static void test_pgtable_page_put(void) {
     st_check(page_ref_get(l1_pa) == 0, "pgtable_page_put: L1 ref=0 after release");
 }
 
+static void test_vma_insert_overlap(void) {
+    printk("[SELFTEST] -- vma_insert_overlap --\n");
+    struct vma *list = 0;
+
+    struct vma *base = vma_alloc();
+    base->start = 0x10000;
+    base->end   = 0x20000;
+    base->prot  = VMA_PROT_R;
+    base->type  = VMA_TYPE_ANON;
+    st_check(vma_insert(&list, base) == 0,
+             "vma_insert_overlap: base insert returns 0");
+
+    /* Successor overlap: bad.start sits inside base. */
+    struct vma *succ = vma_alloc();
+    succ->start = 0x18000;
+    succ->end   = 0x21000;
+    succ->prot  = VMA_PROT_R;
+    succ->type  = VMA_TYPE_ANON;
+    st_check(vma_insert(&list, succ) == -EINVAL,
+             "vma_insert_overlap: successor overlap returns -EINVAL");
+    vma_free(succ);
+
+    /* Predecessor overlap: bad.start is past base.start so the walk
+     * advances past it, then base.end > bad.start. */
+    struct vma *pred = vma_alloc();
+    pred->start = 0x15000;
+    pred->end   = 0x25000;
+    pred->prot  = VMA_PROT_R;
+    pred->type  = VMA_TYPE_ANON;
+    st_check(vma_insert(&list, pred) == -EINVAL,
+             "vma_insert_overlap: predecessor overlap returns -EINVAL");
+    vma_free(pred);
+
+    /* Non-overlap immediately after base: must succeed. */
+    struct vma *after = vma_alloc();
+    after->start = 0x20000;
+    after->end   = 0x21000;
+    after->prot  = VMA_PROT_R;
+    after->type  = VMA_TYPE_ANON;
+    st_check(vma_insert(&list, after) == 0,
+             "vma_insert_overlap: abutting non-overlap returns 0");
+
+    /* List still has only the two valid entries. */
+    int count = 0;
+    for (struct vma *w = list; w; w = w->next) count++;
+    st_check(count == 2, "vma_insert_overlap: list unchanged on rejected inserts");
+
+    vma_list_free(&list);
+}
+
 // ----------------------------------------------------------------------------
 // Phase 8 selftests
 // ----------------------------------------------------------------------------
@@ -1189,6 +1240,7 @@ void selftest_run(void) {
     test_vma_remove();
     test_vma_split();
     test_pgtable_page_put();
+    test_vma_insert_overlap();
     test_signal_defaults();
     test_signal_pending_bitops();
     test_termios_defaults();
