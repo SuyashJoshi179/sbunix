@@ -43,6 +43,7 @@ int main(void) {
         "/bin/wait_test",
         "/bin/setjmp_test",
         "/bin/ctype_test",
+        "/bin/mntent_test",
         "/bin/strftime_c_test",
         "/bin/o_append_test",
         "/bin/scandir_test",
