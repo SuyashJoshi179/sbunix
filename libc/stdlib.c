@@ -80,7 +80,11 @@ long strtol(const char *s, char **endp, int base) {
     int sign = 1;
     if (*p == '-') { sign = -1; p++; }
     else if (*p == '+') p++;
-    if ((base == 0 || base == 16) && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+    /* Only consume the 0x/0X prefix when at least one hex digit follows.
+     * Inputs like "0xz" or "0x" must leave the leading '0' available so
+     * the digit loop reports a single-digit conversion (matches glibc). */
+    if ((base == 0 || base == 16) && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')
+        && digit_val(p[2], 16) >= 0) {
         p += 2; base = 16;
     } else if (base == 0 && *p == '0') {
         base = 8;
@@ -123,7 +127,9 @@ unsigned long strtoul(const char *s, char **endp, int base) {
     int sign = 1;
     if (*p == '-') { sign = -1; p++; }
     else if (*p == '+') p++;
-    if ((base == 0 || base == 16) && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+    /* Mirror strtol: only consume 0x/0X when followed by a hex digit. */
+    if ((base == 0 || base == 16) && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')
+        && digit_val(p[2], 16) >= 0) {
         p += 2; base = 16;
     } else if (base == 0 && *p == '0') {
         base = 8;

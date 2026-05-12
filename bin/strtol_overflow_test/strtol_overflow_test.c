@@ -77,6 +77,38 @@ int main(void) {
     ull = strtoull("18446744073709551616", &endp, 10);
     CHECK(ull == ULLONG_MAX && errno == ERANGE, "strtoull inherits ERANGE");
 
+    /* strtoul('-'): POSIX says a leading '-' negates the result mod 2^N.
+     * strtoul("-1") must return ULONG_MAX (not 0) with errno unchanged
+     * and endp at the terminator. */
+    errno = 0;
+    u = strtoul("-1", &endp, 10);
+    CHECK(u == ULONG_MAX && errno == 0 && *endp == '\0',
+          "strtoul '-1' returns ULONG_MAX");
+
+    errno = 0;
+    u = strtoul("-2", &endp, 10);
+    CHECK(u == ULONG_MAX - 1 && errno == 0 && *endp == '\0',
+          "strtoul '-2' returns ULONG_MAX-1");
+
+    /* 0x prefix without a hex digit: glibc treats the leading '0' as a
+     * one-digit (octal/hex 0) conversion and leaves the 'x' for endp.
+     * Pre-fix our code consumed "0x" unconditionally and returned no
+     * conversion (endp == s). */
+    errno = 0;
+    v = strtol("0xz", &endp, 0);
+    CHECK(v == 0 && errno == 0 && *endp == 'x',
+          "strtol '0xz' base=0: endp at 'x'");
+
+    errno = 0;
+    v = strtol("0x", &endp, 0);
+    CHECK(v == 0 && errno == 0 && *endp == 'x',
+          "strtol '0x' base=0: endp at 'x'");
+
+    errno = 0;
+    u = strtoul("0xz", &endp, 16);
+    CHECK(u == 0 && errno == 0 && *endp == 'x',
+          "strtoul '0xz' base=16: endp at 'x'");
+
     if (fails == 0) printf("strtol_overflow_test: PASS\n");
     else printf("strtol_overflow_test: %d FAIL(s)\n", fails);
     return fails;
