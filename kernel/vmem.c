@@ -173,12 +173,15 @@ static void free_user_pages_level(pgtable_t pt, int level) {
             if (!pcache_pa_to_slot(pa))
                 page_put(pa);
         } else if (level > 0) {
-            // Pointer PTE — recurse, then release this page-table page via
-            // page_put so a future caller that shares directory pages
-            // (page_get'd by some other path) doesn't trigger a panic.
-            // For the today-common refcount==1 case this is identical to
-            // page_free; for refcount>1 it decrements and leaves the page
-            // alive for the remaining owner.
+            // Pointer PTE — recurse into the child page table, which is
+            // assumed to be owned by this address space, then release the
+            // page-table page via page_put. Using page_put here tolerates
+            // extra temporary refs (for example debug pinning or other
+            // non-ownership holds) without changing teardown behavior for
+            // the normal refcount==1 case. This does not make recursive
+            // teardown safe for truly shared intermediate page-table pages:
+            // the recursion above unconditionally frees leaf pages, which
+            // would corrupt mappings still in use by another owner.
             pgtable_t child = (pgtable_t)phys_to_virt(pa);
             free_user_pages_level(child, level - 1);
             page_put(pa);
