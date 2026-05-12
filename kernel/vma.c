@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <inode.h>
 #include <page_cache.h>
 #include <page_ref.h>
@@ -49,14 +50,20 @@ struct vma *vma_find(struct vma *list, uint64_t va) {
     return 0;
 }
 
-void vma_insert(struct vma **list, struct vma *v) {
+int vma_insert(struct vma **list, struct vma *v) {
     struct vma **pp = list;
-    while (*pp && (*pp)->start < v->start)
+    struct vma  *prev = 0;
+    while (*pp && (*pp)->start < v->start) {
+        prev = *pp;
         pp = &(*pp)->next;
-    if (*pp && (*pp)->start < v->end)
-        panic("vma_insert: overlap");
+    }
+    /* Reject overlap with the successor (slot at *pp) or with the
+     * immediately preceding node. */
+    if (*pp && (*pp)->start < v->end) return -EINVAL;
+    if (prev && prev->end > v->start) return -EINVAL;
     v->next = *pp;
     *pp = v;
+    return 0;
 }
 
 void vma_remove(struct vma **list, struct vma *v) {
@@ -124,8 +131,14 @@ int vma_split(struct vma **list, struct vma *v, uint64_t start, uint64_t end) {
             right->file_off = v->file_off + (end - v->start);
             inode_get(right->file);
         }
+        uint64_t saved_end = v->end;
         v->end = start;
-        vma_insert(list, right);
+        if (vma_insert(list, right) < 0) {
+            v->end = saved_end;
+            if (right->file) inode_put(right->file);
+            vma_free(right);
+            return -1;
+        }
         return 0;
     }
     if (start <= v->start) {

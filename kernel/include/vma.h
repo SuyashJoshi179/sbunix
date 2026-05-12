@@ -33,7 +33,7 @@ struct vma {
 struct vma *vma_alloc(void);
 void        vma_free(struct vma *v);
 struct vma *vma_find(struct vma *list, uint64_t va);
-void        vma_insert(struct vma **list, struct vma *v);
+int         vma_insert(struct vma **list, struct vma *v);
 void        vma_remove(struct vma **list, struct vma *v);
 void        vma_list_free(struct vma **list);
 struct vma *vma_list_dup(struct vma *src);
