@@ -3,10 +3,12 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-/* Hardcoded mount table: every fs the kernel attaches at boot. We don't
- * have /etc/mtab on disk, so setmntent ignores its arguments and walks
- * this fixed list once per opened stream. Keep in sync with selftest.c's
- * mount_fs calls in main_setup. */
+/* Hardcoded mount table used in lieu of an on-disk /etc/mtab. setmntent
+ * ignores its arguments and walks this fixed list once per opened
+ * stream. Keep entries in sync with the real mount sources: tarfs at /
+ * is mounted by the kernel during boot (kernel/fs/tarfs.c), while sbfs
+ * at /mnt and tmpfs at /tmp come from userspace `mount` invocations in
+ * rootfs/etc/rc. */
 
 static const struct mntent table[] = {
     { (char *)"tarfs", (char *)"/",     (char *)"tarfs", (char *)"ro,defaults", 0, 0 },
