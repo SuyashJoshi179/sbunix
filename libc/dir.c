@@ -106,3 +106,63 @@ void seekdir(DIR *d, long off) {
     rewinddir(d);
     while (d->stream_off < off && readdir(d)) { }
 }
+
+int alphasort(const struct dirent **a, const struct dirent **b) {
+    return strcmp((*a)->d_name, (*b)->d_name);
+}
+
+/* qsort comparator type-punning thunk. POSIX scandir() takes a compar
+ * with `const struct dirent **` args, but qsort wants `const void *`.
+ * The C standard technically doesn't permit calling through a different
+ * function pointer type, so route via a thunk that pulls the user
+ * compar out of a static — single-process libc, no signal-handler
+ * reentry expected. */
+static int (*scandir_compar)(const struct dirent **, const struct dirent **);
+static int scandir_qsort_thunk(const void *a, const void *b) {
+    return scandir_compar((const struct dirent **)a,
+                          (const struct dirent **)b);
+}
+
+int scandir(const char *dirp, struct dirent ***namelist,
+            int (*filter)(const struct dirent *),
+            int (*compar)(const struct dirent **, const struct dirent **)) {
+    if (!dirp || !namelist) { errno = EINVAL; return -1; }
+    DIR *d = opendir(dirp);
+    if (!d) return -1;
+
+    int cap = 8;
+    int count = 0;
+    struct dirent **arr = malloc(sizeof(*arr) * (size_t)cap);
+    if (!arr) { closedir(d); errno = ENOMEM; return -1; }
+
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (filter && !filter(e)) continue;
+        if (count >= cap) {
+            int new_cap = cap * 2;
+            struct dirent **na = realloc(arr, sizeof(*arr) * (size_t)new_cap);
+            if (!na) goto fail;
+            arr = na;
+            cap = new_cap;
+        }
+        struct dirent *copy = malloc(sizeof(*copy));
+        if (!copy) goto fail;
+        *copy = *e;
+        arr[count++] = copy;
+    }
+    closedir(d);
+
+    if (compar && count > 1) {
+        scandir_compar = compar;
+        qsort(arr, (size_t)count, sizeof(*arr), scandir_qsort_thunk);
+    }
+    *namelist = arr;
+    return count;
+
+fail:
+    for (int i = 0; i < count; i++) free(arr[i]);
+    free(arr);
+    closedir(d);
+    errno = ENOMEM;
+    return -1;
+}

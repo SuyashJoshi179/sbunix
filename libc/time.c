@@ -263,7 +263,7 @@ char *ctime(const time_t *t) {
  * strftime — supports the conversion specifiers most ported code uses:
  *   %% %n %t %Y %y %C %m %d %e %j %H %I %M %S %p %P %a %A %b %B %h
  *   %u %w %s %F (=%Y-%m-%d) %T (=%H:%M:%S) %R (=%H:%M) %D (=%m/%d/%y)
- *   %r (=%I:%M:%S %p)
+ *   %r (=%I:%M:%S %p) %c (POSIX C locale: %a %b %e %H:%M:%S %Y)
  * Width-modifier flags between '%' and the conversion are ignored.
  * Anything else copies the literal '%' + char.
  * ------------------------------------------------------------------ */
@@ -390,6 +390,27 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm) {
             emit_pad(&p, end, tm->tm_sec, 2, '0');
             p = put1(p, end, ' ');
             emit(&p, end, tm->tm_hour < 12 ? "AM" : "PM");
+            break;
+        }
+        /* POSIX C locale: "%a %b %e %H:%M:%S %Y" — identical to ctime
+         * without the trailing newline. We don't ship locales so this
+         * is the only representation %c can produce. */
+        case 'c': {
+            int w = tm->tm_wday & 7; if (w > 6) w = 0;
+            int mo = tm->tm_mon;     if (mo < 0 || mo > 11) mo = 0;
+            emit(&p, end, wday_short[w]);
+            p = put1(p, end, ' ');
+            emit(&p, end, mon_short[mo]);
+            p = put1(p, end, ' ');
+            emit_pad(&p, end, tm->tm_mday, 2, ' ');
+            p = put1(p, end, ' ');
+            emit_pad(&p, end, tm->tm_hour, 2, '0');
+            p = put1(p, end, ':');
+            emit_pad(&p, end, tm->tm_min, 2, '0');
+            p = put1(p, end, ':');
+            emit_pad(&p, end, tm->tm_sec, 2, '0');
+            p = put1(p, end, ' ');
+            emit_pad(&p, end, tm->tm_year + 1900, 4, '0');
             break;
         }
         default:
