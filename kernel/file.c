@@ -32,6 +32,7 @@ struct file *filealloc(void) {
         if (ftable[i].type == FD_NONE) {
             ftable[i].type   = FD_INODE;  // placeholder; caller may adjust
             ftable[i].refcnt = 1;
+            ftable[i].append = 0;
             file_unlock();
             return &ftable[i];
         }
@@ -83,6 +84,11 @@ int filewrite(struct file *f, const void *src, uint64_t n) {
     if (f->type == FD_PIPE)
         return pipe_write(f->pipe, (const char *)src, (int)n);
     if (f->type != FD_INODE || !f->ip || !f->ip->ops->write) return -EBADF;
+    /* POSIX O_APPEND: each write must atomically reposition to EOF
+     * before writing — not just the first one. Without this, lseek()
+     * (or another fd extending the file) leaves writes landing at the
+     * stale offset. */
+    if (f->append) f->off = f->ip->size;
     int w = f->ip->ops->write(f->ip, f->off, src, n);
     if (w > 0) f->off += (uint64_t)w;
     return w;
