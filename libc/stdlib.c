@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 
 void _Exit(int status) { exit(status); }
 
@@ -86,16 +87,37 @@ long strtol(const char *s, char **endp, int base) {
     } else if (base == 0) {
         base = 10;
     }
-    long n = 0; int any = 0; int d;
-    while ((d = digit_val(*p, base)) >= 0) { n = n * base + d; p++; any = 1; }
+    /* Accumulate as unsigned. The positive ceiling is LONG_MAX; the
+     * negative ceiling is |LONG_MIN| which is one larger and only
+     * representable as unsigned. cutoff/cutlim split the ceiling into
+     * "quotient by base" and "remainder by base" so the overflow check
+     * is a single compare per digit. */
+    unsigned long max_abs = sign > 0 ? (unsigned long)LONG_MAX
+                                     : (unsigned long)LONG_MAX + 1;
+    unsigned long cutoff = max_abs / (unsigned)base;
+    unsigned long cutlim = max_abs % (unsigned)base;
+    unsigned long n = 0; int any = 0, overflow = 0, d;
+    while ((d = digit_val(*p, base)) >= 0) {
+        if (overflow || n > cutoff || (n == cutoff && (unsigned long)d > cutlim))
+            overflow = 1;
+        else
+            n = n * (unsigned)base + (unsigned)d;
+        p++; any = 1;
+    }
     if (endp) *endp = (char *)(any ? p : s);
-    return sign * n;
+    if (overflow) {
+        errno = ERANGE;
+        return sign > 0 ? LONG_MAX : LONG_MIN;
+    }
+    return sign > 0 ? (long)n : -(long)n;
 }
 
 unsigned long strtoul(const char *s, char **endp, int base) {
     const char *p = s;
     while (*p == ' ' || *p == '\t' || *p == '\n') p++;
-    if (*p == '+') p++;
+    int sign = 1;
+    if (*p == '-') { sign = -1; p++; }
+    else if (*p == '+') p++;
     if ((base == 0 || base == 16) && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
         p += 2; base = 16;
     } else if (base == 0 && *p == '0') {
@@ -103,10 +125,24 @@ unsigned long strtoul(const char *s, char **endp, int base) {
     } else if (base == 0) {
         base = 10;
     }
-    unsigned long n = 0; int any = 0; int d;
-    while ((d = digit_val(*p, base)) >= 0) { n = n * (unsigned)base + (unsigned)d; p++; any = 1; }
+    unsigned long cutoff = ULONG_MAX / (unsigned)base;
+    unsigned long cutlim = ULONG_MAX % (unsigned)base;
+    unsigned long n = 0; int any = 0, overflow = 0, d;
+    while ((d = digit_val(*p, base)) >= 0) {
+        if (overflow || n > cutoff || (n == cutoff && (unsigned long)d > cutlim))
+            overflow = 1;
+        else
+            n = n * (unsigned)base + (unsigned)d;
+        p++; any = 1;
+    }
     if (endp) *endp = (char *)(any ? p : s);
-    return n;
+    if (overflow) {
+        errno = ERANGE;
+        return ULONG_MAX;
+    }
+    /* POSIX: a leading '-' produces the negated value mod 2^N — `-1`
+     * round-trips to ULONG_MAX, not 0. */
+    return sign > 0 ? n : -n;
 }
 
 long long strtoll(const char *s, char **endp, int base) {
