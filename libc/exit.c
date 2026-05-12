@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <unistd.h>
+#include <errno.h>
 
 /* POSIX requires support for at least ATEXIT_MAX (>=32) handlers. The
  * table is process-local — execve resets it because the new image
@@ -10,8 +11,8 @@ static void (*atexit_fns[ATEXIT_MAX])(void);
 static int   atexit_count;
 
 int atexit(void (*func)(void)) {
-    if (!func) return -1;
-    if (atexit_count >= ATEXIT_MAX) return -1;
+    if (!func)                       { errno = EINVAL; return -1; }
+    if (atexit_count >= ATEXIT_MAX)  { errno = ENOMEM; return -1; }
     atexit_fns[atexit_count++] = func;
     return 0;
 }
