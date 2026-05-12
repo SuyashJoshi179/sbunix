@@ -1,3 +1,2 @@
-int main(void) {
-    return 1;
-}
+/* /bin/false — POSIX no-op failure utility. */
+int main(void) { return 1; }

@@ -149,6 +149,7 @@ int main(void) {
         "/bin/headers_compile_gate",
         "/bin/env_test",
         "/bin/sh_c_test",
+        "/bin/sh_hardening_test",
         "/bin/usertests",
         "/bin/mmap_smoke_test",
         "/bin/mmap_cow_test",

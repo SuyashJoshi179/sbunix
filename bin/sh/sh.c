@@ -17,7 +17,7 @@
 #define MAXARG  64
 
 // Token types
-enum { T_WORD, T_PIPE, T_REDIR_IN, T_REDIR_OUT, T_REDIR_APPEND, T_AND, T_BG, T_END };
+enum { T_WORD, T_PIPE, T_REDIR_IN, T_REDIR_OUT, T_REDIR_APPEND, T_AND, T_BG, T_SEMI, T_END };
 
 struct token {
     int  type;
@@ -308,6 +308,12 @@ static void tokenize(void) {
             tokens[ntokens].type = T_BG;
             tokens[ntokens].val = 0;
             ntokens++; p++;
+        } else if (*p == ';') {
+            /* POSIX statement separator — like && but continues regardless
+             * of the previous command's exit status. */
+            tokens[ntokens].type = T_SEMI;
+            tokens[ntokens].val = 0;
+            ntokens++; p++;
         } else if (*p == '<') {
             tokens[ntokens].type = T_REDIR_IN;
             tokens[ntokens].val = 0;
@@ -330,11 +336,24 @@ static void tokenize(void) {
             while (*p && *p != '"') p++;
             if (*p == '"') *p++ = 0;
             ntokens++;
+        } else if (*p == '\'') {
+            /* Single-quoted literal: same shape as the double-quoted
+             * branch — we don't expand $vars or escapes inside double
+             * quotes either, so the two are functionally equivalent
+             * for now. The flag is still useful for glob suppression. */
+            p++;
+            tokens[ntokens].type = T_WORD;
+            tokens[ntokens].quoted = 1;
+            tokens[ntokens].val = p;
+            while (*p && *p != '\'') p++;
+            if (*p == '\'') *p++ = 0;
+            ntokens++;
         } else {
             tokens[ntokens].type = T_WORD;
             tokens[ntokens].quoted = 0;
             tokens[ntokens].val = p;
-            while (*p && !is_space(*p) && *p != '|' && *p != '<' && *p != '>') p++;
+            while (*p && !is_space(*p) && *p != '|' && *p != '<' && *p != '>'
+                   && *p != ';' && *p != '&') p++;
             if (*p) { *p = 0; p++; }
             ntokens++;
         }
@@ -353,7 +372,8 @@ static int parse_cmd(int start, char **argv, int *argc_out,
 
     int i = start;
     while (i < ntokens && tokens[i].type != T_PIPE && tokens[i].type != T_END &&
-           tokens[i].type != T_BG && tokens[i].type != T_AND) {
+           tokens[i].type != T_BG && tokens[i].type != T_AND &&
+           tokens[i].type != T_SEMI) {
         if (tokens[i].type == T_REDIR_IN) {
             i++;
             if (i < ntokens && tokens[i].type == T_WORD)
@@ -416,11 +436,14 @@ static void run_simple(char **argv, int argc, char *redir_in, char *redir_out,
                         int append) {
     if (argc == 0) return;
 
-    // Handle redirections
+    // Handle redirections — errors go to stderr (fd 2), not stdout.
     if (redir_in) {
         int fd = open(redir_in, O_RDONLY);
         if (fd < 0) {
-            printf("sh: cannot open '%s'\n", redir_in);
+            const char *msg = "sh: cannot open '";
+            write(2, msg, 17);
+            write(2, redir_in, strlen(redir_in));
+            write(2, "'\n", 2);
             exit(1);
         }
         close(0);
@@ -433,7 +456,10 @@ static void run_simple(char **argv, int argc, char *redir_in, char *redir_out,
         else flags |= O_TRUNC;
         int fd = open(redir_out, flags);
         if (fd < 0) {
-            printf("sh: cannot open '%s'\n", redir_out);
+            const char *msg = "sh: cannot open '";
+            write(2, msg, 17);
+            write(2, redir_out, strlen(redir_out));
+            write(2, "'\n", 2);
             exit(1);
         }
         close(1);
@@ -443,8 +469,15 @@ static void run_simple(char **argv, int argc, char *redir_in, char *redir_out,
 
     char *path = resolve_path(argv[0]);
     execv(path, argv);
-    printf("sh: exec '%s' failed\n", argv[0]);
-    exit(1);
+    /* POSIX: exec failure is reported to stderr, not stdout, and the
+     * exit code distinguishes "not found" (127) from other failures
+     * such as ELF errors or EACCES (126). */
+    int err = errno;
+    const char *msg = "sh: exec '";
+    write(2, msg, 11);
+    write(2, argv[0], strlen(argv[0]));
+    write(2, "' failed\n", 9);
+    exit(err == ENOENT ? 127 : 126);
 }
 
 // Execute the pipeline starting from token index `start`.
@@ -715,7 +748,7 @@ static int run_line(void) {
     int last_status = 0;
     for (int i = 0;; i++) {
         if (tokens[i].type == T_AND || tokens[i].type == T_END ||
-            tokens[i].type == T_BG) {
+            tokens[i].type == T_BG  || tokens[i].type == T_SEMI) {
             int saved = tokens[i].type;
             int bg = (saved == T_BG);
             tokens[i].type = T_END;
