@@ -963,9 +963,19 @@ static void test_pgtable_page_put(void) {
              virt_to_phys((unsigned long)data),
              PAGE_SIZE, PTE_R | PTE_W | PTE_U);
 
-    /* Pull the L1 intermediate's phys addr out of the L2 slot. */
+    /* Pull the L1 intermediate's phys addr out of the L2 slot. If the
+     * L2 slot is invalid (vmem_map's intermediate page_alloc lost a
+     * race to OOM and silently bailed) the rest of this test would
+     * index page_refs[] with an out-of-range PFN. Hard-guard so a
+     * mapping failure terminates the test cleanly instead of crashing
+     * pre-fix kernels with a different bug. */
     pte_t l2pte = pt[get_ptindx(2, USER_TEXT_BASE)];
     st_check((l2pte & PTE_V) != 0, "pgtable_page_put: L2 entry valid");
+    if (!(l2pte & PTE_V)) {
+        page_put(virt_to_phys((unsigned long)data));
+        free_user_pgtable(pt);
+        return;
+    }
     unsigned long l1_pa = pte_to_phyaddr(l2pte);
 
     /* Pin the L1 page so refcount becomes 2. free_user_pages_level
