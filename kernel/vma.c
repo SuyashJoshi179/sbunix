@@ -354,27 +354,28 @@ static void drop_file_range(struct pcb *p, struct vma *v,
         unsigned long pa = pte_to_phyaddr(*pte);
         uint64_t pgidx = (va - v->start + v->file_off) / PAGE_SIZE;
 
-        struct pcache_page *pp;
-        if (pcache_get(v->file, pgidx, &pp) == 0) {
-            unsigned long pcache_pa = virt_to_phys((unsigned long)pp->page);
-            if (pcache_pa == pa) {
-                /* PTE points at the cache page (T9 RO install or T11
-                 * shared-RW upgrade). */
-                if (pp->dirty && (v->flags & VMA_FLAG_SHARED)
-                    && v->file->ops && v->file->ops->writepage_locked) {
-                    v->file->ops->writepage_locked(v->file, pgidx,
-                                                   pp->page);
-                    pp->dirty = 0;
-                }
-                pcache_put(pp);   /* fault-time ref */
-                pcache_put(pp);   /* lookup ref     */
-            } else {
-                /* PTE points at a CoW anon page (T10). Cache page is
-                 * untouched by this PTE; just drop the lookup ref and
-                 * free the anon page. */
-                pcache_put(pp);   /* lookup ref only */
-                page_put(pa);
+        /* Classify by reverse-lookup, not pcache_get: pcache_get can
+         * fail (-ENOMEM if all slots are pinned, -EIO if readpage
+         * trips), and on failure the old code would still clear the
+         * PTE while leaking the anon backing or the fault-time pcache
+         * ref. The same pattern is already used in T10's CoW path
+         * (search pcache_pa_to_slot in this file). The PTE can only
+         * point at a pcache slot if we're holding a fault-time ref on
+         * it, which prevents eviction, so this lookup is always safe. */
+        struct pcache_page *pp = pcache_pa_to_slot(pa);
+        if (pp) {
+            /* PTE points at the cache page (T9 RO install or T11
+             * shared-RW upgrade). */
+            if (pp->dirty && (v->flags & VMA_FLAG_SHARED)
+                && v->file->ops && v->file->ops->writepage_locked) {
+                v->file->ops->writepage_locked(v->file, pgidx,
+                                               pp->page);
+                pp->dirty = 0;
             }
+            pcache_put(pp);   /* fault-time ref */
+        } else {
+            /* PTE points at a CoW anon page (T10). */
+            page_put(pa);
         }
         *pte = 0;
     }
