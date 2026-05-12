@@ -116,6 +116,10 @@ int main(void) {
     char need[32];
     build_pid_prefix(need, mypid);
     check(contains(buf, need), "status has correct Pid:");
+    check(contains(buf, "VmSize:"), "status has VmSize");
+    check(contains(buf, "VmStk:"),  "status has VmStk");
+    check(contains(buf, "Pgid:"),   "status has Pgid");
+    check(contains(buf, "Sid:"),    "status has Sid");
 
     char rbuf[64];
     long rl = readlink("/proc/self", rbuf, sizeof(rbuf) - 1);
