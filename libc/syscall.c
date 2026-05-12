@@ -3,7 +3,9 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -258,4 +260,21 @@ int wait4(int pid, int *status, int options, void *rusage) {
 
 int waitpid(int pid, int *status, int options) {
     return wait4(pid, status, options, 0);
+}
+
+/* Generic syscall(2) dispatch. The kernel ABI uses a7 = number, a0..a5 =
+ * args; we always read six argument slots from the va_list so callers
+ * can pass any subset (kernel ignores slots its syscall doesn't read).
+ * Mirrors glibc: -1 with errno set on failure, raw return otherwise. */
+long syscall(long num, ...) {
+    va_list ap;
+    va_start(ap, num);
+    long a0 = va_arg(ap, long);
+    long a1 = va_arg(ap, long);
+    long a2 = va_arg(ap, long);
+    long a3 = va_arg(ap, long);
+    long a4 = va_arg(ap, long);
+    long a5 = va_arg(ap, long);
+    va_end(ap);
+    return syscall_ret(ecall6(num, a0, a1, a2, a3, a4, a5));
 }
