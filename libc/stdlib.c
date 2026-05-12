@@ -109,7 +109,12 @@ long strtol(const char *s, char **endp, int base) {
         errno = ERANGE;
         return sign > 0 ? LONG_MAX : LONG_MIN;
     }
-    return sign > 0 ? (long)n : -(long)n;
+    if (sign > 0) return (long)n;
+    /* |LONG_MIN| is one past LONG_MAX and therefore not representable
+     * as a signed long. Casting it and negating is implementation-
+     * defined / UB respectively, so produce LONG_MIN directly. */
+    if (n == (unsigned long)LONG_MAX + 1) return LONG_MIN;
+    return -(long)n;
 }
 
 unsigned long strtoul(const char *s, char **endp, int base) {
