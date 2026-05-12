@@ -5,7 +5,6 @@
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
-#include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -262,19 +261,51 @@ int waitpid(int pid, int *status, int options) {
     return wait4(pid, status, options, 0);
 }
 
-/* Generic syscall(2) dispatch. The kernel ABI uses a7 = number, a0..a5 =
- * args; we always read six argument slots from the va_list so callers
- * can pass any subset (kernel ignores slots its syscall doesn't read).
- * Mirrors glibc: -1 with errno set on failure, raw return otherwise. */
-long syscall(long num, ...) {
-    va_list ap;
-    va_start(ap, num);
-    long a0 = va_arg(ap, long);
-    long a1 = va_arg(ap, long);
-    long a2 = va_arg(ap, long);
-    long a3 = va_arg(ap, long);
-    long a4 = va_arg(ap, long);
-    long a5 = va_arg(ap, long);
-    va_end(ap);
-    return syscall_ret(ecall6(num, a0, a1, a2, a3, a4, a5));
+/* Externally-visible mirror of the static-inline syscall_ret() so the
+ * asm syscall() stub below can `tail` into a real symbol. Kept as a
+ * separate definition (not a call into syscall_ret) so optimization
+ * can't elide the symbol even if syscall_ret() never gets an
+ * out-of-line copy in this TU. */
+long __syscall_ret_extern(long r) {
+    if (r < 0) {
+        errno = (int)(-r);
+        return -1;
+    }
+    return r;
 }
+
+/* Generic syscall(2) dispatch. The kernel ABI uses a7 = number and
+ * a0..a5 = args. We can't use va_arg() to read the arguments because
+ * callers may legally pass fewer than six (e.g. `syscall(SYS_getpid)`)
+ * and reading past the supplied args is UB per C99 §7.15p3.
+ *
+ * A `__attribute__((naked))` C function doesn't work here: on RISC-V,
+ * variadic functions still get a prologue that spills a1..a7 into the
+ * caller's stack frame so va_list can walk them, and `naked` does not
+ * suppress that spill — it would clobber the caller's saved ra/s0 and
+ * fault after we return.
+ *
+ * So write the whole function in a top-level asm block (musl does the
+ * same for its per-arch syscall stubs). At entry, the LP64 calling
+ * convention has put `num` in a0 and the variadic args in a1..a6.
+ * Shuffle them into the kernel's a7 = number / a0..a5 = args layout,
+ * ecall, then tail-jump into __syscall_ret_extern to translate
+ * -errno → -1 + errno. Slots the caller didn't fill contain stale
+ * register values, which is fine because the kernel ignores slots
+ * its syscall doesn't read. */
+__asm__(
+    ".text\n"
+    ".globl syscall\n"
+    ".type syscall, @function\n"
+    "syscall:\n"
+    "    mv  a7, a0\n"
+    "    mv  a0, a1\n"
+    "    mv  a1, a2\n"
+    "    mv  a2, a3\n"
+    "    mv  a3, a4\n"
+    "    mv  a4, a5\n"
+    "    mv  a5, a6\n"
+    "    ecall\n"
+    "    tail __syscall_ret_extern\n"
+    ".size syscall, .-syscall\n"
+);
