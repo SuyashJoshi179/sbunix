@@ -1194,17 +1194,14 @@ static int64_t sys_munmap(uint64_t addr, uint64_t len) {
     if (addr + len > v->end) return -EINVAL;
 
     if (v->type == VMA_TYPE_FILE) {
-        /* Partial unmap of a file VMA is unsafe: uvmunmap_range below
-         * would page_put() pcache slot pages (ref=1 from pcache_init),
-         * dropping their refs to zero and returning them to the page
-         * allocator while pcache still owns the slot. vma_split also
-         * does not propagate file/file_off into a middle-cut right
-         * half, leaving a null-file VMA that would deref on next
-         * fault. Until a range-aware file teardown lands (Phase D),
-         * reject anything that isn't a whole-VMA unmap. */
+        /* Whole-VMA unmap drops every page and releases the inode ref.
+         * Partial unmap only drops the PTEs inside the range; vma_split
+         * propagates file/file_off (and inode_get's a second ref) into
+         * any new right half. uvmunmap_range below is a no-op for the
+         * range we already cleared. */
         int whole_vma = (addr <= v->start && addr + len >= v->end);
-        if (!whole_vma) return -EINVAL;
-        vma_drop_file_pages(p, v);
+        if (whole_vma) vma_drop_file_pages(p, v);
+        else           vma_drop_file_pages_range(p, v, addr, addr + len);
     }
     uvmunmap_range(p->pagetable, addr, addr + len);
     vma_split(&p->vma_list, v, addr, addr + len);

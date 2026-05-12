@@ -43,4 +43,6 @@ int  user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe);
 
 struct pcb;
 void vma_drop_file_pages(struct pcb *p, struct vma *v);
+void vma_drop_file_pages_range(struct pcb *p, struct vma *v,
+                               uint64_t start, uint64_t end);
 int  vma_dup_file_pages(struct pcb *child, struct vma *v);

@@ -109,6 +109,9 @@ int vma_split(struct vma **list, struct vma *v, uint64_t start, uint64_t end) {
         return 0;
     }
     if (start > v->start && end < v->end) {
+        /* Middle cut: copy file metadata into the right half and bump
+         * the inode ref so both halves can independently inode_put on
+         * teardown. file_off advances by the offset of `end` within v. */
         struct vma *right = vma_alloc();
         if (!right) return -1;
         right->start = end;
@@ -116,11 +119,20 @@ int vma_split(struct vma **list, struct vma *v, uint64_t start, uint64_t end) {
         right->prot  = v->prot;
         right->type  = v->type;
         right->flags = v->flags;
+        if (v->type == VMA_TYPE_FILE && v->file) {
+            right->file     = v->file;
+            right->file_off = v->file_off + (end - v->start);
+            inode_get(right->file);
+        }
         v->end = start;
         vma_insert(list, right);
         return 0;
     }
     if (start <= v->start) {
+        /* Head trim: surviving VMA's start moves to `end`, so file_off
+         * has to advance by the same amount to keep page mapping stable. */
+        if (v->type == VMA_TYPE_FILE)
+            v->file_off += (end - v->start);
         v->start = end;
         return 0;
     }
@@ -314,12 +326,16 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
     return 0;
 }
 
-/* For a VMA_TYPE_FILE vma, walk its faulted-in PTEs, flush dirty cache
- * pages (MAP_SHARED only), drop pcache refcnts, and clear PTEs. Caller
- * frees the VMA struct via vma_list_free or vma_split. */
-void vma_drop_file_pages(struct pcb *p, struct vma *v) {
+/* Walk PTEs for [start, end) of a VMA_TYPE_FILE: flush dirty cache pages
+ * (MAP_SHARED only), drop pcache refcnts, drop CoW anon refs, and clear
+ * the PTEs. Range is in [start, end) of the VMA's address space; file
+ * page indices are derived from v->start + v->file_off. */
+static void drop_file_range(struct pcb *p, struct vma *v,
+                            uint64_t start, uint64_t end) {
     if (v->type != VMA_TYPE_FILE) return;
-    for (uint64_t va = v->start; va < v->end; va += PAGE_SIZE) {
+    if (start < v->start) start = v->start;
+    if (end   > v->end)   end   = v->end;
+    for (uint64_t va = start; va < end; va += PAGE_SIZE) {
         pte_t *pte = get_pte(p->pagetable, va, 0);
         if (!pte || !(*pte & PTE_V)) continue;
         unsigned long pa = pte_to_phyaddr(*pte);
@@ -350,7 +366,22 @@ void vma_drop_file_pages(struct pcb *p, struct vma *v) {
         *pte = 0;
     }
     flush_tlb();
+}
+
+/* Drop every page of the VMA and release its inode reference. Caller
+ * frees the VMA struct via vma_list_free or vma_split. */
+void vma_drop_file_pages(struct pcb *p, struct vma *v) {
+    if (v->type != VMA_TYPE_FILE) return;
+    drop_file_range(p, v, v->start, v->end);
     if (v->file) { inode_put(v->file); v->file = 0; }
+}
+
+/* Range-aware variant: drop PTEs in [start, end) but keep the inode
+ * ref because the VMA continues to exist (head/tail trim) or because a
+ * vma_split has handed an inode_get'd copy to the new right half. */
+void vma_drop_file_pages_range(struct pcb *p, struct vma *v,
+                               uint64_t start, uint64_t end) {
+    drop_file_range(p, v, start, end);
 }
 
 /* fork() inherits PTEs via uvmcow_share, which only bumps anon page_get

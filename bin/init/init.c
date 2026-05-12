@@ -98,6 +98,7 @@ int main(void) {
         "/bin/sbrk_edge_test",
         "/bin/cow_write_test",
         "/bin/munmap_test",
+        "/bin/partial_munmap_test",
         "/bin/mmap_stress_test",
         "/bin/fork_storm_test",
         "/bin/pipe_stress_test",
