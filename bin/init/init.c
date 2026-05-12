@@ -44,6 +44,8 @@ int main(void) {
         "/bin/setjmp_test",
         "/bin/ctype_test",
         "/bin/o_append_test",
+        "/bin/scandir_test",
+        "/bin/atexit_test",
         "/bin/fork_test",
         "/bin/pid_test",
         "/bin/addrspace_test",

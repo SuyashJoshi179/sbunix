@@ -42,3 +42,8 @@ long           telldir(DIR *dir);
 void           seekdir(DIR *dir, long off);
 
 long           getdents64(int fd, void *buf, long n);
+
+int            scandir(const char *dirp, struct dirent ***namelist,
+                       int (*filter)(const struct dirent *),
+                       int (*compar)(const struct dirent **, const struct dirent **));
+int            alphasort(const struct dirent **a, const struct dirent **b);

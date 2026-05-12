@@ -867,7 +867,7 @@ static unsigned long setup_user_stack(void *kstack, char *const *argv_user) {
 static int64_t do_exec(const char *path, char *const *argv_user,
                        uint64_t *trapframe) {
     struct pcb *p = current_proc();
-    if (!p || !p->is_user) return -1;
+    if (!p || !p->is_user) return -EINVAL;
     char kpath[PATH_MAX_LOCAL];
     int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc_path < 0) return rc_path;
@@ -952,7 +952,12 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     heap_vma->end   = brk;
     heap_vma->prot  = VMA_PROT_R | VMA_PROT_W;
     heap_vma->type  = VMA_TYPE_HEAP;
-    vma_insert(&vlist, heap_vma);
+    if (vma_insert(&vlist, heap_vma) < 0) {
+        vma_free(heap_vma);
+        vma_list_free(&vlist);
+        free_user_pgtable(new_pt);
+        return -EINVAL;
+    }
 
     // Stack VMA
     struct vma *stack_vma = vma_alloc();
@@ -965,7 +970,12 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     stack_vma->end   = USER_STACK_TOP;
     stack_vma->prot  = VMA_PROT_R | VMA_PROT_W;
     stack_vma->type  = VMA_TYPE_STACK;
-    vma_insert(&vlist, stack_vma);
+    if (vma_insert(&vlist, stack_vma) < 0) {
+        vma_free(stack_vma);
+        vma_list_free(&vlist);
+        free_user_pgtable(new_pt);
+        return -EINVAL;
+    }
 
     // Free old VMAs and page table
     for (struct vma *vv = p->vma_list; vv; vv = vv->next) {
@@ -1016,7 +1026,7 @@ static int64_t do_exec(const char *path, char *const *argv_user,
 // ---------------------------------------------------------------------------
 static int64_t sys_sbrk(int64_t incr) {
     struct pcb *p = current_proc();
-    if (!p || !p->heap_vma) return -1;
+    if (!p || !p->heap_vma) return -EINVAL;
 
     uint64_t old_end = p->heap_vma->end;
     uint64_t new_end = old_end + (uint64_t)incr;
@@ -1177,7 +1187,11 @@ static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
     } else {
         v->type = VMA_TYPE_ANON;
     }
-    vma_insert(&proc->vma_list, v);
+    if (vma_insert(&proc->vma_list, v) < 0) {
+        if (fip) inode_put(fip);
+        vma_free(v);
+        return -EINVAL;
+    }
     return (int64_t)search;
 }
 
@@ -1186,7 +1200,7 @@ static int64_t sys_mmap(uint64_t addr, uint64_t len, int prot, int flags,
 // ---------------------------------------------------------------------------
 static int64_t sys_munmap(uint64_t addr, uint64_t len) {
     struct pcb *p = current_proc();
-    if (!p) return -1;
+    if (!p) return -EINVAL;
     if (addr & (PAGE_SIZE - 1)) return -EINVAL;
     if (len == 0) return -EINVAL;
     len = page_round_up(len);
