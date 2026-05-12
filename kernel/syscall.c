@@ -1197,13 +1197,16 @@ static int64_t sys_munmap(uint64_t addr, uint64_t len) {
         /* Whole-VMA unmap drops every page and releases the inode ref.
          * Partial unmap only drops the PTEs inside the range; vma_split
          * propagates file/file_off (and inode_get's a second ref) into
-         * any new right half. uvmunmap_range below is a no-op for the
-         * range we already cleared. */
+         * any new right half. drop_file_range already cleared the PTEs
+         * and flushed the TLB, so skip uvmunmap_range — calling it here
+         * would walk the range a second time only to issue a redundant
+         * sfence.vma. */
         int whole_vma = (addr <= v->start && addr + len >= v->end);
         if (whole_vma) vma_drop_file_pages(p, v);
         else           vma_drop_file_pages_range(p, v, addr, addr + len);
+    } else {
+        uvmunmap_range(p->pagetable, addr, addr + len);
     }
-    uvmunmap_range(p->pagetable, addr, addr + len);
     vma_split(&p->vma_list, v, addr, addr + len);
     return 0;
 }
