@@ -27,7 +27,20 @@ unsigned short page_ref_get(unsigned long pa) {
     return page_refs[pa2pfn(pa)];
 }
 
+/* Validate that `pa` names a page-aligned, in-range RAM page before
+ * indexing page_refs[]. A garbage PA from a corrupted PTE would
+ * otherwise either silently corrupt an out-of-array slot or trip the
+ * underflow panic below with a confusing diagnostic. page_free does
+ * the same check; keep them symmetric. */
+static void check_page_pa(unsigned long pa, const char *who) {
+    if ((pa & (PAGE_SIZE - 1)) != 0)
+        panic(who);
+    if (pa < KERN_BASE || pa >= PHYMEM_END)
+        panic(who);
+}
+
 void page_get(unsigned long pa) {
+    check_page_pa(pa, "page_get: pa out of range");
     unsigned long pfn = pa2pfn(pa);
     if (page_refs[pfn] == 65535)
         panic("page_get: refcount overflow");
@@ -35,6 +48,7 @@ void page_get(unsigned long pa) {
 }
 
 void page_put(unsigned long pa) {
+    check_page_pa(pa, "page_put: pa out of range");
     unsigned long pfn = pa2pfn(pa);
     if (page_refs[pfn] == 0)
         panic("page_put: refcount underflow");

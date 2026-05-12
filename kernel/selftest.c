@@ -976,6 +976,19 @@ static void test_pgtable_page_put(void) {
         free_user_pgtable(pt);
         return;
     }
+    /* Symmetric check for L0: vmem_map may have allocated L1 but failed
+     * to allocate L0 (or the leaf install bailed), leaving L2 valid but
+     * no leaf mapping for `data`. free_user_pgtable then walks the
+     * partial directories without touching `data`, leaking the page for
+     * the rest of the selftest run. Drop it explicitly on this path. */
+    pte_t *leaf = get_pte(pt, USER_TEXT_BASE, 0);
+    st_check(leaf && (*leaf & PTE_V),
+             "pgtable_page_put: leaf entry installed");
+    if (!leaf || !(*leaf & PTE_V)) {
+        page_put(virt_to_phys((unsigned long)data));
+        free_user_pgtable(pt);
+        return;
+    }
     unsigned long l1_pa = pte_to_phyaddr(l2pte);
 
     /* Pin the L1 page so refcount becomes 2. free_user_pages_level
