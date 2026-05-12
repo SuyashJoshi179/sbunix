@@ -15,6 +15,7 @@ struct file {
     int          refcnt;
     uint8_t      readable;
     uint8_t      writable;
+    uint8_t      append;   /* O_APPEND: each write resets off to ip->size */
     uint64_t     off;
     struct inode *ip;
     struct pipe  *pipe;
