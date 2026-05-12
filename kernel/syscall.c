@@ -865,7 +865,7 @@ static unsigned long setup_user_stack(void *kstack, char *const *argv_user) {
 static int64_t do_exec(const char *path, char *const *argv_user,
                        uint64_t *trapframe) {
     struct pcb *p = current_proc();
-    if (!p || !p->is_user) return -1;
+    if (!p || !p->is_user) return -EINVAL;
     char kpath[PATH_MAX_LOCAL];
     int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc_path < 0) return rc_path;
