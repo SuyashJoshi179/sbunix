@@ -148,9 +148,12 @@ int load_user_elf(pgtable_t pt, struct inode *ip,
         if (ph.p_flags & PF_X) seg_vma->prot |= VMA_PROT_X;
         seg_vma->type = VMA_TYPE_ANON;
         if (vma_insert(&vlist, seg_vma) < 0) {
+            /* Overlapping PT_LOAD segments are a malformed-binary
+             * condition, the same family as bad magic / short reads /
+             * too many phdrs. exec() callers expect ENOEXEC here. */
             vma_free(seg_vma);
             vma_list_free(&vlist);
-            return -EINVAL;
+            return -ENOEXEC;
         }
 
         if (va_end > highest_end)
@@ -246,7 +249,12 @@ struct pcb *proc_spawn(const char *path) {
     heap_vma->end   = brk;
     heap_vma->prot  = VMA_PROT_R | VMA_PROT_W;
     heap_vma->type  = VMA_TYPE_HEAP;
-    if (vma_insert(&vlist, heap_vma) < 0) {
+    /* Insert through &p->vma_list (not &vlist) so the head pointer
+     * stays coherent if this insert ever lands at the head — e.g. an
+     * ELF with no PT_LOAD leaves vlist empty, and a future caller may
+     * spawn with no loadable segments. proc_destroy walks p->vma_list
+     * on every failure path below. */
+    if (vma_insert(&p->vma_list, heap_vma) < 0) {
         vma_free(heap_vma);
         free_proc(p);
         return 0;
@@ -262,7 +270,7 @@ struct pcb *proc_spawn(const char *path) {
     stack_vma->end   = USER_STACK_TOP;
     stack_vma->prot  = VMA_PROT_R | VMA_PROT_W;
     stack_vma->type  = VMA_TYPE_STACK;
-    if (vma_insert(&vlist, stack_vma) < 0) {
+    if (vma_insert(&p->vma_list, stack_vma) < 0) {
         vma_free(stack_vma);
         free_proc(p);
         return 0;

@@ -52,18 +52,15 @@ struct vma *vma_find(struct vma *list, uint64_t va) {
 
 int vma_insert(struct vma **list, struct vma *v) {
     struct vma **pp = list;
-    while (*pp && (*pp)->start < v->start)
+    struct vma  *prev = 0;
+    while (*pp && (*pp)->start < v->start) {
+        prev = *pp;
         pp = &(*pp)->next;
-    /* Overlap with the successor (`pp`'s slot) or the predecessor. The
-     * predecessor was the previously-walked node, so back up one step
-     * via list traversal to check it (rare path; cheaper than carrying
-     * a prev pointer in the hot loop). */
-    if (*pp && (*pp)->start < v->end) return -EINVAL;
-    if (pp != list) {
-        struct vma *prev = *list;
-        while (prev->next != *pp) prev = prev->next;
-        if (prev->end > v->start) return -EINVAL;
     }
+    /* Reject overlap with the successor (slot at *pp) or with the
+     * immediately preceding node. */
+    if (*pp && (*pp)->start < v->end) return -EINVAL;
+    if (prev && prev->end > v->start) return -EINVAL;
     v->next = *pp;
     *pp = v;
     return 0;
