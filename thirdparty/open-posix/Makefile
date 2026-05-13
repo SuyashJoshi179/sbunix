@@ -35,7 +35,7 @@ CRT0    := $(ROOTDIR)/build/libc/crt.S.o
 LIBC    := $(ROOTDIR)/build/libc.a
 LDFLAGS := -Wl,--gc-sections
 
-.PHONY: fetch opts gap-list install clean help
+.PHONY: fetch opts gap-list install clean help sanity
 
 help:
 	@echo "thirdparty/open-posix targets: fetch opts gap-list install clean"
@@ -114,6 +114,29 @@ ifeq ($(OPTS),1)
 else
 	@echo "thirdparty/open-posix: install is a no-op without OPTS=1"
 endif
+
+# ---------------------------------------------------------------------------
+# Smoke test: runs the same compile+link loop against ./sanity/.
+# Used to verify the gate machinery itself is working.
+sanity: $(CRT0) $(LIBC)
+	@mkdir -p $(BUILD)/bin $(BUILD)/obj $(BUILD)/err
+	@: > $(BUILD)/sanity.txt
+	@for src in $(CURDIR)/sanity/*.c; do \
+	  rel=sanity/$$(basename $$src); \
+	  tag=$$(basename $$src .c); \
+	  if $(CC) $(CFLAGS) -I$(UPSTREAM)/include -c $$src -o $(BUILD)/obj/sanity_$$tag.o 2> $(BUILD)/err/sanity_$$tag.compile.err; then \
+	    if $(CC) $(CFLAGS) -I$(UPSTREAM)/include $(CRT0) $(BUILD)/obj/sanity_$$tag.o $(LIBC) $(LDFLAGS) -o $(BUILD)/bin/sanity_$$tag 2> $(BUILD)/err/sanity_$$tag.link.err; then \
+	      echo "BUILD-OK    [sanity] $$rel" >> $(BUILD)/sanity.txt; \
+	    else \
+	      first=$$(head -1 $(BUILD)/err/sanity_$$tag.link.err); \
+	      echo "LINK-FAIL   [sanity] $$rel :: $$first" >> $(BUILD)/sanity.txt; \
+	    fi; \
+	  else \
+	    first=$$(head -1 $(BUILD)/err/sanity_$$tag.compile.err); \
+	    echo "BUILD-FAIL  [sanity] $$rel :: $$first" >> $(BUILD)/sanity.txt; \
+	  fi; \
+	done
+	@cat $(BUILD)/sanity.txt
 
 # ---------------------------------------------------------------------------
 clean:
