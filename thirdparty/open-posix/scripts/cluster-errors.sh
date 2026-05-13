@@ -28,6 +28,13 @@ declare -a FIX_BUCKETS=(
   "implicit declaration of function 'getpid'|missing decl getpid"
   "implicit declaration of function 'chdir'|missing decl chdir"
   "implicit declaration of function 'getcwd'|missing decl getcwd"
+  "undefined reference to .clock_settime.|missing impl clock_settime"
+  "undefined reference to .sigwaitinfo.|missing impl sigwaitinfo"
+  "undefined reference to .sigwait.|missing impl sigwait"
+  "undefined reference to .sigpending.|missing impl sigpending"
+  "undefined reference to .sighold.|missing impl sighold"
+  "undefined reference to .sigrelse.|missing impl sigrelse"
+  "undefined reference to .sigignore.|missing impl sigignore"
 )
 
 # Out-of-scope clusters: things we explicitly will not address.
@@ -43,6 +50,7 @@ declare -a OOS_BUCKETS=(
   "implicit declaration of function 'sem_|POSIX semaphores"
   "'pthread_[a-zA-Z_]+' undeclared|pthread (no threading)"
   "'PTHREAD_[A-Z_]+' undeclared|pthread (no threading)"
+  "undefined reference to .main.|helper-only TU (no main() — link gate noise, not a libc gap)"
 )
 
 count_bucket() {
