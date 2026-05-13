@@ -420,10 +420,10 @@ int64_t sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
  * sys_sigpending — read the set of pending signals.
  *
  * POSIX: returns the set of signals that are pending for the calling
- * thread (here: process — we don't have threads). The mask returned
- * is `p->sig_pending` masked to deliverable bits is *not* what POSIX
- * specifies; POSIX wants the raw pending set regardless of blocked
- * state. We return the raw set.
+ * thread (here: process — we don't have threads). Returning only the
+ * currently deliverable/unblocked subset of p->sig_pending would not
+ * match POSIX; POSIX requires the raw pending set regardless of
+ * blocked state. We therefore return p->sig_pending as-is.
  * ---------------------------------------------------------------- */
 int64_t sys_sigpending(sigset_t *set) {
     struct pcb *p = current_proc();

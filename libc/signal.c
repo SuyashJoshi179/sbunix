@@ -88,7 +88,14 @@ int killpg(int pgid, int sig) {
     return kill(-pgid, sig);
 }
 
+/* sigaddset/sigdelset/sigismember in <signal.h> are inline and do
+ * `1ULL << sig` with no bounds check, so anything outside [1, NSIG)
+ * is UB. Helpers below that build a one-element set must validate
+ * sig before touching sigaddset. */
+static int valid_signo(int sig) { return sig > 0 && sig < NSIG; }
+
 int sighold(int sig) {
+    if (!valid_signo(sig)) { errno = EINVAL; return -1; }
     sigset_t s;
     sigemptyset(&s);
     sigaddset(&s, sig);
@@ -96,6 +103,7 @@ int sighold(int sig) {
 }
 
 int sigrelse(int sig) {
+    if (!valid_signo(sig)) { errno = EINVAL; return -1; }
     sigset_t s;
     sigemptyset(&s);
     sigaddset(&s, sig);
@@ -115,6 +123,7 @@ int sigignore(int sig) {
  * we don't define SIG_HOLD (POSIX makes it implementation-defined and
  * many ports omit it). Returns the previous disposition. */
 sighandler_t sigset(int sig, sighandler_t handler) {
+    if (!valid_signo(sig)) { errno = EINVAL; return SIG_ERR; }
     struct sigaction sa = { 0 };
     struct sigaction old;
     sa.sa_handler = handler;
