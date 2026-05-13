@@ -36,3 +36,16 @@ uint64_t rtc_read_ns(void) {
     uint32_t hi = *rtc_reg(RTC_TIME_HIGH);
     return ((uint64_t)hi << 32) | (uint64_t)lo;
 }
+
+// Signed offset (ns) added to rtc_read_ns() by realtime_ns(). Mutated only
+// by clock_set_realtime_ns() under IRQs-off (big-lock), read in syscall
+// context which is also IRQs-off — no extra synchronisation needed on UP.
+static int64_t wall_offset_ns = 0;
+
+uint64_t realtime_ns(void) {
+    return rtc_read_ns() + (uint64_t)wall_offset_ns;
+}
+
+void clock_set_realtime_ns(uint64_t target_ns) {
+    wall_offset_ns = (int64_t)target_ns - (int64_t)rtc_read_ns();
+}

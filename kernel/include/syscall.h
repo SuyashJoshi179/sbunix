@@ -65,6 +65,10 @@
 // Filesystem: symlink(2)
 #define SYS_symlink        87   // (const char *target, const char *linkpath)
 
+// Phase 8a (cont.): wall-clock adjustment and resolution
+#define SYS_clock_settime  88   // (clockid, const struct timespec *)
+#define SYS_clock_getres   89   // (clockid, struct timespec *)
+
 // Phase 8b: signals
 #define SYS_kill           90   // (pid, sig)
 #define SYS_sigaction      91   // (sig, const struct sigaction *act, struct sigaction *oldact)

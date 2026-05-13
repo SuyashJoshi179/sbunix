@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 #include <time.h>
 
 static int fails = 0;
@@ -69,6 +70,33 @@ int main(void) {
     /* clock() returns ticks since boot — small positive. */
     clock_t c = clock();
     CHECK(c >= 0, "clock() non-negative");
+
+    /* clock_getres: REALTIME = 1 ns, MONOTONIC = 10 ms (HZ=100). */
+    struct timespec res = {-1, -1};
+    CHECK(clock_getres(0 /* CLOCK_REALTIME */, &res) == 0, "clock_getres REALTIME ok");
+    CHECK(res.tv_sec == 0 && res.tv_nsec == 1,            "clock_getres REALTIME == 1ns");
+    res.tv_sec = -1; res.tv_nsec = -1;
+    CHECK(clock_getres(1 /* CLOCK_MONOTONIC */, &res) == 0, "clock_getres MONOTONIC ok");
+    CHECK(res.tv_sec == 0 && res.tv_nsec > 0,               "clock_getres MONOTONIC positive");
+    CHECK(clock_getres(0, NULL) == 0,                       "clock_getres NULL res allowed");
+    CHECK(clock_getres(99, NULL) == -1 && errno == EINVAL,  "clock_getres bad id -> EINVAL");
+
+    /* clock_settime: CLOCK_MONOTONIC rejected. */
+    struct timespec bogus = { 0, 0 };
+    CHECK(clock_settime(1, &bogus) == -1 && errno == EINVAL, "clock_settime MONOTONIC -> EINVAL");
+
+    /* Round-trip: read REALTIME, set 100 years forward, observe the jump,
+     * restore the original time. Bounds rather than equality to tolerate
+     * RTC advancing between calls. */
+    struct timespec orig, after;
+    CHECK(clock_gettime(0, &orig) == 0, "clock_gettime before set");
+    struct timespec future = { orig.tv_sec + 100LL * 365 * 86400, 0 };
+    CHECK(clock_settime(0, &future) == 0,           "clock_settime forward");
+    CHECK(clock_gettime(0, &after)  == 0,           "clock_gettime after set");
+    CHECK(after.tv_sec >= future.tv_sec,            "REALTIME advanced past target");
+    CHECK(after.tv_sec  < future.tv_sec + 10,       "REALTIME within 10s of target");
+    /* Restore — leaves the clock close to wall time for later tests. */
+    CHECK(clock_settime(0, &orig) == 0, "clock_settime restore");
 
     if (fails == 0) {
         printf("time_posix_test: PASS\n");
