@@ -1,8 +1,8 @@
 #pragma once
 
-/* Stable syscall numbers visible to userspace. Must match
- * kernel/include/syscall.h byte-for-byte; the kernel header carries the
- * canonical definitions and a matching note. */
+/* Stable syscall numbers visible to userspace. Numeric values must match
+ * kernel/include/syscall.h (formatting/ordering may differ); the kernel
+ * header carries the canonical definitions and a matching note. */
 
 #define SYS_exit           1
 #define SYS_write          2
@@ -67,9 +67,13 @@
 #define SYS_getrlimit    117
 #define SYS_setrlimit    118
 
-/* Generic syscall dispatch. Always reads six argument slots from va_list
- * (slots the caller did not pass are read as indeterminate longs but
- * ignored by the kernel for syscalls that take fewer arguments). On
- * failure returns -1 with errno set; otherwise returns the raw kernel
- * return value (which may legitimately be 0). */
+/* Generic syscall dispatch. Implemented as an asm stub (libc/syscall.c)
+ * that shuffles the LP64 variadic argument registers (a0 = num, a1..a6 =
+ * args) into the kernel's ecall layout (a7 = num, a0..a5 = args) and
+ * tail-jumps into the -errno → errno translator. Calls with fewer than
+ * six arguments are safe: the stub never reads from a va_list, so unused
+ * argument-register slots simply carry stale values that the kernel
+ * ignores for syscalls taking fewer parameters. On failure returns -1
+ * with errno set; otherwise returns the raw kernel return value (which
+ * may legitimately be 0). */
 long syscall(long num, ...);
