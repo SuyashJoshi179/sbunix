@@ -83,8 +83,15 @@ int sigpending(sigset_t *set) {
     return (int)syscall_ret(ecall1(28, (long)set));
 }
 
+/* killpg(pgid, sig) — send sig to every member of process group pgid.
+ * Usually implemented as kill(-pgid, sig), but our kernel reads
+ * pid == -1 as POSIX broadcast (see kernel/signal.c sys_kill), so
+ * pgid == 1 would broadcast instead of targeting pgrp 1. POSIX also
+ * has pgid == 0 mean "calling process's pgrp", which kill() can't
+ * express. Reject both rather than misbehave silently; a proper fix
+ * would be a dedicated SYS_killpg with explicit pgid semantics. */
 int killpg(int pgid, int sig) {
-    if (pgid < 0) { errno = EINVAL; return -1; }
+    if (pgid <= 0 || pgid == 1) { errno = EINVAL; return -1; }
     return kill(-pgid, sig);
 }
 
@@ -118,12 +125,16 @@ int sigignore(int sig) {
 
 /* sigset(sig, handler) — System V signal-with-mask. Behaves like
  * signal(sig, handler) but with sig added to sa_mask while the handler
- * runs (so the signal can't recursively fire on itself). The special
- * handler SIG_HOLD blocks the signal instead of installing a handler;
- * we don't define SIG_HOLD (POSIX makes it implementation-defined and
- * many ports omit it). Returns the previous disposition. */
+ * runs (so the signal can't recursively fire on itself). This
+ * implementation does NOT support the historical SIG_HOLD sentinel
+ * (often (sighandler_t)2); callers wanting to block a signal must
+ * use sighold()/sigrelse() explicitly. We reject the SIG_HOLD-shaped
+ * value so a caller that relies on it gets a clear error rather than
+ * silently installing a "handler" at address 2. Returns previous
+ * disposition. */
 sighandler_t sigset(int sig, sighandler_t handler) {
     if (!valid_signo(sig)) { errno = EINVAL; return SIG_ERR; }
+    if (handler == (sighandler_t)2) { errno = EINVAL; return SIG_ERR; }
     struct sigaction sa = { 0 };
     struct sigaction old;
     sa.sa_handler = handler;
