@@ -25,7 +25,8 @@ OPTS_SHA256 :=
 CROSS   := riscv64-unknown-elf-
 CC      := $(CROSS)gcc
 CFLAGS  := -gdwarf-4 -Wall -Os -ffreestanding -fno-builtin -nostdlib \
-           -nostdinc -isystem $(ROOTDIR)/libc/include \
+           -nostdinc -isystem $(shell $(CC) -print-file-name=include) \
+           -isystem $(ROOTDIR)/libc/include \
            -mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64 \
            -ffunction-sections -fdata-sections -fno-tree-switch-conversion
 
@@ -93,4 +94,3 @@ endif
 # ---------------------------------------------------------------------------
 clean:
 	rm -rf $(BUILD)
-	rm -rf $(ROOTFS)/optsbin
