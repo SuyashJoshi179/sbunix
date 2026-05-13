@@ -100,8 +100,12 @@ opts: $(UPSTREAM)/.fetched $(CRT0) $(LIBC)
 # ---------------------------------------------------------------------------
 # Cluster errors into gap-list  (added in Task 6)
 # ---------------------------------------------------------------------------
-gap-list:
-	@echo "gap-list target stubbed; will be filled in Task 6"
+gap-list: $(BUILD)/results.txt
+	@$(CURDIR)/scripts/cluster-errors.sh $(BUILD)/results.txt > $(BUILD)/gap-list.md
+	@echo "Wrote $(BUILD)/gap-list.md"
+
+$(BUILD)/results.txt:
+	@echo "$(BUILD)/results.txt is missing. Run 'make opts' first."
 	@exit 1
 
 # ---------------------------------------------------------------------------
