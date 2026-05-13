@@ -24,14 +24,14 @@ PORT_DIRS := $(patsubst %/Makefile,%,$(wildcard */Makefile))
 .PHONY: install clean $(PORT_DIRS)
 
 install: $(PORT_DIRS)
-    @echo "thirdparty: installed $(words $(PORT_DIRS)) port(s) into $(ROOTFS)"
+	@echo "thirdparty: installed $(words $(PORT_DIRS)) port(s) into $(ROOTFS)"
 
 $(PORT_DIRS):
-    @echo "thirdparty: building $@"
-    @mkdir -p $(ROOTFS)
-    $(MAKE) -C $@ install ROOTDIR=$(ROOTDIR) ROOTFS=$(ROOTFS)
+	@echo "thirdparty: building $@"
+	@mkdir -p $(ROOTFS)
+	$(MAKE) -C $@ install ROOTDIR=$(ROOTDIR) ROOTFS=$(ROOTFS)
 
 clean:
-    @for d in $(PORT_DIRS); do \
-         $(MAKE) -C $$d clean ROOTDIR=$(ROOTDIR) ROOTFS=$(ROOTFS) || true; \
-    done
+	@for d in $(PORT_DIRS); do \
+	     $(MAKE) -C $$d clean ROOTDIR=$(ROOTDIR) ROOTFS=$(ROOTFS) || true; \
+	done
