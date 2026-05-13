@@ -211,11 +211,11 @@ T2.23–T2.26 are a cluster — the branch lists every missing shell feature. Mo
 | 9c | T2.12 PROT_WRITE-only mmap | ❌ OPEN | — |
 | 10 | F-A01 multi-level CoW regression | ✅ likely DONE | covered by `cow_pcache_refleak_test` (verify by reading) |
 | 11 | F-A04 vma_insert returns -EINVAL | ✅ DONE | PR #71 `8687156` |
-| 12 | F-A02 page-table via page_put | ✅ DONE | `kernel/vma.c` uses `page_put` |
+| 12 | F-A02 page-table via page_put | ⏳ PR pending | local: `feature/pgtable-page-put` |
 | 13 | F-D02/D03 sbrk/munmap -EINVAL | ✅ DONE | PR #72 `30a04ff` |
 | 14a | T2.23/T2.25 shell hardening | ✅ DONE | PR #82 `e850f1a` |
 | 14b | T2.2 O_APPEND | ✅ DONE | PR #80 `dec8905` |
-| 14c | T2.13/T2.14 partial munmap | ❌ OPEN | — |
+| 14c | T2.13/T2.14 partial munmap | ⏳ PR pending | local: `feature/partial-munmap` |
 | 14d | T2.7 O_CLOEXEC | ❌ OPEN — header defined, kernel doesn't honor | — |
 | 14e | T2.16 strtol/strtoul overflow | ✅ DONE | PR #75 `ca5fc77` |
 | 14f | T2.18 atexit | ✅ DONE | PR #76 `71e553e` |
@@ -227,13 +227,18 @@ T2.23–T2.26 are a cluster — the branch lists every missing shell feature. Mo
 
 ### What's still actionable from this audit
 
-Five small items remain — all are 1-day-or-less work each:
+Three small items still need work; two more are in PR pipeline:
 
 - **T2.1 O_EXCL** (item 9a) — `feature/open-o-excl` already has a candidate patch unmerged. Verify and PR.
 - **T2.3 tarfs `./..` lookup** (item 9b) — one-liner in `kernel/fs/tarfs.c`.
 - **T2.12 PROT_WRITE-only mmap** (item 9c) — one-liner in `kernel/vma.c` or syscall validation.
-- **T2.13/T2.14 partial munmap** (item 14c) — moderate; split VMA on partial unmap.
 - **T2.7 O_CLOEXEC** (item 14d) — kernel side: honor on `exec` by closing FDs with the flag set.
+
+In pipeline (local branches awaiting push/PR):
+
+- **F-A02 page-table via page_put** (item 12) — `feature/pgtable-page-put`
+- **T2.13/T2.14 partial munmap** (item 14c) — `feature/partial-munmap`
+- **shebang / vmstk** (not in original audit) — `feat/shebang-and-vmstk`
 
 ### New backlog source: OPTS gap-list (post-2026-05-13)
 
