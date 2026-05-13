@@ -52,7 +52,7 @@ Opt-in tarfs overlay. The default kernel build is unchanged: `make` produces a k
 
 **Why this is submit-safe.** Two independent guards apply:
 
-1. `make submit` already rsync-excludes `thirdparty/` and `build/` (root Makefile, around line 114). The vendored OPTS source under `thirdparty/open-posix/upstream/` and the build artifacts under `build/rootfs/bin/optsbin/` are both unreachable from the submission tarball.
+1. `make submit` already rsync-excludes `thirdparty/` and `build/` (root Makefile, line 117–118). The vendored OPTS source under `thirdparty/open-posix/upstream/` and the build artifacts under `build/rootfs/bin/optsbin/` are both unreachable from the submission tarball.
 2. Reaching `optsbin/` requires explicitly setting `OPTS=1`. A developer who runs `make submit` without that flag produces a tree with no optsbin/ rootfs entries even before the rsync excludes apply.
 
 Run with `opts_run /bin/optsbin/` from the shell.
