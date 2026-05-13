@@ -40,7 +40,7 @@ Targets:
 | `make install` (only when `OPTS=1`) | copy BUILD-OK binaries into `$(ROOTDIR)/build/rootfs/bin/optsbin/`. Default (no env var) is a no-op so the dispatcher never sees the binaries. |
 | `make clean` | rm `build/` and the `optsbin/` overlay in rootfs. |
 
-A small `thirdparty/open-posix/scripts/cluster-errors.sh` (~30 lines, sed/awk) reads `results.txt` and emits `gap-list.md` with two sections:
+A `thirdparty/open-posix/scripts/cluster-errors.sh` helper (bash + awk, ~110 lines) reads `results.txt` and emits `gap-list.md` with two sections:
 - **Fix** — clusters that look like real libc/kernel gaps (missing header that we should have, undeclared decl, wrong type, etc.), sorted by TU count.
 - **Out-of-scope** — clusters we won't address (missing pthread, AIO, mqueue, realtime), with counts so we don't re-investigate.
 

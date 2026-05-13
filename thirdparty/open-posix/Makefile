@@ -19,12 +19,23 @@ OPTS_VERSION := 1.5.2
 OPTS_URL := https://sourceforge.net/projects/posixtest/files/posixtest/posixtestsuite-$(OPTS_VERSION)/posixtestsuite-$(OPTS_VERSION).tar.gz/download
 OPTS_SHA256 := 15a2185672127cba851d35ec9d538ff6148defdbb75f99c7e9c50aeba0f94757
 
-# Cross-tooling matches root Makefile:9 exactly, with two changes:
-#   - drop -Werror (we want compile errors, not warning-stops)
-#   - add -I$(UPSTREAM)/include for posixtest.h
+# Cross-tooling derived from root Makefile:9. Differences from that line:
+#   - drop -Werror so stylistic warnings don't short-circuit the gate.
+#   - re-enable -Werror=implicit-function-declaration and
+#     -Werror=implicit-int. These are the warnings that actually point
+#     at libc gaps (missing decls / missing types), so we want them to
+#     fail the build and land in results.txt where cluster-errors.sh
+#     can bucket them.
+#   - bake `-isystem $(ROOTDIR)/libc/include` into CFLAGS instead of
+#     passing `-Ilibc/include` on each compile rule; -isystem suppresses
+#     the warning-spam that OPTS sources get from in-tree headers and
+#     keeps the gate focused on libc gaps, not header lint.
+#   - $(UPSTREAM)/include for posixtest.h is added on each compile rule.
 CROSS   := riscv64-unknown-elf-
 CC      := $(CROSS)gcc
-CFLAGS  := -gdwarf-4 -Wall -Os -ffreestanding -fno-builtin -nostdlib \
+CFLAGS  := -gdwarf-4 -Wall \
+           -Werror=implicit-function-declaration -Werror=implicit-int \
+           -Os -ffreestanding -fno-builtin -nostdlib \
            -nostdinc -isystem $(shell $(CC) -print-file-name=include) \
            -isystem $(ROOTDIR)/libc/include \
            -mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64 \

@@ -11,7 +11,16 @@
 # Patterns are extended regex matched against the full results.txt line.
 
 set -euo pipefail
-in=${1:-/dev/stdin}
+# Multiple awk passes (wc + total/ok/bf/lf + one per bucket) need a
+# seekable file. If no path was given, tee stdin into a tempfile so the
+# advertised "stdin OR $1" contract actually works on a pipe.
+if [ "${1-}" ]; then
+  in=$1
+else
+  in=$(mktemp)
+  trap 'rm -f "$in"' EXIT
+  cat >"$in"
+fi
 
 # Fix clusters: things that look like real gaps in libc/kernel.
 declare -a FIX_BUCKETS=(
