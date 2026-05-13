@@ -85,9 +85,10 @@ typedef struct {
 typedef uint64_t sigset_t;
 
 typedef void (*sighandler_t)(int);
-#define SIG_DFL ((sighandler_t)0)
-#define SIG_IGN ((sighandler_t)1)
-#define SIG_ERR ((sighandler_t)-1)
+#define SIG_DFL  ((sighandler_t)0)
+#define SIG_IGN  ((sighandler_t)1)
+#define SIG_HOLD ((sighandler_t)2)   /* sigset(sig, SIG_HOLD): block sig */
+#define SIG_ERR  ((sighandler_t)-1)
 
 struct sigaction {
     /* Only write(2) and _exit(2) are async-signal-safe in this libc. */
@@ -102,12 +103,18 @@ struct sigaction {
 #define SIG_SETMASK 2
 
 int kill(int pid, int sig);
+int killpg(int pgid, int sig);
 int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact);
 sighandler_t signal(int sig, sighandler_t handler);
+sighandler_t sigset(int sig, sighandler_t handler);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+int sigpending(sigset_t *set);
 int raise(int sig);
 int pause(void);
 int sigsuspend(const sigset_t *mask);
+int sighold(int sig);
+int sigrelse(int sig);
+int sigignore(int sig);
 
 static inline int sigemptyset(sigset_t *s)            { *s = 0; return 0; }
 static inline int sigfillset(sigset_t *s)             { *s = ~(sigset_t)0; return 0; }
