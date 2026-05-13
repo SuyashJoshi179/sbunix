@@ -69,9 +69,33 @@ $(UPSTREAM)/.fetched:
 # ---------------------------------------------------------------------------
 # Opts compile + link loop  (added in Task 4)
 # ---------------------------------------------------------------------------
-opts:
-	@echo "opts target stubbed; will be filled in Task 4"
-	@exit 1
+opts: $(UPSTREAM)/.fetched $(CRT0) $(LIBC)
+	@mkdir -p $(BUILD)/bin $(BUILD)/obj $(BUILD)/err
+	@: > $(BUILD)/results.txt
+	@count=0; ok=0; bf=0; lf=0; \
+	for src in $$(find $(UPSTREAM) -name '*.c' \( -path '*/conformance/*' -o -path '*/functional/*' -o -path '*/stress/*' \) 2>/dev/null); do \
+	  rel=$${src#$(UPSTREAM)/}; \
+	  origin=$$(echo $$rel | cut -d/ -f1); \
+	  tag=$$(echo $$rel | sed 's|/|_|g; s|\.c$$||'); \
+	  count=$$((count+1)); \
+	  if $(CC) $(CFLAGS) -I$(UPSTREAM)/include -c $$src -o $(BUILD)/obj/$$tag.o 2> $(BUILD)/err/$$tag.compile.err; then \
+	    if $(CC) $(CFLAGS) -I$(UPSTREAM)/include $(CRT0) $(BUILD)/obj/$$tag.o $(LIBC) $(LDFLAGS) -o $(BUILD)/bin/$$tag 2> $(BUILD)/err/$$tag.link.err; then \
+	      ok=$$((ok+1)); \
+	      echo "BUILD-OK    [$$origin] $$rel" >> $(BUILD)/results.txt; \
+	    else \
+	      lf=$$((lf+1)); \
+	      first=$$(head -1 $(BUILD)/err/$$tag.link.err); \
+	      echo "LINK-FAIL   [$$origin] $$rel :: $$first" >> $(BUILD)/results.txt; \
+	    fi; \
+	  else \
+	    bf=$$((bf+1)); \
+	    first=$$(head -1 $(BUILD)/err/$$tag.compile.err); \
+	    echo "BUILD-FAIL  [$$origin] $$rel :: $$first" >> $(BUILD)/results.txt; \
+	  fi; \
+	done; \
+	echo ""; \
+	echo "opts: $$count TUs scanned: $$ok build-ok, $$bf build-fail, $$lf link-fail"; \
+	echo "  results: $(BUILD)/results.txt"
 
 # ---------------------------------------------------------------------------
 # Cluster errors into gap-list  (added in Task 6)
