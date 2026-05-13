@@ -43,9 +43,24 @@ struct sigaction {
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
 
-/* sigaction sa_flags (matches libc/include/signal.h). Only SA_RESTART is
- * honored by the kernel today; other flags are stored but ignored. */
+/* sigaction sa_flags (matches libc/include/signal.h). SA_RESTART and
+ * SA_ONSTACK are honored by the kernel; other flags are stored but
+ * ignored. */
 #define SA_RESTART  0x10000000
+#define SA_ONSTACK  0x08000000
+
+/* POSIX alternate signal stack. ss_flags bits and size floor must match
+ * libc/include/signal.h. MINSIGSTKSZ is the smallest stack the kernel
+ * accepts via sigaltstack(); anything smaller fails -ENOMEM. */
+typedef struct {
+    void    *ss_sp;
+    int      ss_flags;
+    uint64_t ss_size;
+} stack_t;
+
+#define SS_ONSTACK   1   /* returned in oss.ss_flags while handler runs on alt */
+#define SS_DISABLE   2   /* set in ss.ss_flags to clear; default state */
+#define MINSIGSTKSZ  2048
 
 /* Signal frame written by kernel onto user stack during delivery */
 #define SIGFRAME_MAGIC 0x5342534947464DULL  /* "SBSIGFRM" */
@@ -54,7 +69,8 @@ struct sigframe {
     uint64_t magic;
     uint64_t saved_mask;
     uint64_t saved_trapframe[36];   /* 288 bytes = 36 × uint64_t */
-    uint64_t _pad[2];               /* pad to 320 bytes, multiple of 16 */
+    uint64_t saved_on_altstack;     /* p->sig_on_altstack at delivery */
+    uint64_t _pad;                  /* pad to 320 bytes, multiple of 16 */
 };
 
 /* Default action codes */
@@ -92,6 +108,7 @@ int64_t sys_pause(void);
 int64_t sys_sigsuspend(const sigset_t *mask);
 int64_t sys_sigpending(sigset_t *set);
 int64_t sys_killpg(int pgid, int sig);
+int64_t sys_sigaltstack(const stack_t *ss, stack_t *oss);
 
 /* Raw bitmask helper — "is any pending signal currently unblocked?".
  * Used by send_signal to decide whether to wake a sleeper so that

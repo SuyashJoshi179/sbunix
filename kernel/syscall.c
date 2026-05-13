@@ -1135,6 +1135,11 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     p->delivering_segv = 0;
     p->alarm_tick      = 0;        /* POSIX: pending alarm cleared on exec */
     p->did_exec        = 1;
+    /* POSIX: alternate signal stack is cleared on exec. */
+    p->sig_altstack.ss_sp    = 0;
+    p->sig_altstack.ss_flags = SS_DISABLE;
+    p->sig_altstack.ss_size  = 0;
+    p->sig_on_altstack       = 0;
 
     return 0;
 }
@@ -1958,6 +1963,10 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_killpg:
             return sys_killpg((int)(int64_t)trapframe[TF_A0],
                               (int)(int64_t)trapframe[TF_A1]);
+
+        case SYS_sigaltstack:
+            return sys_sigaltstack((const stack_t *)(uintptr_t)trapframe[TF_A0],
+                                   (stack_t *)(uintptr_t)trapframe[TF_A1]);
 
         case SYS_getuid:  return sys_getuid();
         case SYS_geteuid: return sys_geteuid();

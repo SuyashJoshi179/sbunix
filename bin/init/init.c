@@ -125,6 +125,7 @@ int main(void) {
         "/bin/sigchld_test",
         "/bin/sigpipe_test",
         "/bin/sigsegv_handler_test",
+        "/bin/sigaltstack_test",
         "/bin/eintr_test",
         "/bin/sa_restart_test",
         "/bin/termios_test",

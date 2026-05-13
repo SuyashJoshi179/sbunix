@@ -155,9 +155,25 @@ int sig_has_actionable(struct pcb *p) {
  * ---------------------------------------------------------------- */
 static void build_sigframe_and_redirect(struct pcb *p, uint64_t *tf,
                                         int sig, sighandler_t h) {
-    /* tf[1] = x2 = user sp saved at entry */
-    uint64_t user_sp  = tf[1];
-    uint64_t frame_va = (user_sp - sizeof(struct sigframe)) & ~0xFULL;
+    /* tf[1] = x2 = user sp saved at entry. If SA_ONSTACK is set and an
+     * enabled altstack exists and we aren't already running on it, the
+     * sigframe goes at the top of the altstack instead of the user's
+     * current stack. sig_on_altstack tracks "currently running on alt"
+     * so a nested handler with SA_ONSTACK reuses the alt without
+     * re-basing. The previous value is saved in the sigframe and
+     * restored by sys_sigreturn. */
+    uint64_t base_sp = tf[1];
+    int new_on_alt   = p->sig_on_altstack;
+    if ((p->sig_handlers[sig].sa_flags & SA_ONSTACK)
+        && !(p->sig_altstack.ss_flags & SS_DISABLE)
+        && !p->sig_on_altstack
+        && p->sig_altstack.ss_sp
+        && p->sig_altstack.ss_size >= MINSIGSTKSZ) {
+        base_sp = (uint64_t)p->sig_altstack.ss_sp
+                + p->sig_altstack.ss_size;
+        new_on_alt = 1;
+    }
+    uint64_t frame_va = (base_sp - sizeof(struct sigframe)) & ~0xFULL;
 
     /* Sanity: frame must be in user VA range. */
     if (frame_va < PAGE_SIZE || frame_va + sizeof(struct sigframe) > KVMEM_OFFSET) {
@@ -175,6 +191,7 @@ static void build_sigframe_and_redirect(struct pcb *p, uint64_t *tf,
     fr.saved_mask = p->sig_suspend_active ? p->sig_suspend_saved_mask
                                           : p->sig_blocked;
     p->sig_suspend_active = 0;
+    fr.saved_on_altstack  = p->sig_on_altstack;
     memcpy(fr.saved_trapframe, tf, 288);
 
     /* Write frame to user stack — faults in lazy/COW pages as needed. */
@@ -196,6 +213,7 @@ static void build_sigframe_and_redirect(struct pcb *p, uint64_t *tf,
     tf[TF_RA]   = restorer ? restorer : 0;
 
     p->in_sighandler = 1;
+    p->sig_on_altstack = new_on_alt;
 }
 
 /* ----------------------------------------------------------------
@@ -498,6 +516,7 @@ int64_t sys_sigreturn(uint64_t *trapframe) {
     p->sig_blocked = fr.saved_mask;
     p->sig_blocked &= ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
     p->in_sighandler = 0;
+    p->sig_on_altstack = (uint8_t)fr.saved_on_altstack;
 
     return (int64_t)trapframe[TF_A0];
 }
@@ -541,4 +560,59 @@ int64_t sys_sigsuspend(const sigset_t *mask) {
         proc_sleep(p);
     }
     return -EINTR;
+}
+
+/* ----------------------------------------------------------------
+ * sys_sigaltstack(ss, oss)
+ *
+ * If oss != NULL, write the current altstack (with SS_ONSTACK OR'd
+ * into ss_flags when sig_on_altstack is set).
+ *
+ * If ss != NULL, install a new altstack. Rejected:
+ *   - EPERM if currently executing on the existing altstack (any change,
+ *     including SS_DISABLE, is forbidden by POSIX while on it).
+ *   - EINVAL if ss_flags has unknown bits.
+ *   - ENOMEM if ss_size < MINSIGSTKSZ (and SS_DISABLE not requested).
+ *
+ * oss is fetched BEFORE ss is validated so the "ss=NULL, oss=&cur"
+ * idiom (just read current) never trips ss validation. The write of
+ * oss is delayed until after ss validates so a bad ss does not leave
+ * oss half-written.
+ * ---------------------------------------------------------------- */
+int64_t sys_sigaltstack(const stack_t *ss, stack_t *oss) {
+    struct pcb *p = current_proc();
+    if (!p) return -EINVAL;
+
+    stack_t cur = p->sig_altstack;
+    if (p->sig_on_altstack)
+        cur.ss_flags |= SS_ONSTACK;
+
+    stack_t kss;
+    int have_ss = (ss != 0);
+    if (have_ss) {
+        if (copyin(&kss, ss, sizeof(kss)) < 0) return -EFAULT;
+        if (p->sig_on_altstack) return -EPERM;
+        if (kss.ss_flags & ~(SS_DISABLE | SS_ONSTACK)) return -EINVAL;
+        if (!(kss.ss_flags & SS_DISABLE) && kss.ss_size < MINSIGSTKSZ)
+            return -ENOMEM;
+    }
+
+    if (oss) {
+        if (copyout(oss, &cur, sizeof(cur)) < 0) return -EFAULT;
+    }
+
+    if (have_ss) {
+        if (kss.ss_flags & SS_DISABLE) {
+            p->sig_altstack.ss_sp    = 0;
+            p->sig_altstack.ss_flags = SS_DISABLE;
+            p->sig_altstack.ss_size  = 0;
+        } else {
+            /* Strip any SS_ONSTACK userspace set on input — only the
+             * kernel reports SS_ONSTACK via oss. */
+            p->sig_altstack.ss_sp    = kss.ss_sp;
+            p->sig_altstack.ss_flags = 0;
+            p->sig_altstack.ss_size  = kss.ss_size;
+        }
+    }
+    return 0;
 }
