@@ -113,8 +113,19 @@ $(BUILD)/results.txt:
 # ---------------------------------------------------------------------------
 install:
 ifeq ($(OPTS),1)
-	@echo "install target stubbed for OPTS=1 path; will be filled in Task 7"
-	@exit 1
+	@if [ ! -d $(BUILD)/bin ] || [ -z "$$(ls -A $(BUILD)/bin 2>/dev/null)" ]; then \
+	  echo "thirdparty/open-posix: $(BUILD)/bin is empty; run 'make opts' first."; \
+	  exit 1; \
+	fi
+	@mkdir -p $(ROOTFS)/optsbin
+	@cp $(BUILD)/bin/* $(ROOTFS)/optsbin/
+	@n=$$(ls -1 $(ROOTFS)/optsbin | wc -l); \
+	  echo "thirdparty/open-posix: installed $$n binaries into $(ROOTFS)/optsbin"
+	@# Force tarfs rebuild: the root Makefile's build/tarfs.o rule
+	@# depends on $(USER_BIN), and our new optsbin/ files aren't in
+	@# that list. Removing tarfs artifacts makes the next 'make'
+	@# rebuild tarfs and pick up optsbin/.
+	@rm -f $(ROOTDIR)/build/tarfs.o $(ROOTDIR)/build/rootfs.tar
 else
 	@echo "thirdparty/open-posix: install is a no-op without OPTS=1"
 endif
