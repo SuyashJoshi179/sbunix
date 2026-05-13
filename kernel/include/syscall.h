@@ -69,6 +69,7 @@
 #define SYS_pause          94   // ()
 #define SYS_sigsuspend     27   // (const sigset_t *mask)
 #define SYS_sigpending     28   // (sigset_t *set)
+#define SYS_killpg         29   // (pgid, sig)
 
 // Phase 8a: uid/gid stubs
 #define SYS_getuid        100

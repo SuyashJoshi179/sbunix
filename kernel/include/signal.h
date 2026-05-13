@@ -91,6 +91,7 @@ int64_t sys_sigreturn(uint64_t *trapframe);
 int64_t sys_pause(void);
 int64_t sys_sigsuspend(const sigset_t *mask);
 int64_t sys_sigpending(sigset_t *set);
+int64_t sys_killpg(int pgid, int sig);
 
 /* Raw bitmask helper — "is any pending signal currently unblocked?".
  * Used by send_signal to decide whether to wake a sleeper so that

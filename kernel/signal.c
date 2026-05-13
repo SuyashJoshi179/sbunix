@@ -417,6 +417,39 @@ int64_t sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
 }
 
 /* ----------------------------------------------------------------
+ * sys_killpg — send sig to every member of process group pgid.
+ *
+ * Exists as a dedicated syscall (rather than letting libc do
+ * kill(-pgid, sig)) because sys_kill overloads pid == -1 as POSIX
+ * broadcast, which collides with killpg(1, sig). A direct entry
+ * point lets us target pgrp 1 unambiguously.
+ *
+ *   pgid > 0 : signal that group
+ *   pgid == 0: signal calling process's group (POSIX)
+ *   pgid < 0 : -EINVAL
+ *   sig == 0 : existence probe — 0 if any member exists, -ESRCH else
+ * ---------------------------------------------------------------- */
+int64_t sys_killpg(int pgid, int sig) {
+    if (pgid < 0)              return -EINVAL;
+    if (sig < 0 || sig >= NSIG) return -EINVAL;
+
+    if (pgid == 0) {
+        struct pcb *me = current_proc();
+        if (!me) return -EINVAL;
+        pgid = me->pgid;
+    }
+
+    if (sig == 0) {
+        for (struct pcb *p = proc_list_head(); p; p = p->next)
+            if (p->state != PROC_UNUSED && p->pgid == pgid) return 0;
+        return -ESRCH;
+    }
+
+    int hits = send_signal_pgrp(pgid, sig);
+    return hits ? 0 : -ESRCH;
+}
+
+/* ----------------------------------------------------------------
  * sys_sigpending — read the set of pending signals.
  *
  * POSIX: returns the set of signals that are pending for the calling
