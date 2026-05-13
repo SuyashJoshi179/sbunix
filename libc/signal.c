@@ -86,12 +86,18 @@ int sigpending(sigset_t *set) {
 /* killpg(pgid, sig) — send sig to every member of process group pgid.
  * Usually implemented as kill(-pgid, sig), but our kernel reads
  * pid == -1 as POSIX broadcast (see kernel/signal.c sys_kill), so
- * pgid == 1 would broadcast instead of targeting pgrp 1. POSIX also
- * has pgid == 0 mean "calling process's pgrp", which kill() can't
- * express. Reject both rather than misbehave silently; a proper fix
- * would be a dedicated SYS_killpg with explicit pgid semantics. */
+ * pgid == 1 would broadcast instead of targeting pgrp 1.
+ *
+ * POSIX pgid == 0 means "calling process's pgrp", which the kernel's
+ * kill() already implements when pid == 0 (see sys_kill line 323).
+ * Forward pgid == 0 to kill(0, sig) so POSIX callers work.
+ *
+ * Negative pgid is invalid by POSIX. pgid == 1 needs dedicated kernel
+ * support (SYS_killpg with explicit pgid semantics) to avoid the
+ * broadcast collision; reject it for now rather than misbehave. */
 int killpg(int pgid, int sig) {
-    if (pgid <= 0 || pgid == 1) { errno = EINVAL; return -1; }
+    if (pgid < 0 || pgid == 1) { errno = EINVAL; return -1; }
+    if (pgid == 0) return kill(0, sig);
     return kill(-pgid, sig);
 }
 
