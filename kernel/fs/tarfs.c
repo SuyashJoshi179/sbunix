@@ -58,8 +58,8 @@ const void *tarfs_find(const char *path, unsigned long *out_size) {
  * Phase 4c — inode tree
  * ================================================================ */
 
-#define TARFS_MAX_INODES   512
-#define TARFS_MAX_CHILDREN 512
+#define TARFS_MAX_INODES   1024
+#define TARFS_MAX_CHILDREN 1024
 
 struct tarfs_ino_data {
     const char        *data;      // regular file: pointer into archive blob
