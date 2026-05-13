@@ -1,7 +1,11 @@
 #pragma once
 #include <stdint.h>
 
-// Syscall numbers (must match libc/syscall.c).
+// Syscall numbers. This header is the single source of truth — libc
+// includes it transitively (via the libc syscall wrappers), and any
+// libc .c that issues a raw ecall (libc/signal.c, libc/ids.c,
+// libc/proc_grp.c, etc.) hardcodes the matching constant. When adding
+// a new syscall, update this file plus the libc wrapper that uses it.
 #define SYS_exit    1
 #define SYS_write   2
 #define SYS_exec    3
