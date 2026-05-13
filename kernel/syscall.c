@@ -794,17 +794,22 @@ static int64_t sys_getpid(void) {
 // ---------------------------------------------------------------------------
 // setup_user_stack — build argc/argv on a fresh user stack page.
 //
-// If argv_user is NULL, sets up an empty frame (argc=0).
-// If non-NULL, copies strings from the OLD user address space (still active
-// when called from sys_execv before switching page tables) to the new stack.
+// kprefix[0..nprefix-1] are kernel-resident NUL-terminated strings to place
+// first (used by shebang to prepend the interpreter and the script path).
+// argv_user is the OLD user-space argv pointer array (still mapped when this
+// runs before the satp switch); the first `skip_user` entries are dropped
+// before copying the rest. If argv_user is NULL and nprefix == 0, an empty
+// frame (argc=0) is set up.
 //
 // Returns the user SP to use, or 0 on error.
 // ---------------------------------------------------------------------------
-static unsigned long setup_user_stack(void *kstack, char *const *argv_user) {
+static unsigned long setup_user_stack(void *kstack,
+                                       const char *const *kprefix, int nprefix,
+                                       char *const *argv_user, int skip_user) {
     char *base = (char *)kstack;
     char *top  = base + 4096;
 
-    if (!argv_user) {
+    if (!argv_user && nprefix == 0) {
         uint64_t *frame = (uint64_t *)(top - 24);
         frame[0] = 0;  // argc
         frame[1] = 0;  // argv[0] = NULL
@@ -812,36 +817,52 @@ static unsigned long setup_user_stack(void *kstack, char *const *argv_user) {
         return USER_STACK_TOP - 24;
     }
 
-    // Count args and copy strings to bottom of stack page.
     int argc = 0;
     char *strp = base;
     unsigned long uaddrs[ARGV_MAX_LOCAL];
 
-    for (int i = 0; i < ARGV_MAX_LOCAL; i++) {
-        uint64_t uarg = 0;
-        if (copyin(&uarg,
-                   (const char *)argv_user + i * sizeof(uint64_t),
-                   sizeof(uint64_t)) < 0)
-            return 0;
-        if (uarg == 0) break;
-
+    // Place kernel-side prefix strings first.
+    for (int i = 0; i < nprefix && argc < ARGV_MAX_LOCAL; i++) {
+        const char *s = kprefix[i];
         int len = 0;
-        char c = 0;
-        do {
-            if (copyin(&c, (const char *)(uintptr_t)(uarg + (uint64_t)len), 1) < 0)
-                return 0;
-            len++;
-        } while (c && len < 256);
-        if (c != 0) return 0;
-
+        while (s[len] && len < 256) len++;
+        if (s[len] != 0) return 0;
+        len++;  // include NUL
         if (strp + len > top - (long)sizeof(uint64_t) * (argc + 4))
-            break; // out of space
-        if (copyin(strp, (const void *)(uintptr_t)uarg, (unsigned long)len) < 0)
             return 0;
-        // Compute the user VA for this string
+        for (int k = 0; k < len; k++) strp[k] = s[k];
         uaddrs[argc] = (USER_STACK_TOP - 4096) + (unsigned long)(strp - base);
         strp += len;
         argc++;
+    }
+
+    // Copy user-space argv strings (skipping the first `skip_user` entries).
+    if (argv_user) {
+        for (int i = skip_user; argc < ARGV_MAX_LOCAL; i++) {
+            uint64_t uarg = 0;
+            if (copyin(&uarg,
+                       (const char *)argv_user + i * sizeof(uint64_t),
+                       sizeof(uint64_t)) < 0)
+                return 0;
+            if (uarg == 0) break;
+
+            int len = 0;
+            char c = 0;
+            do {
+                if (copyin(&c, (const char *)(uintptr_t)(uarg + (uint64_t)len), 1) < 0)
+                    return 0;
+                len++;
+            } while (c && len < 256);
+            if (c != 0) return 0;
+
+            if (strp + len > top - (long)sizeof(uint64_t) * (argc + 4))
+                break;
+            if (copyin(strp, (const void *)(uintptr_t)uarg, (unsigned long)len) < 0)
+                return 0;
+            uaddrs[argc] = (USER_STACK_TOP - 4096) + (unsigned long)(strp - base);
+            strp += len;
+            argc++;
+        }
     }
 
     // Build frame at top of page (growing down):
@@ -911,6 +932,90 @@ static int64_t do_exec(const char *path, char *const *argv_user,
         return -EACCES;
     }
 
+    /* Shebang: if the file starts with "#!", parse one interpreter and
+     * (optionally) one argument, then re-target the exec at the
+     * interpreter with argv = [interp, (arg,) script_path, original
+     * argv[1..]]. POSIX permits stopping at one level — we do not
+     * recursively follow shebangs (avoids loops and matches Linux for
+     * the typical case). */
+    char shebang_interp[PATH_MAX_LOCAL];
+    char shebang_arg[PATH_MAX_LOCAL];
+    char shebang_script[PATH_MAX_LOCAL];
+    int  shebang_has_arg = 0;
+    int  is_shebang      = 0;
+    {
+        char hdr[128];
+        /* Use the inode's own read op (not generic_file_read) so this
+         * works for tmpfs scripts too — tmpfs implements .read but not
+         * .readpage. The interpreter itself still loads through the
+         * page-cache path in load_user_elf, which is fine because
+         * interpreters live on tarfs/sbfs. */
+        int got = (ip->ops && ip->ops->read)
+                      ? ip->ops->read(ip, 0, hdr, sizeof(hdr))
+                      : -EINVAL;
+        if (got >= 2 && hdr[0] == '#' && hdr[1] == '!') {
+            int i = 2;
+            while (i < got && (hdr[i] == ' ' || hdr[i] == '\t')) i++;
+            int s = i;
+            while (i < got && hdr[i] != ' ' && hdr[i] != '\t'
+                          && hdr[i] != '\n' && hdr[i] != '\r' && hdr[i]) i++;
+            int interp_len = i - s;
+            if (interp_len <= 0 || interp_len >= (int)sizeof(shebang_interp)) {
+                inode_put(ip);
+                return -ENOEXEC;
+            }
+            for (int k = 0; k < interp_len; k++) shebang_interp[k] = hdr[s + k];
+            shebang_interp[interp_len] = '\0';
+
+            while (i < got && (hdr[i] == ' ' || hdr[i] == '\t')) i++;
+            int as = i;
+            while (i < got && hdr[i] != '\n' && hdr[i] != '\r' && hdr[i]) i++;
+            int arg_len = i - as;
+            /* Trim trailing whitespace from the optional argument. */
+            while (arg_len > 0 && (hdr[as + arg_len - 1] == ' ' ||
+                                   hdr[as + arg_len - 1] == '\t'))
+                arg_len--;
+            if (arg_len > 0) {
+                if (arg_len >= (int)sizeof(shebang_arg)) {
+                    inode_put(ip);
+                    return -ENOEXEC;
+                }
+                for (int k = 0; k < arg_len; k++) shebang_arg[k] = hdr[as + k];
+                shebang_arg[arg_len] = '\0';
+                shebang_has_arg = 1;
+            }
+
+            /* Save original script path before clobbering kpath. */
+            int j;
+            for (j = 0; kpath[j] && j < (int)sizeof(shebang_script) - 1; j++)
+                shebang_script[j] = kpath[j];
+            shebang_script[j] = '\0';
+
+            /* Re-resolve the interpreter. The original script's inode
+             * is released; we no longer need it. */
+            inode_put(ip);
+            for (j = 0; shebang_interp[j] && j < (int)sizeof(kpath) - 1; j++)
+                kpath[j] = shebang_interp[j];
+            kpath[j] = '\0';
+
+            int nrc = namei(kpath, &ip);
+            if (nrc < 0) {
+                printk("exec: shebang interp '%s' lookup failed (%d)\n",
+                       kpath, nrc);
+                return nrc;
+            }
+            if (ip->type != I_REG) {
+                inode_put(ip);
+                return -EACCES;
+            }
+            is_shebang = 1;
+            /* p->comm should reflect the interpreter so /proc shows e.g.
+             * "sh" rather than "foo.sh". Falling back to the interpreter's
+             * basename matches how setup_user_stack builds argv[0]. */
+            comm_path = shebang_interp;
+        }
+    }
+
     pgtable_t new_pt = create_user_pgtable();
     if (!new_pt) {
         inode_put(ip);
@@ -933,8 +1038,21 @@ static int64_t do_exec(const char *path, char *const *argv_user,
         return -ENOMEM;
     }
 
-    // Build user stack (copies argv strings from OLD address space before switch)
-    unsigned long new_sp = setup_user_stack(kstack, argv_user);
+    // Build user stack (copies argv strings from OLD address space before switch).
+    // For shebang scripts, prepend [interp, (arg,) script_path] and drop the
+    // caller-supplied argv[0] (POSIX: argv[0] of the interpreted script is the
+    // kernel-supplied path, not whatever the user passed).
+    const char *kprefix[3];
+    int nprefix = 0;
+    int skip_user = 0;
+    if (is_shebang) {
+        kprefix[nprefix++] = shebang_interp;
+        if (shebang_has_arg) kprefix[nprefix++] = shebang_arg;
+        kprefix[nprefix++] = shebang_script;
+        skip_user = argv_user ? 1 : 0;
+    }
+    unsigned long new_sp = setup_user_stack(kstack, kprefix, nprefix,
+                                             argv_user, skip_user);
     if (new_sp == 0) {
         vma_list_free(&vlist);
         free_user_pgtable(new_pt);

@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-// Syscall numbers (must match libc/syscall.c).
+// Syscall numbers (must match libc/syscall.c and libc/include/sys/syscall.h).
 #define SYS_exit    1
 #define SYS_write   2
 #define SYS_exec    3

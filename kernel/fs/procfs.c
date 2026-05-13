@@ -193,6 +193,7 @@ struct proc_snap {
     int          sid;
     char         comm[16];
     uint64_t     vm_size_kb;
+    uint64_t     vm_stk_kb;
     /* Page-granularity totals for /proc/<pid>/statm. */
     uint64_t     vm_size_pages;
     uint64_t     vm_text_pages;
@@ -216,6 +217,8 @@ static int prod_status(char *out, int cap, const struct proc_snap *s) {
     n = append_u64(out, cap, n, (uint64_t)s->sid);
     n = append_str(out, cap, n, "\nUid:\t0\nGid:\t0\nVmSize:\t");
     n = append_u64(out, cap, n, s->vm_size_kb);
+    n = append_str(out, cap, n, " kB\nVmStk:\t");
+    n = append_u64(out, cap, n, s->vm_stk_kb);
     n = append_str(out, cap, n, " kB\n");
     return n;
 }
@@ -589,6 +592,7 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
     uint64_t vm_bytes = 0;
     uint64_t text_bytes = 0;
     uint64_t data_bytes = 0;
+    uint64_t stk_bytes = 0;
     for (struct vma *v = pcb->vma_list; v; v = v->next) {
         /* VMA start is always page-aligned; end may not be (sbrk sets
          * heap_vma->end to the raw brk). Round end up so a partial
@@ -596,10 +600,12 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
          * full page on access. */
         uint64_t bytes = page_round_up(v->end) - v->start;
         vm_bytes += bytes;
+        if (v->type == VMA_TYPE_STACK) stk_bytes += bytes;
         if (v->prot & VMA_PROT_X) text_bytes += bytes;
         else                      data_bytes += bytes;
     }
     snap.vm_size_kb    = vm_bytes / 1024;
+    snap.vm_stk_kb     = stk_bytes / 1024;
     snap.vm_size_pages = vm_bytes / PAGE_SIZE;
     snap.vm_text_pages = text_bytes / PAGE_SIZE;
     snap.vm_data_pages = data_bytes / PAGE_SIZE;
