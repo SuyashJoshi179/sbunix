@@ -1,5 +1,6 @@
 #include <signal.h>
 #include <unistd.h>
+#include <errno.h>
 #include "syscall_priv.h"
 
 extern void __sigtramp(void);
@@ -16,6 +17,13 @@ static long ecall2(long num, long a0, long a1) {
     register long _a0 asm("a0") = a0;
     register long _a1 asm("a1") = a1;
     asm volatile("ecall" : "+r"(_a0) : "r"(_a7), "r"(_a1) : "memory");
+    return _a0;
+}
+
+static long ecall1(long num, long a0) {
+    register long _a7 asm("a7") = num;
+    register long _a0 asm("a0") = a0;
+    asm volatile("ecall" : "+r"(_a0) : "r"(_a7) : "memory");
     return _a0;
 }
 
@@ -69,4 +77,49 @@ int raise(int sig) {
 
 int pause(void) {
     return (int)syscall_ret(ecall0(94));
+}
+
+int sigpending(sigset_t *set) {
+    return (int)syscall_ret(ecall1(28, (long)set));
+}
+
+int killpg(int pgid, int sig) {
+    if (pgid < 0) { errno = EINVAL; return -1; }
+    return kill(-pgid, sig);
+}
+
+int sighold(int sig) {
+    sigset_t s;
+    sigemptyset(&s);
+    sigaddset(&s, sig);
+    return sigprocmask(SIG_BLOCK, &s, NULL);
+}
+
+int sigrelse(int sig) {
+    sigset_t s;
+    sigemptyset(&s);
+    sigaddset(&s, sig);
+    return sigprocmask(SIG_UNBLOCK, &s, NULL);
+}
+
+int sigignore(int sig) {
+    struct sigaction sa = { 0 };
+    sa.sa_handler = SIG_IGN;
+    return sigaction(sig, &sa, NULL);
+}
+
+/* sigset(sig, handler) — System V signal-with-mask. Behaves like
+ * signal(sig, handler) but with sig added to sa_mask while the handler
+ * runs (so the signal can't recursively fire on itself). The special
+ * handler SIG_HOLD blocks the signal instead of installing a handler;
+ * we don't define SIG_HOLD (POSIX makes it implementation-defined and
+ * many ports omit it). Returns the previous disposition. */
+sighandler_t sigset(int sig, sighandler_t handler) {
+    struct sigaction sa = { 0 };
+    struct sigaction old;
+    sa.sa_handler = handler;
+    sigemptyset(&sa.sa_mask);
+    sigaddset(&sa.sa_mask, sig);
+    if (sigaction(sig, &sa, &old) < 0) return SIG_ERR;
+    return old.sa_handler;
 }

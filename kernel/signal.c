@@ -417,6 +417,24 @@ int64_t sys_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
 }
 
 /* ----------------------------------------------------------------
+ * sys_sigpending — read the set of pending signals.
+ *
+ * POSIX: returns the set of signals that are pending for the calling
+ * thread (here: process — we don't have threads). The mask returned
+ * is `p->sig_pending` masked to deliverable bits is *not* what POSIX
+ * specifies; POSIX wants the raw pending set regardless of blocked
+ * state. We return the raw set.
+ * ---------------------------------------------------------------- */
+int64_t sys_sigpending(sigset_t *set) {
+    struct pcb *p = current_proc();
+    if (!p) return -EINVAL;
+    if (!set) return -EFAULT;
+    sigset_t snap = p->sig_pending;
+    if (copyout(set, &snap, sizeof(sigset_t)) < 0) return -EFAULT;
+    return 0;
+}
+
+/* ----------------------------------------------------------------
  * sys_sigreturn — restore interrupted context from sigframe.
  * ---------------------------------------------------------------- */
 int64_t sys_sigreturn(uint64_t *trapframe) {

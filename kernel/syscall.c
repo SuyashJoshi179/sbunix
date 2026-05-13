@@ -1790,6 +1790,9 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_sigsuspend:
             return sys_sigsuspend((const sigset_t *)(uintptr_t)trapframe[TF_A0]);
 
+        case SYS_sigpending:
+            return sys_sigpending((sigset_t *)(uintptr_t)trapframe[TF_A0]);
+
         case SYS_getuid:  return sys_getuid();
         case SYS_geteuid: return sys_geteuid();
         case SYS_getgid:  return sys_getgid();
