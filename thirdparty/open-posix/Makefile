@@ -17,7 +17,7 @@ BUILD := $(CURDIR)/build
 # Pinned tarball — OPTS 1.5.2 release on SourceForge.
 OPTS_VERSION := 1.5.2
 OPTS_URL := https://sourceforge.net/projects/posixtest/files/posixtest/posixtestsuite-$(OPTS_VERSION)/posixtestsuite-$(OPTS_VERSION).tar.gz/download
-OPTS_SHA256 :=
+OPTS_SHA256 := 15a2185672127cba851d35ec9d538ff6148defdbb75f99c7e9c50aeba0f94757
 
 # Cross-tooling matches root Makefile:9 exactly, with two changes:
 #   - drop -Werror (we want compile errors, not warning-stops)
