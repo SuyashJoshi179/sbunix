@@ -282,6 +282,7 @@ static int tarfs_getdents(struct inode *dir, uint64_t off, void *buf,
         int reclen = (DIRENT64_FIXED_LEN + namelen + 7) & ~7;             \
         if (written + (uint64_t)reclen > n) goto done;                    \
         struct dirent64 *de = (struct dirent64 *)((char *)buf + written); \
+        memset(de, 0, reclen);                                            \
         de->d_ino    = (uint64_t)(uintptr_t)(ino_ptr);                    \
         de->d_off    = cursor + 1;                                        \
         de->d_reclen = (uint16_t)reclen;                                  \
