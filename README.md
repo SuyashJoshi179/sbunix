@@ -35,22 +35,40 @@ The dev container automatically installs all required tools:
 
 ```
 sbunix/
-├── kernel/          # OS kernel code
-│   ├── start.S      # Bootstrap assembly
-│   ├── kernel.c     # Main kernel implementation
-│   ├── printk.c     # Kernel printing functions
-│   └── kernel.ld    # Linker script
-├── libc/            # Minimal C library
-│   ├── crt.S        # C runtime startup
-│   ├── printf.c     # Standard I/O functions
-│   └── exit.c       # Exit implementation
-├── bin/             # User-space programs
-│   └── echo/        # Echo command
-├── rootfs/          # Root filesystem
-│   └── etc/rc       # Startup script
-└── tools/           # Build utilities
-    └── mkfs.c       # Disk image creator
+├── kernel/                # RISC-V64 kernel
+│   ├── start.S            # Bootstrap (entry point)
+│   ├── kernel.c           # Boot/init sequence
+│   ├── trap.[cS]          # Trap/syscall entry
+│   ├── proc.c             # Processes, scheduler
+│   ├── exec.c             # ELF loader + shebang
+│   ├── vmem.c             # Page tables, COW fork
+│   ├── vma.c              # VMA tree, mmap/munmap
+│   ├── pmem.c             # Physical frame allocator
+│   ├── page_cache.c       # Unified file-backed page cache
+│   ├── pipe.c, signal.c   # IPC + POSIX signals
+│   ├── syscall.c          # Syscall dispatch (60+ syscalls)
+│   ├── fs/                # tarfs (root), devfs, procfs, tmpfs, sbfs (disk)
+│   ├── drivers/           # uart, plic, pci, virtio-blk, rtc
+│   └── include/           # Kernel headers
+├── libc/                  # Freestanding POSIX C library
+│                          # stdio, stdlib, string, signal, termios,
+│                          # time, fcntl, sys/* — ~290 functions
+├── bin/                   # User-space programs (auto-discovered: bin/X/*.c)
+│                          # init, sh, coreutils (cat/cp/ls/mkdir/...),
+│                          # plus test binaries
+├── rootfs/                # Embedded root filesystem
+│   ├── etc/rc             # Boot script (mounts /proc, /mnt, /tmp)
+│   ├── mnt/               # Mount point for sbfs disk
+│   ├── proc/              # Mount point for procfs
+│   └── tmp/               # Mount point for tmpfs
+├── thirdparty/            # External test harness (grader-injected)
+└── tools/                 # Build utilities
+    └── mkfs.c             # sbfs disk-image creator
 ```
+
+The kernel supports lp64 (no F/D extensions, soft-float) and runs on
+`qemu-system-riscv64 -machine virt`. The on-disk filesystem (sbfs) uses
+an xv6-style write-ahead log for crash safety.
 
 ## Building
 
@@ -78,15 +96,25 @@ This will:
 
 **Exit QEMU:** Press `Ctrl+A` then `X`
 
-## Development
+## Features
 
-The kernel currently boots and prints "Booting SBUnix". As we progress through the course, we'll implement:
-- System calls
-- Process management
-- Memory management
-- File systems
-- Shell
-- ...
+- **Boot + low-level**: OpenSBI handoff, trap/syscall dispatch, PLIC, UART
+  console, Goldfish RTC, timer interrupts and preemption.
+- **Process management**: fork, exec (with shebang), wait/wait4, setsid,
+  setpgid, job control (foreground/background pgroups via TIOCSPGRP),
+  signals (sigaction, sigmask, sigaltstack, default handlers), rlimit.
+- **Memory management**: paged virtual memory with COW fork, demand-paged
+  anonymous and file-backed mmap, sbrk, mprotect-implicit RW/RO, lazy
+  page allocation, page cache shared between read() and mmap().
+- **File systems**: VFS layer with mount table, tarfs root (from embedded
+  tarball), devfs (/dev/console, null, zero, tty, loop), procfs
+  (status/cmdline/stat, meminfo, uptime), tmpfs, sbfs (on-disk, journaled).
+- **IPC**: pipes (anonymous and pipeline), SIGPIPE on broken-pipe writes.
+- **Userspace**: minimal POSIX C library, an init that runs `/etc/rc` and
+  respawns `/bin/sh`, a Bourne-style shell with pipes, redirection
+  (`<`, `>`, `>>`), backgrounding (`&`), short-circuit (`&&`, `;`),
+  globbing, job control, and POSIX `exec` builtin, plus the standard
+  coreutils.
 
 ## Troubleshooting
 

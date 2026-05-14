@@ -656,6 +656,43 @@ static int run_line(void) {
         _exit(code & 0xff);
     }
 
+    /* exec — replace the current shell with the named binary (POSIX
+     * special builtin). `exec` alone is treated as a no-op (the
+     * redirection-only form is not implemented). If any operator follows
+     * the command word — pipe, &&, ;, &, <, >, >> — fall through to the
+     * normal pipeline path so fork-based semantics still apply. */
+    if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "exec") == 0) {
+        if (ntokens == 1) return 0;
+        int has_op = 0;
+        for (int i = 1; i < ntokens; i++) {
+            if (tokens[i].type != T_WORD && tokens[i].type != T_END) {
+                has_op = 1;
+                break;
+            }
+        }
+        if (!has_op) {
+            char *eargv[MAXARG + 1];
+            int eargc = 0;
+            for (int i = 1; i < ntokens && eargc < MAXARG; i++) {
+                if (tokens[i].type == T_WORD)
+                    eargv[eargc++] = tokens[i].val;
+            }
+            eargv[eargc] = 0;
+            char *path = resolve_path(eargv[0]);
+            execv(path, eargv);
+            /* execv only returns on failure. POSIX: exec failure in a
+             * non-interactive shell is fatal (script-shell exits 127). */
+            const char *m1 = "sh: exec '";
+            write(2, m1, 10);
+            write(2, eargv[0], strlen(eargv[0]));
+            write(2, "': ", 3);
+            const char *es = strerror(errno);
+            write(2, es, strlen(es));
+            write(2, "\n", 1);
+            _exit(127);
+        }
+    }
+
     if (tokens[0].type == T_WORD && strcmp(tokens[0].val, "cd") == 0) {
         char *dir = (ntokens > 1 && tokens[1].type == T_WORD) ? tokens[1].val : "/";
         if (chdir(dir) < 0) {
@@ -788,10 +825,9 @@ static int subst_dollar0(char *dst, size_t cap, const char *src,
 }
 
 /* Run a /etc/rc-style script: read once, iterate lines, tokenize and
- * run each. Comments (# ...) and shebang lines are skipped. The POSIX
- * `exec` builtin is not implemented; lines starting with `exec ` are
- * treated as no-ops so a trailing `exec /bin/sh` ends the script
- * cleanly and lets init re-spawn an interactive shell on its own.
+ * run each. Comments (# ...) and shebang lines are skipped. `exec` is
+ * handled by run_line as a POSIX-special builtin, so a trailing
+ * `exec /bin/sh` replaces the script-shell with an interactive shell.
  * `$0` in script lines expands to the script path so that the
  * conventional `echo Running $0` produces the expected output. */
 static int run_script(const char *path) {
@@ -815,9 +851,7 @@ static int run_script(const char *path) {
         *eol = 0;
         char *q = p;
         while (*q == ' ' || *q == '\t') q++;
-        int is_exec = q[0]=='e' && q[1]=='x' && q[2]=='e' && q[3]=='c' &&
-                      (q[4]==' ' || q[4]=='\t' || q[4]==0);
-        if (*q && *q != '#' && !is_exec) {
+        if (*q && *q != '#') {
             if (subst_dollar0(linebuf, sizeof(linebuf), q, path) < 0) {
                 size_t len = strlen(q);
                 if (len >= sizeof(linebuf)) len = sizeof(linebuf) - 1;
