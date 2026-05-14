@@ -273,7 +273,7 @@ static int64_t sys_open(const char *path, int flags) {
 
     int fd = alloc_fd(p, f);
     if (fd < 0) { fileclose(f); return fd; }
-    if (flags & 02000000 /* O_CLOEXEC */)
+    if (flags & O_CLOEXEC)
         p->cloexec_mask |= (1ULL << fd);
     return fd;
 }

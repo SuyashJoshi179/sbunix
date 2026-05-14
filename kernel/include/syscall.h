@@ -107,6 +107,7 @@
 #define F_GETFD            1
 #define F_SETFD            2
 #define FD_CLOEXEC         1
+#define O_CLOEXEC          02000000
 
 #define SYS_wait4         106   // (pid, *status, options, *rusage)
 

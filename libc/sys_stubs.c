@@ -82,9 +82,11 @@ static int dup_to_minfd(int fd, int minfd) {
 
 /* fcntl: F_GETFD/F_SETFD are kernel-backed (per-descriptor FD_CLOEXEC).
  * F_DUPFD is serviced via dup; F_DUPFD_CLOEXEC additionally sets the
- * cloexec flag on the new descriptor. F_GETFL/F_SETFL have no per-fd
- * flag storage in the kernel and keep their permissive stub behavior;
- * advisory locks report ENOSYS. */
+ * cloexec flag on the new descriptor. The kernel does track a small
+ * amount of open-file state (currently just O_APPEND on struct file),
+ * but this stub does not reconstruct it for F_GETFL nor honor changes
+ * via F_SETFL — both keep their permissive zero/success behavior.
+ * Advisory locks report ENOSYS. */
 int fcntl(int fd, int cmd, ...) {
     va_list ap; va_start(ap, cmd);
     int r = -1;
