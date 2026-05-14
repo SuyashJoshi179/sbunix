@@ -3,6 +3,10 @@
 Generated from `make posix-check` output run on commit `b131620`.
 Reference: `docs/susv5-html/basedefs/<header>.h.html` (IEEE Std 1003.1-2024).
 
+**Phase 2 status (post-fixes):** `make posix-check` reports **38 passed, 0 failed**
+on HEAD. 8 of 9 Phase 2 work items shipped; 1 deferred (struct-stat-timespec —
+see "Phase 2 completion log" at end of this document).
+
 ## Headline
 
 - Total test files: **38**
@@ -352,3 +356,36 @@ libc — wrong-header-location), `posix_close`, `pread`, `pwrite`, `linkat`,
 Phase 2 plans should bundle items by header to minimise churn. Each item
 above is independent except (2) which adds a typedef that other items can
 then use.
+
+## Phase 2 completion log
+
+Landed in the same PR as Phase 1 (per user request to keep work bundled).
+
+| # | Item | Status | Commits |
+|---|------|--------|---------|
+| 1 | `<unistd.h>` read/write/readlink size param | **shipped** | `55c9224` |
+| 2 | `<sys/types.h>` clockid_t typedef + `<time.h>` clock_* signatures | **shipped** | `3c76a82` |
+| 3 | `<sys/stat.h>` struct stat timespec fields | **deferred** | — |
+| 4 | `<stdio.h>` getline/getdelim return type | **shipped** | `9ad6766` |
+| 5 | `<stdlib.h>` multibyte wchar_t signatures | **shipped** | `fd371eb` |
+| 6 | `<sys/mman.h>` size_t/off_t exposure + signatures | **shipped** | `b80ec24` |
+| 7 | `<signal.h>` pid_t exposure + kill/killpg signatures | **shipped** | `7a84424` |
+| 8 | `<syslog.h>` function declarations | **shipped (audit error correction)** | `1f76c23` |
+| 9 | `<unistd.h>` cosmetic typedef renames (pid_t/off_t/intptr_t/useconds_t) | **shipped** | `98061c2` |
+
+**Item 3 deferred** because it touches 7 kernel files (devfs, tarfs, sbfs, tmpfs, procfs) and the kernel/userspace shared `struct stat` layout. The layout grows 24 bytes if `uint64_t st_atime/st_mtime/st_ctime` are replaced with `struct timespec st_atim/st_mtim/st_ctim`. Userspace consumers (`bin/timestamp_test`, `bin/stat`) use `st_atime` directly and require back-compat macros (`#define st_atime st_atim.tv_sec`).
+
+Higher regression risk than the other items. Recommended for a separate, focused PR.
+
+**Item 8 was an audit error correction** rather than a code fix: Phase 1 recorded `openlog`/`closelog`/`syslog`/`setlogmask` as `missing-decl`, but both declarations (`libc/include/syslog.h:42-46`) and implementations (`libc/syslog.c`) already existed. The Phase 1 test file had them commented; uncommenting was the entire fix.
+
+### Post-Phase-2 harness state
+
+```
+posix-check: 38 passed, 0 failed
+```
+
+All Phase 1 pins (including the 14 that were commented out as latent
+divergences) are now active. Any future regression to a POSIX prototype in
+our libc will produce a compile error under `make posix-check`. The gate is
+now suitable for CI integration when Phase 1+2 PR merges.
