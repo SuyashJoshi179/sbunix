@@ -69,8 +69,7 @@ struct sigframe {
     uint64_t magic;
     uint64_t saved_mask;
     uint64_t saved_trapframe[36];   /* 288 bytes = 36 × uint64_t */
-    uint64_t saved_on_altstack;     /* p->sig_on_altstack at delivery */
-    uint64_t _pad;                  /* pad to 320 bytes, multiple of 16 */
+    uint64_t _pad[2];               /* pad to 320 bytes, multiple of 16 */
 };
 
 /* Default action codes */

@@ -185,7 +185,6 @@ struct pcb *alloc_proc(void) {
     p->sig_altstack.ss_sp    = 0;
     p->sig_altstack.ss_flags = SS_DISABLE;
     p->sig_altstack.ss_size  = 0;
-    p->sig_on_altstack       = 0;
     for (int i = 0; i < NSIG; i++) {
         p->sig_handlers[i].sa_handler  = SIG_DFL;
         p->sig_handlers[i].sa_mask     = 0;
@@ -358,7 +357,6 @@ int proc_fork_current(void) {
      * inside one running on the alt stack, the child must remember that
      * (so its sigaltstack(ss, NULL) returns EPERM until it sigreturns). */
     child->sig_altstack    = parent->sig_altstack;
-    child->sig_on_altstack = parent->sig_on_altstack;
     for (int i = 0; i < RLIMITS_NR; i++)
         child->rlim[i] = parent->rlim[i];
 

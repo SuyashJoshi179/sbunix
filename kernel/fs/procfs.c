@@ -192,7 +192,6 @@ struct proc_snap {
     int          pgid;
     int          sid;
     char         comm[16];
-    char         exe_path[256];
     uint64_t     vm_size_kb;
     uint64_t     vm_stk_kb;
     /* Page-granularity totals for /proc/<pid>/statm. */
@@ -596,8 +595,6 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
     snap.sid        = pcb->sid;
     for (int i = 0; i < (int)sizeof(snap.comm); i++)
         snap.comm[i] = pcb->comm[i];
-    for (int i = 0; i < (int)sizeof(snap.exe_path); i++)
-        snap.exe_path[i] = pcb->exe_path[i];
     uint64_t vm_bytes = 0;
     uint64_t text_bytes = 0;
     uint64_t data_bytes = 0;

@@ -1139,7 +1139,6 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     p->sig_altstack.ss_sp    = 0;
     p->sig_altstack.ss_flags = SS_DISABLE;
     p->sig_altstack.ss_size  = 0;
-    p->sig_on_altstack       = 0;
 
     return 0;
 }
@@ -1509,12 +1508,13 @@ static int64_t sys_clock_settime(int clockid, const struct timespec *ts) {
     if (copyin(&kts, ts, sizeof(kts)) < 0) return -EFAULT;
     if (kts.tv_sec < 0 || kts.tv_nsec < 0 || kts.tv_nsec >= 1000000000LL)
         return -EINVAL;
-    /* Reject tv_sec values that would overflow nanoseconds in uint64_t
-     * (~584 years post-epoch) — otherwise the multiply silently wraps
-     * and sets the clock to an unrelated earlier time. */
+    /* Cap target at INT64_MAX ns (~292 years post-epoch). The RTC offset
+     * helper does signed arithmetic, so larger values would cast to a
+     * negative int64_t and produce a garbage offset. The UINT64_MAX bound
+     * would also cover the multiply but lets the cast misbehave. */
     uint64_t sec  = (uint64_t)kts.tv_sec;
     uint64_t nsec = (uint64_t)kts.tv_nsec;
-    if (sec > (UINT64_MAX - nsec) / 1000000000ULL)
+    if (sec > ((uint64_t)INT64_MAX - nsec) / 1000000000ULL)
         return -EINVAL;
     uint64_t target = sec * 1000000000ULL + nsec;
     clock_set_realtime_ns(target);
