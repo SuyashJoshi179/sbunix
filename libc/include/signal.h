@@ -82,6 +82,12 @@ typedef struct {
     size_t ss_size;
 } stack_t;
 
+/* sigaltstack ss_flags + size floor. Must match kernel/include/signal.h. */
+#define SS_ONSTACK   1
+#define SS_DISABLE   2
+#define MINSIGSTKSZ  2048
+#define SIGSTKSZ     8192
+
 typedef uint64_t sigset_t;
 
 typedef void (*sighandler_t)(int);
@@ -115,6 +121,7 @@ int sigsuspend(const sigset_t *mask);
 int sighold(int sig);
 int sigrelse(int sig);
 int sigignore(int sig);
+int sigaltstack(const stack_t *ss, stack_t *oss);
 
 static inline int sigemptyset(sigset_t *s)            { *s = 0; return 0; }
 static inline int sigfillset(sigset_t *s)             { *s = ~(sigset_t)0; return 0; }

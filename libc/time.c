@@ -16,6 +16,14 @@ int clock_gettime(int clockid, struct timespec *ts) {
     return (int)syscall_ret(ecall2(80, (long)clockid, (long)ts));
 }
 
+int clock_settime(int clockid, const struct timespec *ts) {
+    return (int)syscall_ret(ecall2(88, (long)clockid, (long)ts));
+}
+
+int clock_getres(int clockid, struct timespec *res) {
+    return (int)syscall_ret(ecall2(89, (long)clockid, (long)res));
+}
+
 int gettimeofday(struct timeval *tv, void *tz) {
     return (int)syscall_ret(ecall2(81, (long)tv, (long)tz));
 }

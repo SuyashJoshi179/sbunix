@@ -83,6 +83,10 @@ int sigpending(sigset_t *set) {
     return (int)syscall_ret(ecall1(28, (long)set));
 }
 
+int sigaltstack(const stack_t *ss, stack_t *oss) {
+    return (int)syscall_ret(ecall2(30, (long)ss, (long)oss));
+}
+
 /* killpg(pgid, sig) — direct SYS_killpg, no kill(-pgid) trick.
  * The kernel side handles pgid == 0 (calling process's pgrp) and
  * pgid == 1 (no broadcast collision) correctly. */

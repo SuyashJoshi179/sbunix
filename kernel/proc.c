@@ -182,6 +182,9 @@ struct pcb *alloc_proc(void) {
     p->sig_saved_mask = 0;
     p->in_sighandler  = 0;
     p->delivering_segv= 0;
+    p->sig_altstack.ss_sp    = 0;
+    p->sig_altstack.ss_flags = SS_DISABLE;
+    p->sig_altstack.ss_size  = 0;
     for (int i = 0; i < NSIG; i++) {
         p->sig_handlers[i].sa_handler  = SIG_DFL;
         p->sig_handlers[i].sa_mask     = 0;
@@ -349,6 +352,11 @@ int proc_fork_current(void) {
     child->sig_pending    = 0;
     child->in_sighandler  = 0;
     child->delivering_segv= 0;
+    /* POSIX: sigaltstack settings inherited across fork. The child is not
+     * itself currently in a signal handler, but if the parent forked from
+     * inside one running on the alt stack, the child must remember that
+     * (so its sigaltstack(ss, NULL) returns EPERM until it sigreturns). */
+    child->sig_altstack    = parent->sig_altstack;
     for (int i = 0; i < RLIMITS_NR; i++)
         child->rlim[i] = parent->rlim[i];
 

@@ -8,6 +8,11 @@
 #include <syscall.h>
 #include <riscv.h>
 
+/* Forward decl — defined near sys_sigaltstack. Also used by the signal-
+ * delivery path to decide whether SA_ONSTACK should rebase to the alt
+ * stack or stay on the current one. */
+static int sp_on_altstack(struct pcb *p, uint64_t sp);
+
 /* Default action table indexed by signal number (0 unused). */
 static const uint8_t default_action[NSIG] = {
     [SIGHUP]  = ACT_TERM, [SIGINT]  = ACT_TERM, [SIGQUIT] = ACT_CORE,
@@ -155,9 +160,26 @@ int sig_has_actionable(struct pcb *p) {
  * ---------------------------------------------------------------- */
 static void build_sigframe_and_redirect(struct pcb *p, uint64_t *tf,
                                         int sig, sighandler_t h) {
-    /* tf[1] = x2 = user sp saved at entry */
-    uint64_t user_sp  = tf[1];
-    uint64_t frame_va = (user_sp - sizeof(struct sigframe)) & ~0xFULL;
+    /* tf[1] = x2 = user sp saved at entry. If SA_ONSTACK is set and an
+     * enabled altstack exists and the saved SP isn't already on it,
+     * the sigframe goes at the top of the altstack instead of the
+     * user's current stack. SP-derived "on alt" detection means a
+     * handler that returned non-locally (longjmp out without
+     * sigreturn) doesn't leave us stuck thinking we're still on the
+     * alt stack — the next signal sees the real SP and rebases
+     * correctly. Nested handlers with SA_ONSTACK still get reused-in-
+     * place because at the moment of nested delivery the saved SP is
+     * already inside the alt range. */
+    uint64_t base_sp = tf[1];
+    if ((p->sig_handlers[sig].sa_flags & SA_ONSTACK)
+        && !(p->sig_altstack.ss_flags & SS_DISABLE)
+        && !sp_on_altstack(p, tf[1])
+        && p->sig_altstack.ss_sp
+        && p->sig_altstack.ss_size >= MINSIGSTKSZ) {
+        base_sp = (uint64_t)p->sig_altstack.ss_sp
+                + p->sig_altstack.ss_size;
+    }
+    uint64_t frame_va = (base_sp - sizeof(struct sigframe)) & ~0xFULL;
 
     /* Sanity: frame must be in user VA range. */
     if (frame_va < PAGE_SIZE || frame_va + sizeof(struct sigframe) > KVMEM_OFFSET) {
@@ -541,4 +563,84 @@ int64_t sys_sigsuspend(const sigset_t *mask) {
         proc_sleep(p);
     }
     return -EINTR;
+}
+
+/* True iff the saved user SP lies within the currently installed
+ * alternate signal stack. Single source of truth for "is this thread
+ * currently running on the alt stack?" — used by sys_sigaltstack for
+ * SS_ONSTACK reporting + the EPERM gate, and by build_sigframe to
+ * decide whether SA_ONSTACK should rebase. SP-derived rather than a
+ * sticky bit so a handler that exits non-locally (longjmp without
+ * sigreturn) doesn't leave the kernel believing it's still on alt. */
+static int sp_on_altstack(struct pcb *p, uint64_t sp) {
+    if (p->sig_altstack.ss_flags & SS_DISABLE) return 0;
+    if (!p->sig_altstack.ss_sp || !p->sig_altstack.ss_size) return 0;
+    uint64_t base = (uint64_t)p->sig_altstack.ss_sp;
+    uint64_t end  = base + p->sig_altstack.ss_size;
+    return (sp >= base && sp < end);
+}
+
+/* ----------------------------------------------------------------
+ * sys_sigaltstack(ss, oss)
+ *
+ * If oss != NULL, write the current altstack (with SS_ONSTACK OR'd
+ * into ss_flags when the caller's SP is on the alt stack).
+ *
+ * If ss != NULL, install a new altstack. Rejected:
+ *   - EPERM if currently executing on the existing altstack (any change,
+ *     including SS_DISABLE, is forbidden by POSIX while on it).
+ *   - EINVAL if ss_flags has unknown bits (only 0 and SS_DISABLE are
+ *     valid on input; SS_ONSTACK is a kernel-set output-only bit).
+ *   - ENOMEM if ss_size < MINSIGSTKSZ (and SS_DISABLE not requested).
+ *
+ * oss is fetched BEFORE ss is validated so the "ss=NULL, oss=&cur"
+ * idiom (just read current) never trips ss validation. The write of
+ * oss is delayed until after ss validates so a bad ss does not leave
+ * oss half-written.
+ * ---------------------------------------------------------------- */
+int64_t sys_sigaltstack(const stack_t *ss, stack_t *oss, uint64_t *trapframe) {
+    struct pcb *p = current_proc();
+    if (!p) return -EINVAL;
+
+    int on_alt = sp_on_altstack(p, trapframe[1]);
+
+    stack_t cur = p->sig_altstack;
+    if (on_alt)
+        cur.ss_flags |= SS_ONSTACK;
+
+    stack_t kss;
+    int have_ss = (ss != 0);
+    if (have_ss) {
+        if (copyin(&kss, ss, sizeof(kss)) < 0) return -EFAULT;
+        if (on_alt) return -EPERM;
+        if (kss.ss_flags & ~SS_DISABLE) return -EINVAL;
+        if (!(kss.ss_flags & SS_DISABLE)) {
+            /* Reject ss_sp+ss_size wraparound and altstacks outside
+             * user VA — otherwise build_sigframe could compute the
+             * frame base from a wrapped value and place the sigframe
+             * outside the configured alt stack. */
+            uint64_t sp_lo = (uint64_t)kss.ss_sp;
+            uint64_t sp_hi = sp_lo + kss.ss_size;
+            if (sp_hi < sp_lo) return -EINVAL;
+            if (sp_lo < PAGE_SIZE || sp_hi > KVMEM_OFFSET) return -EINVAL;
+            if (kss.ss_size < MINSIGSTKSZ) return -ENOMEM;
+        }
+    }
+
+    if (oss) {
+        if (copyout(oss, &cur, sizeof(cur)) < 0) return -EFAULT;
+    }
+
+    if (have_ss) {
+        if (kss.ss_flags & SS_DISABLE) {
+            p->sig_altstack.ss_sp    = 0;
+            p->sig_altstack.ss_flags = SS_DISABLE;
+            p->sig_altstack.ss_size  = 0;
+        } else {
+            p->sig_altstack.ss_sp    = kss.ss_sp;
+            p->sig_altstack.ss_flags = 0;
+            p->sig_altstack.ss_size  = kss.ss_size;
+        }
+    }
+    return 0;
 }

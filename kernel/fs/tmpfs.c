@@ -83,7 +83,7 @@ static inline void fs_unlock(void) {
 }
 
 static inline uint64_t tmpfs_now(void) {
-    return rtc_read_ns() / 1000000000ULL;
+    return realtime_ns() / 1000000000ULL;
 }
 
 /* ------------------------------------------------------------------ */

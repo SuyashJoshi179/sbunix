@@ -103,6 +103,13 @@ struct pcb {
     uint8_t        in_sighandler;   // 1 while a user signal handler is running
     uint8_t        delivering_segv; // guard against recursive SIGSEGV default-kill
 
+    // POSIX sigaltstack. ss_flags starts at SS_DISABLE. "Currently running
+    // on alt" is derived on-demand from the saved user SP (see
+    // sp_on_altstack in signal.c) — no sticky flag, so a handler that
+    // exits via longjmp doesn't leave the kernel mis-tracking state.
+    // Inherited across fork, reset to disabled on exec.
+    stack_t        sig_altstack;
+
     // POSIX rlimit table (indexed by resource id; sparse).
     struct rlimit  rlim[RLIMITS_NR];
     struct pcb    *next;            // intrusive linked list

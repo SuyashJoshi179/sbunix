@@ -31,6 +31,9 @@
 #define SYS_link          25
 #define SYS_rename        26
 #define SYS_sigsuspend    27
+#define SYS_sigpending    28
+#define SYS_killpg        29
+#define SYS_sigaltstack   30
 #define SYS_sbrk          70
 #define SYS_mmap          71
 #define SYS_munmap        72
@@ -42,6 +45,8 @@
 #define SYS_truncate      85
 #define SYS_ftruncate     86
 #define SYS_symlink       87
+#define SYS_clock_settime 88
+#define SYS_clock_getres  89
 #define SYS_kill          90
 #define SYS_sigaction     91
 #define SYS_sigprocmask   92

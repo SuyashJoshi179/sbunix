@@ -33,6 +33,8 @@ struct tm {
 #define CLOCKS_PER_SEC 100
 
 int    clock_gettime(int clockid, struct timespec *ts);
+int    clock_settime(int clockid, const struct timespec *ts);
+int    clock_getres(int clockid, struct timespec *res);
 int    gettimeofday(struct timeval *tv, void *tz);
 int    nanosleep(const struct timespec *req, struct timespec *rem);
 time_t time(time_t *tloc);

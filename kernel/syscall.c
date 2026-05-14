@@ -1135,6 +1135,10 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     p->delivering_segv = 0;
     p->alarm_tick      = 0;        /* POSIX: pending alarm cleared on exec */
     p->did_exec        = 1;
+    /* POSIX: alternate signal stack is cleared on exec. */
+    p->sig_altstack.ss_sp    = 0;
+    p->sig_altstack.ss_flags = SS_DISABLE;
+    p->sig_altstack.ss_size  = 0;
 
     return 0;
 }
@@ -1478,7 +1482,7 @@ static int64_t sys_clock_gettime(int clockid, struct timespec *ts) {
     if (!ts) return -EFAULT;
     struct timespec kts;
     if (clockid == CLOCK_REALTIME) {
-        uint64_t ns = rtc_read_ns();
+        uint64_t ns = realtime_ns();
         kts.tv_sec  = (int64_t)(ns / 1000000000UL);
         kts.tv_nsec = (int64_t)(ns % 1000000000UL);
     } else if (clockid == CLOCK_MONOTONIC) {
@@ -1493,12 +1497,56 @@ static int64_t sys_clock_gettime(int clockid, struct timespec *ts) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_clock_settime — only CLOCK_REALTIME is settable; CLOCK_MONOTONIC must
+// fail with EINVAL per POSIX. No privilege check (single-user kernel).
+// ---------------------------------------------------------------------------
+static int64_t sys_clock_settime(int clockid, const struct timespec *ts) {
+    if (clockid == CLOCK_MONOTONIC) return -EINVAL;
+    if (clockid != CLOCK_REALTIME)  return -EINVAL;
+    if (!ts) return -EFAULT;
+    struct timespec kts;
+    if (copyin(&kts, ts, sizeof(kts)) < 0) return -EFAULT;
+    if (kts.tv_sec < 0 || kts.tv_nsec < 0 || kts.tv_nsec >= 1000000000LL)
+        return -EINVAL;
+    /* Cap target at INT64_MAX ns (~292 years post-epoch). The RTC offset
+     * helper does signed arithmetic, so larger values would cast to a
+     * negative int64_t and produce a garbage offset. The UINT64_MAX bound
+     * would also cover the multiply but lets the cast misbehave. */
+    uint64_t sec  = (uint64_t)kts.tv_sec;
+    uint64_t nsec = (uint64_t)kts.tv_nsec;
+    if (sec > ((uint64_t)INT64_MAX - nsec) / 1000000000ULL)
+        return -EINVAL;
+    uint64_t target = sec * 1000000000ULL + nsec;
+    clock_set_realtime_ns(target);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sys_clock_getres — POSIX permits a NULL `res` (just validates clockid).
+//   CLOCK_REALTIME : Goldfish RTC exposes nanosecond granularity → 1 ns.
+//   CLOCK_MONOTONIC: timer_ticks() advances at TICKS_PER_SEC → 1/HZ ns.
+// ---------------------------------------------------------------------------
+static int64_t sys_clock_getres(int clockid, struct timespec *res) {
+    struct timespec kres;
+    if (clockid == CLOCK_REALTIME) {
+        kres.tv_sec = 0; kres.tv_nsec = 1;
+    } else if (clockid == CLOCK_MONOTONIC) {
+        kres.tv_sec = 0; kres.tv_nsec = (int64_t)(1000000000UL / TICKS_PER_SEC);
+    } else {
+        return -EINVAL;
+    }
+    if (!res) return 0;
+    if (copyout(res, &kres, sizeof(kres)) < 0) return -EFAULT;
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // sys_gettimeofday
 // ---------------------------------------------------------------------------
 static int64_t sys_gettimeofday(struct timeval *tv, void *tz) {
     (void)tz;
     if (!tv) return -EFAULT;
-    uint64_t ns = rtc_read_ns();
+    uint64_t ns = realtime_ns();
     struct timeval ktv = {
         .tv_sec  = (int64_t)(ns / 1000000000UL),
         .tv_usec = (int64_t)((ns % 1000000000UL) / 1000UL),
@@ -1881,6 +1929,14 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
             return sys_gettimeofday((struct timeval *)trapframe[TF_A0],
                                     (void *)trapframe[TF_A1]);
 
+        case SYS_clock_settime:
+            return sys_clock_settime((int)(int64_t)trapframe[TF_A0],
+                                     (const struct timespec *)trapframe[TF_A1]);
+
+        case SYS_clock_getres:
+            return sys_clock_getres((int)(int64_t)trapframe[TF_A0],
+                                    (struct timespec *)trapframe[TF_A1]);
+
         case SYS_nanosleep:
             return sys_nanosleep((const struct timespec *)trapframe[TF_A0],
                                  (struct timespec *)trapframe[TF_A1]);
@@ -1914,6 +1970,11 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_killpg:
             return sys_killpg((int)(int64_t)trapframe[TF_A0],
                               (int)(int64_t)trapframe[TF_A1]);
+
+        case SYS_sigaltstack:
+            return sys_sigaltstack((const stack_t *)(uintptr_t)trapframe[TF_A0],
+                                   (stack_t *)(uintptr_t)trapframe[TF_A1],
+                                   trapframe);
 
         case SYS_getuid:  return sys_getuid();
         case SYS_geteuid: return sys_geteuid();
