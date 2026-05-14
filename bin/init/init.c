@@ -65,6 +65,7 @@ int main(void) {
         "/bin/chdir_test",
         "/bin/open_read_test",
         "/bin/dup_test",
+        "/bin/cloexec_test",
         "/bin/getcwd_test",
         "/bin/fd_limits_test",
         "/bin/path_test",
