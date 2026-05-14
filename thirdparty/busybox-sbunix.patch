@@ -1,0 +1,177 @@
+diff --git a/include/platform.h b/include/platform.h
+index c449075b9..a4cbe852e 100644
+--- a/include/platform.h
++++ b/include/platform.h
+@@ -558,6 +558,41 @@ typedef unsigned smalluint;
+ # undef HAVE_PRINTF_PERCENTM
+ #endif
+ 
++#if defined(__sbunix__)
++# undef HAVE_CLEARENV
++# undef HAVE_FDATASYNC
++# undef HAVE_MEMRCHR
++# define HAVE_MKDTEMP 1
++# undef HAVE_TTYNAME_R
++# undef HAVE_PTSNAME_R
++# undef HAVE_SETBIT
++# undef HAVE_MEMPCPY
++# undef HAVE_STRCASESTR
++# undef HAVE_STRCHRNUL
++# ifndef SBU_HAS_STRSIGNAL
++#  undef HAVE_STRSIGNAL
++# endif
++# undef HAVE_STRVERSCMP
++# undef HAVE_VASPRINTF
++# undef HAVE_UNLOCKED_STDIO
++# undef HAVE_UNLOCKED_LINE_OPS
++# undef HAVE_GETLINE
++# undef HAVE_XTABS
++# undef HAVE_NET_ETHERNET_H
++# undef HAVE_PRINTF_PERCENTM
++# undef HAVE_WAIT3
++# undef HAVE_DEV_FD
++# define HAVE_DEV_FD 0
++# define printf bb_printf
++# define fprintf bb_fprintf
++# define vfprintf bb_vfprintf
++# define vprintf bb_vprintf
++# define sprintf bb_sprintf
++# define snprintf bb_snprintf
++# define vsnprintf bb_vsnprintf
++# define dprintf bb_dprintf
++#endif
++
+ /*
+  * Now, define prototypes for all the functions defined in platform.c
+  * These must come after all the HAVE_* macros are defined (or not)
+@@ -631,6 +666,7 @@ extern int usleep(unsigned) FAST_FUNC;
+ #endif
+ 
+ #ifndef HAVE_VASPRINTF
++# include <stdarg.h>
+ extern int vasprintf(char **string_ptr, const char *format, va_list p) FAST_FUNC;
+ #endif
+ 
+diff --git a/libbb/Kbuild.src b/libbb/Kbuild.src
+index cb8d2c2ec..52f3cd846 100644
+--- a/libbb/Kbuild.src
++++ b/libbb/Kbuild.src
+@@ -10,17 +10,17 @@ lib-y:=
+ 
+ INSERT
+ 
+-lib-y += alloc_affinity.o
++#lib-y += alloc_affinity.o
+ lib-y += appletlib.o
+ lib-y += ask_confirmation.o
+-lib-y += bb_askpass.o
++#lib-y += bb_askpass.o
+ lib-y += bb_bswap_64.o
+-lib-y += bb_do_delay.o
++#lib-y += bb_do_delay.o
+ lib-y += bb_pwd.o
+ lib-y += bb_qsort.o
+ #lib-y += bb_strtod.o
+ lib-y += bb_strtonum.o
+-lib-y += change_identity.o
++#lib-y += change_identity.o
+ lib-y += chomp.o
+ lib-y += compare_string_array.o
+ lib-y += concat_path_file.o
+@@ -31,29 +31,29 @@ lib-y += copyfd.o
+ lib-y += crc32.o
+ lib-y += default_error_retval.o
+ lib-y += device_open.o
+-lib-y += dump.o
++#lib-y += dump.o
+ lib-y += executable.o
+ lib-y += fclose_nonstdin.o
+ lib-y += fflush_stdout_and_exit.o
+ lib-y += fgets_str.o
+-lib-y += find_pid_by_name.o
+-lib-y += find_root_device.o
++#lib-y += find_pid_by_name.o
++#lib-y += find_root_device.o
+ lib-y += full_write.o
+ lib-y += get_console.o
+ lib-y += get_last_path_component.o
+ lib-y += get_line_from_file.o
+-lib-y += getpty.o
+-lib-y += get_volsize.o
+-lib-y += herror_msg.o
++#lib-y += getpty.o
++#lib-y += get_volsize.o
++#lib-y += herror_msg.o
+ lib-y += human_readable.o
+-lib-y += inet_common.o
++#lib-y += inet_common.o
+ lib-y += inode_hash.o
+ lib-y += isdirectory.o
+-lib-y += kernel_version.o
++#lib-y += kernel_version.o
+ lib-y += last_char_is.o
+ lib-y += lineedit.o lineedit_ptr_hack.o
+ lib-y += llist.o
+-lib-y += login.o
++#lib-y += login.o
+ lib-y += make_directory.o
+ lib-y += makedev.o
+ lib-y += hash_md5_sha.o
+@@ -96,14 +96,14 @@ lib-y += signals.o
+ lib-y += simplify_path.o
+ lib-y += single_argv.o
+ lib-y += skip_whitespace.o
+-lib-y += speed_table.o
++#lib-y += speed_table.o
+ lib-y += str_tolower.o
+ lib-y += strrstr.o
+ lib-y += sysconf.o
+ lib-y += time.o
+ lib-y += trim.o
+ lib-y += u_signal_names.o
+-lib-y += uuencode.o
++#lib-y += uuencode.o
+ lib-y += verror_msg.o
+ lib-y += vfork_daemon_rexec.o
+ lib-y += warn_ignoring_args.o
+@@ -111,12 +111,12 @@ lib-y += wfopen.o
+ lib-y += wfopen_input.o
+ lib-y += write.o
+ lib-y += xatonum.o
+-lib-y += xconnect.o
++#lib-y += xconnect.o
+ lib-y += xfuncs.o
+ lib-y += xfuncs_printf.o
+ lib-y += xfunc_die.o
+ lib-y += xgetcwd.o
+-lib-y += xgethostbyname.o
++#lib-y += xgethostbyname.o
+ lib-y += xreadlink.o
+ lib-y += xrealloc_vector.o
+ 
+diff --git a/scripts/Makefile.lib b/scripts/Makefile.lib
+--- a/scripts/Makefile.lib
++++ b/scripts/Makefile.lib
+@@ -122,7 +122,10 @@ basename_flags = -D"KBUILD_BASENAME=$(call name-fix,$(basetarget))"
+ # yet ld_flags is fed to ld.
+ #ld_flags       = $(LDFLAGS) $(EXTRA_LDFLAGS)
+ # Remove the -Wl, prefix from linker options normally passed through gcc
+-ld_flags       = $(filter-out -Wl$(comma)%,$(LDFLAGS) $(EXTRA_LDFLAGS))
++# SBUnix: empty so partial-link (ld -r) does not slurp object paths from
++# LDFLAGS (which would pull our prelinked libc-thirdparty.o into
++# applets/built-in.o and cause duplicate symbols at final link).
++ld_flags       =
+ 
+ 
+ # Finds the multi-part object the current object will be linked into
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -1442,7 +1442,7 @@
+  * By ~2008, OpenBSD 3.4 was changed to survive glibc-like optind = 0
+  * (to interpret it as if optreset was set).
+  */
+-#if 1 /*def __GLIBC__*/
++#if 0 /* SBUnix: students' libcs are POSIX-style; force BSD reset (optind=1) */
+ #define GETOPT_RESET() (optind = 0)
+ #else /* BSD style */
+ #define GETOPT_RESET() (optind = 1)
