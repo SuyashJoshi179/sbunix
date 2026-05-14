@@ -24,7 +24,7 @@ int clock_getres(int clockid, struct timespec *res) {
     return (int)syscall_ret(ecall2(89, (long)clockid, (long)res));
 }
 
-int gettimeofday(struct timeval *tv, void *tz) {
+int gettimeofday(struct timeval *tv, struct timezone *tz) {
     return (int)syscall_ret(ecall2(81, (long)tv, (long)tz));
 }
 
