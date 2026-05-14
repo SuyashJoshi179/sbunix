@@ -25,12 +25,8 @@
 /* Signal-handler pointer type (POSIX canonical form, no typedef). */
 typedef void (*_posix_sighandler_t)(int);
 
-/* DIVERGENCE: pid_t not visible from <signal.h> (our libc fails to
- * #include <sys/types.h>). POSIX requires <signal.h> to expose pid_t.
- * Uncomment after Phase 2 adds the include.
- * PIN int (*_pin_kill)(pid_t, int) = kill;
- * PIN int (*_pin_killpg)(pid_t, int) = killpg;
- */
+PIN int (*_pin_kill)(pid_t, int) = kill;
+PIN int (*_pin_killpg)(pid_t, int) = killpg;
 PIN int (*_pin_raise)(int) = raise;
 PIN int (*_pin_sigaction)(int, const struct sigaction *, struct sigaction *) = sigaction;
 PIN _posix_sighandler_t (*_pin_signal)(int, _posix_sighandler_t) = signal;
