@@ -61,15 +61,10 @@ PIN int     (*_pin_mkstemp)(char *) = mkstemp;
 PIN char   *(*_pin_mkdtemp)(char *) = mkdtemp;
 PIN int     (*_pin_mblen)(const char *, size_t) = mblen;
 
-/* DIVERGENCE: mbtowc / wctomb / mbstowcs / wcstombs use POSIX wchar_t.
- * Our libc declares them with int * / int instead. Pin with POSIX type;
- * compile FAIL is the divergence diagnostic.
- *
- * PIN int    (*_pin_mbtowc)(wchar_t *, const char *, size_t) = mbtowc;
- * PIN int    (*_pin_wctomb)(char *, wchar_t) = wctomb;
- * PIN size_t (*_pin_mbstowcs)(wchar_t *, const char *, size_t) = mbstowcs;
- * PIN size_t (*_pin_wcstombs)(char *, const wchar_t *, size_t) = wcstombs;
- */
+PIN int    (*_pin_mbtowc)(wchar_t *, const char *, size_t) = mbtowc;
+PIN int    (*_pin_wctomb)(char *, wchar_t) = wctomb;
+PIN size_t (*_pin_mbstowcs)(wchar_t *, const char *, size_t) = mbstowcs;
+PIN size_t (*_pin_wcstombs)(char *, const wchar_t *, size_t) = wcstombs;
 
 __attribute__((unused))
 static void _struct_fields(void) {

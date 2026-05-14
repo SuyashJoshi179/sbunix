@@ -405,23 +405,23 @@ int    mblen(const char *s, size_t n) {
     if (n == 0) return -1;
     return *s ? 1 : 0;
 }
-int    mbtowc(int *pwc, const char *s, size_t n) {
+int    mbtowc(wchar_t *pwc, const char *s, size_t n) {
     if (!s) return 0;
     if (n == 0) return -1;
     if (pwc) *pwc = (unsigned char)*s;
     return *s ? 1 : 0;
 }
-int    wctomb(char *s, int wc) {
+int    wctomb(char *s, wchar_t wc) {
     if (!s) return 0;
     *s = (char)wc;
     return 1;
 }
-size_t mbstowcs(int *pwcs, const char *s, size_t n) {
+size_t mbstowcs(wchar_t *pwcs, const char *s, size_t n) {
     size_t i;
     for (i = 0; i < n && s[i]; i++) if (pwcs) pwcs[i] = (unsigned char)s[i];
     return i;
 }
-size_t wcstombs(char *s, const int *pwcs, size_t n) {
+size_t wcstombs(char *s, const wchar_t *pwcs, size_t n) {
     size_t i;
     for (i = 0; i < n && pwcs[i]; i++) if (s) s[i] = (char)pwcs[i];
     return i;
