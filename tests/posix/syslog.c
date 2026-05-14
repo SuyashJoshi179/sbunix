@@ -13,13 +13,10 @@
 
 #define PIN __attribute__((unused)) static
 
-/* DIVERGENCE: openlog/closelog/syslog/setlogmask not declared in our
- * syslog.h (only macros are defined). Pins commented.
- * PIN void (*_pin_openlog)(const char *, int, int) = openlog;
- * PIN void (*_pin_closelog)(void) = closelog;
- * PIN void (*_pin_syslog)(int, const char *, ...) = syslog;
- * PIN int  (*_pin_setlogmask)(int) = setlogmask;
- */
+PIN void (*_pin_openlog)(const char *, int, int) = openlog;
+PIN void (*_pin_closelog)(void) = closelog;
+PIN void (*_pin_syslog)(int, const char *, ...) = syslog;
+PIN int  (*_pin_setlogmask)(int) = setlogmask;
 
 __attribute__((unused))
 static void _macro_checks(void) {
