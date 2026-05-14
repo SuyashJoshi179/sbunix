@@ -418,7 +418,7 @@ char *fgets(char *buf, int n, FILE *stream) {
     return buf;
 }
 
-long getline(char **lineptr, unsigned long *n, FILE *stream) {
+ssize_t getline(char **lineptr, size_t *n, FILE *stream) {
     if (!lineptr || !n || !stream) return -1;
     if (!*lineptr || *n == 0) {
         unsigned long cap = 128;
@@ -606,7 +606,7 @@ int asprintf(char **strp, const char *fmt, ...) {
     return r;
 }
 
-long getdelim(char **lineptr, unsigned long *n, int delim, FILE *stream) {
+ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *stream) {
     if (!lineptr || !n || !stream) return -1;
     if (!*lineptr || *n == 0) {
         unsigned long cap = 128;

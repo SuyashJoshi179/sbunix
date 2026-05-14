@@ -78,11 +78,8 @@ PIN int     (*_pin_vsscanf)(const char *, const char *, va_list) = vsscanf;
 
 PIN void    (*_pin_perror)(const char *) = perror;
 
-/* DIVERGENCE: our libc's getline/getdelim return long, POSIX requires
- * ssize_t. Uncomment after Phase 2 fix.
- * PIN ssize_t (*_pin_getline)(char **, size_t *, FILE *) = getline;
- * PIN ssize_t (*_pin_getdelim)(char **, size_t *, int, FILE *) = getdelim;
- */
+PIN ssize_t (*_pin_getline)(char **, size_t *, FILE *) = getline;
+PIN ssize_t (*_pin_getdelim)(char **, size_t *, int, FILE *) = getdelim;
 
 /* FILE * globals */
 PIN FILE  **_pin_stdin  = &stdin;
