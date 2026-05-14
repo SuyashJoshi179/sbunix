@@ -7,7 +7,6 @@
 #include <trap.h>
 #include <timer.h>
 #include <proc.h>
-#include <selftest.h>
 #include <tarfs.h>
 #include <procfs.h>
 #include <vfs.h>
@@ -57,15 +56,12 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
     virtio_disk_init();
 
     // Initialise sbfs in-memory state and replay the log. Attach is
-    // deferred to userspace `mount -t disk … /mnt` (and to selftest's
-    // internal pre-attach for kernel-side tests).
+    // deferred to userspace `mount -t disk … /mnt`.
     if (sbfs_init() < 0)
         printk("kernel: sbfs_init failed — /mnt unavailable\n");
 
     trap_init();
     timer_init();
-
-    selftest_run();
 
     printk("Starting scheduler\n");
     sched_init();   // never returns
