@@ -97,7 +97,12 @@ int fcntl(int fd, int cmd, ...) {
     case F_DUPFD_CLOEXEC: {
         int minfd = va_arg(ap, int);
         r = dup_to_minfd(fd, minfd);
-        if (r >= 0) (void)fcntl(r, F_SETFD, FD_CLOEXEC);
+        if (r >= 0 && fcntl(r, F_SETFD, FD_CLOEXEC) < 0) {
+            int saved = errno;
+            close(r);
+            errno = saved;
+            r = -1;
+        }
         break;
     }
     case F_GETFD:

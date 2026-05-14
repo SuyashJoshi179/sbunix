@@ -603,11 +603,11 @@ static int64_t sys_fcntl(int fd, int cmd, uint64_t arg) {
     struct pcb *p = current_proc();
     if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
     switch (cmd) {
-    case 1: /* F_GETFD */
-        return (p->cloexec_mask & (1ULL << fd)) ? 1 /* FD_CLOEXEC */ : 0;
-    case 2: /* F_SETFD */
-        if (arg & 1 /* FD_CLOEXEC */) p->cloexec_mask |=  (1ULL << fd);
-        else                          p->cloexec_mask &= ~(1ULL << fd);
+    case F_GETFD:
+        return (p->cloexec_mask & (1ULL << fd)) ? FD_CLOEXEC : 0;
+    case F_SETFD:
+        if (arg & FD_CLOEXEC) p->cloexec_mask |=  (1ULL << fd);
+        else                  p->cloexec_mask &= ~(1ULL << fd);
         return 0;
     default:
         return -EINVAL;
