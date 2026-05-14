@@ -21,11 +21,9 @@
 
 #define PIN __attribute__((unused)) static
 
-/* DIVERGENCE: size_t/off_t not visible from this header.
- * PIN void *(*_pin_mmap)(void *, size_t, int, int, int, off_t) = mmap;
- * PIN int   (*_pin_munmap)(void *, size_t) = munmap;
- * PIN int   (*_pin_msync)(void *, size_t, int) = msync;
- */
+PIN void *(*_pin_mmap)(void *, size_t, int, int, int, off_t) = mmap;
+PIN int   (*_pin_munmap)(void *, size_t) = munmap;
+PIN int   (*_pin_msync)(void *, size_t, int) = msync;
 
 __attribute__((unused))
 static void _macro_checks(void) {

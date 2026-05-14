@@ -204,8 +204,8 @@ static long ecall6(long num, long a0, long a1, long a2, long a3, long a4, long a
     return _a0;
 }
 
-void *mmap(void *addr, long len, int prot, int flags, int fd, long off) {
-    long r = ecall6(71, (long)addr, len, (long)prot, (long)flags, (long)fd, off);
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) {
+    long r = ecall6(71, (long)addr, (long)len, (long)prot, (long)flags, (long)fd, (long)off);
     if (r < 0 && r > -4096) {
         errno = (int)(-r);
         return MAP_FAILED;
@@ -213,12 +213,12 @@ void *mmap(void *addr, long len, int prot, int flags, int fd, long off) {
     return (void *)r;
 }
 
-int munmap(void *addr, long len) {
-    return (int)syscall_ret(ecall2(72, (long)addr, len));
+int munmap(void *addr, size_t len) {
+    return (int)syscall_ret(ecall2(72, (long)addr, (long)len));
 }
 
-int msync(void *addr, long len, int flags) {
-    return (int)syscall_ret(ecall3(115, (long)addr, len, (long)flags));
+int msync(void *addr, size_t len, int flags) {
+    return (int)syscall_ret(ecall3(115, (long)addr, (long)len, (long)flags));
 }
 
 int getrlimit(int resource, struct rlimit *rlim) {
