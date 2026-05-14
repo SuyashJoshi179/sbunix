@@ -13,26 +13,27 @@
  */
 #include <stdio.h>
 #include <unistd.h>
+#include <errno.h>
+#include <string.h>
 
 int main(int argc, char **argv) {
     int i = 1;
     for (; i < argc; i++) {
         if (argv[i][0] != '-' || argv[i][1] == '\0') break;
         if (argv[i][1] == '-' && argv[i][2] == '\0') { i++; break; }
-        printf("mv: invalid option '%s'\n", argv[i]);
-        printf("usage: mv source target\n");
+        fprintf(stderr, "mv: invalid option '%s'\n", argv[i]);
+        fprintf(stderr, "usage: mv source target\n");
         return 1;
     }
 
     if (argc - i != 2) {
-        printf("usage: mv source target\n");
+        fprintf(stderr, "usage: mv source target\n");
         return 1;
     }
 
-    int rc = rename(argv[i], argv[i + 1]);
-    if (rc < 0) {
-        printf("mv: cannot move '%s' -> '%s': errno %d\n",
-               argv[i], argv[i + 1], -rc);
+    if (rename(argv[i], argv[i + 1]) < 0) {
+        fprintf(stderr, "mv: cannot move '%s' to '%s': %s\n",
+                argv[i], argv[i + 1], strerror(errno));
         return 1;
     }
     return 0;

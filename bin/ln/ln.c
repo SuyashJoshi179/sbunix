@@ -10,6 +10,8 @@
  */
 #include <stdio.h>
 #include <unistd.h>
+#include <errno.h>
+#include <string.h>
 
 int main(int argc, char **argv) {
     int i = 1;
@@ -17,23 +19,22 @@ int main(int argc, char **argv) {
         if (argv[i][0] != '-' || argv[i][1] == '\0') break;
         if (argv[i][1] == '-' && argv[i][2] == '\0') { i++; break; }
         if (argv[i][1] == 's' && argv[i][2] == '\0') {
-            printf("ln: -s (symbolic link) not supported\n");
+            fprintf(stderr, "ln: -s (symbolic link) not supported\n");
             return 1;
         }
-        printf("ln: invalid option '%s'\n", argv[i]);
-        printf("usage: ln source target\n");
+        fprintf(stderr, "ln: invalid option '%s'\n", argv[i]);
+        fprintf(stderr, "usage: ln source target\n");
         return 1;
     }
 
     if (argc - i != 2) {
-        printf("usage: ln source target\n");
+        fprintf(stderr, "usage: ln source target\n");
         return 1;
     }
 
-    int rc = link(argv[i], argv[i + 1]);
-    if (rc < 0) {
-        printf("ln: cannot link '%s' -> '%s': errno %d\n",
-               argv[i], argv[i + 1], -rc);
+    if (link(argv[i], argv[i + 1]) < 0) {
+        fprintf(stderr, "ln: failed to create hard link '%s' => '%s': %s\n",
+                argv[i + 1], argv[i], strerror(errno));
         return 1;
     }
     return 0;

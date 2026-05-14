@@ -5,7 +5,7 @@
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        printf("usage: sleep <seconds>\n");
+        fprintf(stderr, "usage: sleep <seconds>\n");
         return 1;
     }
     long secs = 0;
