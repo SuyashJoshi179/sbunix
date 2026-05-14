@@ -192,6 +192,7 @@ struct proc_snap {
     int          pgid;
     int          sid;
     char         comm[16];
+    char         exe_path[256];
     uint64_t     vm_size_kb;
     uint64_t     vm_stk_kb;
     /* Page-granularity totals for /proc/<pid>/statm. */
@@ -224,10 +225,14 @@ static int prod_status(char *out, int cap, const struct proc_snap *s) {
 }
 
 static int prod_cmdline(char *out, int cap, const struct proc_snap *s) {
-    const char *src = (s->comm[0]) ? s->comm : "proc";
+    /* Prefer the full exe_path so the binary's real name (untruncated) is
+     * recoverable. Linux's cmdline carries the original argv; we only
+     * preserve argv[0], so emit it NUL-terminated in the same shape. Fall
+     * back to comm for the initial process before any exec. */
+    const char *src = s->exe_path[0] ? s->exe_path
+                    : (s->comm[0]    ? s->comm : "proc");
     int n = 0;
     for (int i = 0; src[i] && n < cap; i++) out[n++] = src[i];
-    /* Linux-style: each argv element is NUL-terminated. We only have argv[0]. */
     if (n < cap) out[n++] = '\0';
     return n;
 }
@@ -589,6 +594,8 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
     snap.sid        = pcb->sid;
     for (int i = 0; i < (int)sizeof(snap.comm); i++)
         snap.comm[i] = pcb->comm[i];
+    for (int i = 0; i < (int)sizeof(snap.exe_path); i++)
+        snap.exe_path[i] = pcb->exe_path[i];
     uint64_t vm_bytes = 0;
     uint64_t text_bytes = 0;
     uint64_t data_bytes = 0;
