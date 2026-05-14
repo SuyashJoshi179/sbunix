@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/mount.h>
 
 static void usage(void) {
@@ -18,7 +19,8 @@ int main(int argc, char **argv) {
     const char *target = argv[argc - 1];
 
     if (mount(target, fstype) < 0) {
-        fprintf(stderr, "mount: %s on %s failed\n", fstype, target);
+        fprintf(stderr, "mount: %s on %s failed: %s\n",
+                fstype, target, strerror(errno));
         return 1;
     }
     return 0;

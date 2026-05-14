@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <string.h>
 
 static void cat_fd(int fd) {
     char buf[256];
@@ -18,7 +20,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         int fd = open(argv[i], 0);
         if (fd < 0) {
-            printf("cat: cannot open '%s'\n", argv[i]);
+            fprintf(stderr, "cat: %s: %s\n", argv[i], strerror(errno));
             return 1;
         }
         cat_fd(fd);

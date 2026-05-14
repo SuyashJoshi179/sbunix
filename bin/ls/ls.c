@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
+#include <errno.h>
 
 struct linux_dirent64 {
     unsigned long  d_ino;
@@ -16,7 +17,8 @@ int main(int argc, char **argv) {
     const char *path = (argc > 1) ? argv[1] : ".";
     int fd = open(path, 0);
     if (fd < 0) {
-        printf("ls: cannot open '%s'\n", path);
+        fprintf(stderr, "ls: cannot access '%s': %s\n",
+                path, strerror(errno));
         return 1;
     }
 

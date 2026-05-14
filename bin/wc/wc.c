@@ -2,13 +2,15 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <string.h>
 
 int main(int argc, char **argv) {
     int fd = 0;
     if (argc > 1) {
         fd = open(argv[1], 0);
         if (fd < 0) {
-            printf("wc: cannot open '%s'\n", argv[1]);
+            fprintf(stderr, "wc: %s: %s\n", argv[1], strerror(errno));
             return 1;
         }
     }

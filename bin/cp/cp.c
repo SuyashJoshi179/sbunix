@@ -10,19 +10,21 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <string.h>
 
 #define CP_BUFSZ 1024
 
 static int copy_one(const char *src, const char *dst) {
     int sfd = open(src, O_RDONLY);
     if (sfd < 0) {
-        printf("cp: cannot open '%s': errno %d\n", src, -sfd);
+        fprintf(stderr, "cp: cannot open '%s': %s\n", src, strerror(errno));
         return -1;
     }
 
     int dfd = open(dst, O_WRONLY | O_CREAT | O_TRUNC);
     if (dfd < 0) {
-        printf("cp: cannot create '%s': errno %d\n", dst, -dfd);
+        fprintf(stderr, "cp: cannot create '%s': %s\n", dst, strerror(errno));
         close(sfd);
         return -1;
     }
@@ -35,7 +37,8 @@ static int copy_one(const char *src, const char *dst) {
         while (off < n) {
             long w = write(dfd, buf + off, n - off);
             if (w <= 0) {
-                printf("cp: short/error write to '%s': %ld\n", dst, w);
+                fprintf(stderr, "cp: write error on '%s': %s\n",
+                        dst, strerror(errno));
                 rc = -1;
                 goto done;
             }
@@ -43,7 +46,8 @@ static int copy_one(const char *src, const char *dst) {
         }
     }
     if (n < 0) {
-        printf("cp: read error on '%s': %ld\n", src, n);
+        fprintf(stderr, "cp: read error on '%s': %s\n",
+                src, strerror(errno));
         rc = -1;
     }
 
@@ -59,13 +63,13 @@ int main(int argc, char **argv) {
     for (; i < argc; i++) {
         if (argv[i][0] != '-' || argv[i][1] == '\0') break;
         if (argv[i][1] == '-' && argv[i][2] == '\0') { i++; break; }
-        printf("cp: invalid option '%s'\n", argv[i]);
-        printf("usage: cp source target\n");
+        fprintf(stderr, "cp: invalid option '%s'\n", argv[i]);
+        fprintf(stderr, "usage: cp source target\n");
         return 1;
     }
 
     if (argc - i != 2) {
-        printf("usage: cp source target\n");
+        fprintf(stderr, "usage: cp source target\n");
         return 1;
     }
 

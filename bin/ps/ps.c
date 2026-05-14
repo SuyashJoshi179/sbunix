@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <ctype.h>
 #include <string.h>
+#include <errno.h>
 
 static int is_numeric_name(const char *s) {
     if (*s == '\0')
@@ -112,7 +113,7 @@ static int read_status_file(int pid, char *name, int name_sz,
 int main(void) {
     int fd = open("/proc", O_RDONLY);
     if (fd < 0) {
-        printf("ps: cannot open /proc\n");
+        fprintf(stderr, "ps: cannot open /proc: %s\n", strerror(errno));
         return 1;
     }
 

@@ -13,9 +13,11 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
+#include <string.h>
 
-static int report(const char *prog, const char *path, int rc) {
-    printf("%s: cannot remove '%s': errno %d\n", prog, path, -rc);
+static int report(const char *prog, const char *path) {
+    fprintf(stderr, "%s: cannot remove '%s': %s\n",
+            prog, path, strerror(errno));
     return -1;
 }
 
@@ -31,15 +33,15 @@ int main(int argc, char **argv) {
             if      (c == 'f') force = 1;
             else if (c == 'd') allow_dir = 1;
             else {
-                printf("rm: invalid option '-%c'\n", c);
-                printf("usage: rm [-f] [-d] file...\n");
+                fprintf(stderr, "rm: invalid option '-%c'\n", c);
+                fprintf(stderr, "usage: rm [-f] [-d] file...\n");
                 return 1;
             }
         }
     }
     if (i >= argc) {
         if (force) return 0;   /* POSIX: rm -f with no args is ok */
-        printf("usage: rm [-f] [-d] file...\n");
+        fprintf(stderr, "usage: rm [-f] [-d] file...\n");
         return 1;
     }
 
@@ -48,10 +50,9 @@ int main(int argc, char **argv) {
 
     int status = 0;
     for (; i < argc; i++) {
-        int rc = unlink(argv[i]);
-        if (rc < 0) {
-            if (force && rc == -ENOENT) continue;
-            status = report("rm", argv[i], rc);
+        if (unlink(argv[i]) < 0) {
+            if (force && errno == ENOENT) continue;
+            status = report("rm", argv[i]);
         }
     }
     return status ? 1 : 0;

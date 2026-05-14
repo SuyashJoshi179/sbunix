@@ -3,15 +3,14 @@
 #include <string.h>
 #include <errno.h>
 
-static int report(const char *path, int rc) {
-    (void)rc;
-    printf("mkdir: cannot create directory '%s': errno %d\n", path, errno);
+static int report(const char *path) {
+    fprintf(stderr, "mkdir: cannot create directory '%s': %s\n",
+            path, strerror(errno));
     return -1;
 }
 
 static int do_one(const char *path) {
-    int rc = mkdir(path, 0755);
-    if (rc < 0) return report(path, rc);
+    if (mkdir(path, 0755) < 0) return report(path);
     return 0;
 }
 
@@ -19,11 +18,11 @@ static int do_parents(const char *path) {
     char buf[256];
     int len = (int)strlen(path);
     if (len == 0) {
-        printf("mkdir: empty path\n");
+        fprintf(stderr, "mkdir: empty path\n");
         return -1;
     }
     if (len >= (int)sizeof(buf)) {
-        printf("mkdir: path too long: '%s'\n", path);
+        fprintf(stderr, "mkdir: path too long: '%s'\n", path);
         return -1;
     }
     memcpy(buf, path, len + 1);
@@ -33,13 +32,11 @@ static int do_parents(const char *path) {
     for (int i = 1; i < len; i++) {
         if (buf[i] == '/') {
             buf[i] = '\0';
-            int rc = mkdir(buf, 0755);
-            if (rc < 0 && errno != EEXIST) return report(buf, rc);
+            if (mkdir(buf, 0755) < 0 && errno != EEXIST) return report(buf);
             buf[i] = '/';
         }
     }
-    int rc = mkdir(buf, 0755);
-    if (rc < 0 && errno != EEXIST) return report(buf, rc);
+    if (mkdir(buf, 0755) < 0 && errno != EEXIST) return report(buf);
     return 0;
 }
 
@@ -53,12 +50,12 @@ int main(int argc, char **argv) {
             parents = 1;
             continue;
         }
-        printf("mkdir: invalid option '%s'\n", argv[i]);
-        printf("usage: mkdir [-p] dir...\n");
+        fprintf(stderr, "mkdir: invalid option '%s'\n", argv[i]);
+        fprintf(stderr, "usage: mkdir [-p] dir...\n");
         return 1;
     }
     if (i >= argc) {
-        printf("usage: mkdir [-p] dir...\n");
+        fprintf(stderr, "usage: mkdir [-p] dir...\n");
         return 1;
     }
     int status = 0;

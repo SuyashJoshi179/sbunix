@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <time.h>
+#include <errno.h>
+#include <string.h>
 
 // Convert days-since-1970-01-01 (signed) to Y-M-D using Howard Hinnant's
 // civil_from_days. Valid for the full proleptic Gregorian range.
@@ -32,7 +34,7 @@ static void put4(unsigned v) {
 int main(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) < 0) {
-        printf("date: clock_gettime failed\n");
+        fprintf(stderr, "date: clock_gettime failed: %s\n", strerror(errno));
         return 1;
     }
     long long secs = (long long)ts.tv_sec;
