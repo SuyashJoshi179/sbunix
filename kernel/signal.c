@@ -562,16 +562,32 @@ int64_t sys_sigsuspend(const sigset_t *mask) {
     return -EINTR;
 }
 
+/* True iff the user-mode SP saved in the trapframe lies within the
+ * currently installed alternate signal stack. Used by sys_sigaltstack
+ * to report SS_ONSTACK and to gate the EPERM "can't modify while on
+ * alt" check. Deriving this from the SP (rather than the sticky
+ * p->sig_on_altstack flag) handles handlers that exit non-locally via
+ * longjmp/siglongjmp — without sigreturn, the flag would otherwise
+ * remain stuck at 1 forever. */
+static int sp_on_altstack(struct pcb *p, uint64_t sp) {
+    if (p->sig_altstack.ss_flags & SS_DISABLE) return 0;
+    if (!p->sig_altstack.ss_sp || !p->sig_altstack.ss_size) return 0;
+    uint64_t base = (uint64_t)p->sig_altstack.ss_sp;
+    uint64_t end  = base + p->sig_altstack.ss_size;
+    return (sp >= base && sp < end);
+}
+
 /* ----------------------------------------------------------------
  * sys_sigaltstack(ss, oss)
  *
  * If oss != NULL, write the current altstack (with SS_ONSTACK OR'd
- * into ss_flags when sig_on_altstack is set).
+ * into ss_flags when the caller's SP is on the alt stack).
  *
  * If ss != NULL, install a new altstack. Rejected:
  *   - EPERM if currently executing on the existing altstack (any change,
  *     including SS_DISABLE, is forbidden by POSIX while on it).
- *   - EINVAL if ss_flags has unknown bits.
+ *   - EINVAL if ss_flags has unknown bits (only 0 and SS_DISABLE are
+ *     valid on input; SS_ONSTACK is a kernel-set output-only bit).
  *   - ENOMEM if ss_size < MINSIGSTKSZ (and SS_DISABLE not requested).
  *
  * oss is fetched BEFORE ss is validated so the "ss=NULL, oss=&cur"
@@ -579,20 +595,22 @@ int64_t sys_sigsuspend(const sigset_t *mask) {
  * oss is delayed until after ss validates so a bad ss does not leave
  * oss half-written.
  * ---------------------------------------------------------------- */
-int64_t sys_sigaltstack(const stack_t *ss, stack_t *oss) {
+int64_t sys_sigaltstack(const stack_t *ss, stack_t *oss, uint64_t *trapframe) {
     struct pcb *p = current_proc();
     if (!p) return -EINVAL;
 
+    int on_alt = sp_on_altstack(p, trapframe[1]);
+
     stack_t cur = p->sig_altstack;
-    if (p->sig_on_altstack)
+    if (on_alt)
         cur.ss_flags |= SS_ONSTACK;
 
     stack_t kss;
     int have_ss = (ss != 0);
     if (have_ss) {
         if (copyin(&kss, ss, sizeof(kss)) < 0) return -EFAULT;
-        if (p->sig_on_altstack) return -EPERM;
-        if (kss.ss_flags & ~(SS_DISABLE | SS_ONSTACK)) return -EINVAL;
+        if (on_alt) return -EPERM;
+        if (kss.ss_flags & ~SS_DISABLE) return -EINVAL;
         if (!(kss.ss_flags & SS_DISABLE) && kss.ss_size < MINSIGSTKSZ)
             return -ENOMEM;
     }
@@ -607,8 +625,6 @@ int64_t sys_sigaltstack(const stack_t *ss, stack_t *oss) {
             p->sig_altstack.ss_flags = SS_DISABLE;
             p->sig_altstack.ss_size  = 0;
         } else {
-            /* Strip any SS_ONSTACK userspace set on input — only the
-             * kernel reports SS_ONSTACK via oss. */
             p->sig_altstack.ss_sp    = kss.ss_sp;
             p->sig_altstack.ss_flags = 0;
             p->sig_altstack.ss_size  = kss.ss_size;

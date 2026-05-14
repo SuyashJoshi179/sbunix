@@ -225,12 +225,14 @@ static int prod_status(char *out, int cap, const struct proc_snap *s) {
 }
 
 static int prod_cmdline(char *out, int cap, const struct proc_snap *s) {
-    /* Prefer the full exe_path so the binary's real name (untruncated) is
-     * recoverable. Linux's cmdline carries the original argv; we only
-     * preserve argv[0], so emit it NUL-terminated in the same shape. Fall
-     * back to comm for the initial process before any exec. */
-    const char *src = s->exe_path[0] ? s->exe_path
-                    : (s->comm[0]    ? s->comm : "proc");
+    /* Linux's cmdline carries the original argv (NUL-separated). We don't
+     * preserve user argv, so the closest argv[0]-shaped value we have is
+     * comm (basename of the exec path, truncated to 15 chars). Don't use
+     * exe_path here: that's the full exec path and backs /proc/<pid>/exe,
+     * which can legitimately differ from argv[0] — e.g. after
+     * execv("/bin/prog", {"alias", NULL}). Fall back to a default name
+     * for the initial process before any exec. */
+    const char *src = s->comm[0] ? s->comm : "proc";
     int n = 0;
     for (int i = 0; src[i] && n < cap; i++) out[n++] = src[i];
     if (n < cap) out[n++] = '\0';

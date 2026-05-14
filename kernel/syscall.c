@@ -1509,7 +1509,14 @@ static int64_t sys_clock_settime(int clockid, const struct timespec *ts) {
     if (copyin(&kts, ts, sizeof(kts)) < 0) return -EFAULT;
     if (kts.tv_sec < 0 || kts.tv_nsec < 0 || kts.tv_nsec >= 1000000000LL)
         return -EINVAL;
-    uint64_t target = (uint64_t)kts.tv_sec * 1000000000ULL + (uint64_t)kts.tv_nsec;
+    /* Reject tv_sec values that would overflow nanoseconds in uint64_t
+     * (~584 years post-epoch) — otherwise the multiply silently wraps
+     * and sets the clock to an unrelated earlier time. */
+    uint64_t sec  = (uint64_t)kts.tv_sec;
+    uint64_t nsec = (uint64_t)kts.tv_nsec;
+    if (sec > (UINT64_MAX - nsec) / 1000000000ULL)
+        return -EINVAL;
+    uint64_t target = sec * 1000000000ULL + nsec;
     clock_set_realtime_ns(target);
     return 0;
 }
@@ -1966,7 +1973,8 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_sigaltstack:
             return sys_sigaltstack((const stack_t *)(uintptr_t)trapframe[TF_A0],
-                                   (stack_t *)(uintptr_t)trapframe[TF_A1]);
+                                   (stack_t *)(uintptr_t)trapframe[TF_A1],
+                                   trapframe);
 
         case SYS_getuid:  return sys_getuid();
         case SYS_geteuid: return sys_geteuid();
