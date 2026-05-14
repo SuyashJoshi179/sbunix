@@ -115,7 +115,8 @@ submit:
 	trap cleanup EXIT; \
 	rsync -a \
 		--exclude='.git' --exclude='build/' --exclude='zig-out/' \
-		--exclude='.zig-cache/' --exclude='.claude/' --exclude='thirdparty/' \
+		--exclude='.zig-cache/' --exclude='.claude/' \
+		--exclude='thirdparty/' --exclude='third_party/' \
 		--max-size=100K \
 		. "$$STMP/"; \
 	cd "$$STMP"; \
