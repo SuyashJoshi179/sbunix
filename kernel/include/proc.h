@@ -80,6 +80,7 @@ struct pcb {
 
     // File descriptor table (Phase 4).
     struct file   *ofile[NOFILE];   // open files; null = free slot
+    uint64_t       cloexec_mask;    // bit fd set => FD_CLOEXEC; NOFILE==64
     struct inode  *cwd;             // current working directory (refcounted)
     char           cwd_path[256];   // string form of cwd, kept in sync by chdir
 

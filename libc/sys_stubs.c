@@ -1,5 +1,6 @@
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -79,23 +80,37 @@ static int dup_to_minfd(int fd, int minfd) {
     return out;
 }
 
-/* fcntl: SBUnix has no F_GETLK/F_SETLK or per-fd flag storage. We service
- * F_DUPFD via dup, return success/zero for the descriptor-flag queries. */
+/* fcntl: F_GETFD/F_SETFD are kernel-backed (per-descriptor FD_CLOEXEC).
+ * F_DUPFD is serviced via dup; F_DUPFD_CLOEXEC additionally sets the
+ * cloexec flag on the new descriptor. F_GETFL/F_SETFL have no per-fd
+ * flag storage in the kernel and keep their permissive stub behavior;
+ * advisory locks report ENOSYS. */
 int fcntl(int fd, int cmd, ...) {
     va_list ap; va_start(ap, cmd);
     int r = -1;
     switch (cmd) {
-    case F_DUPFD:
-    case F_DUPFD_CLOEXEC: {
+    case F_DUPFD: {
         int minfd = va_arg(ap, int);
         r = dup_to_minfd(fd, minfd);
         break;
     }
+    case F_DUPFD_CLOEXEC: {
+        int minfd = va_arg(ap, int);
+        r = dup_to_minfd(fd, minfd);
+        if (r >= 0) (void)fcntl(r, F_SETFD, FD_CLOEXEC);
+        break;
+    }
     case F_GETFD:
+        r = (int)syscall(SYS_fcntl, fd, F_GETFD);
+        break;
+    case F_SETFD: {
+        int arg = va_arg(ap, int);
+        r = (int)syscall(SYS_fcntl, fd, F_SETFD, arg);
+        break;
+    }
     case F_GETFL:
         r = 0;
         break;
-    case F_SETFD:
     case F_SETFL:
         (void)va_arg(ap, int);
         r = 0;

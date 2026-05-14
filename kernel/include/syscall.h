@@ -99,6 +99,9 @@
 #define SYS_getrlimit     117   // (resource, struct rlimit *)
 #define SYS_setrlimit     118   // (resource, const struct rlimit *)
 
+// Filesystem: per-descriptor flags
+#define SYS_fcntl          119  // (fd, cmd, arg) — F_GETFD / F_SETFD only
+
 #define SYS_wait4         106   // (pid, *status, options, *rusage)
 
 // Job control: process groups / sessions
