@@ -170,14 +170,37 @@ static int append_u64(char *out, int cap, int n, uint64_t v) {
     return n + wrote;
 }
 
+/* Linux-style 16-char lowercase hex used for SigPnd/SigBlk masks. */
+static int append_hex16(char *out, int cap, int n, uint64_t v) {
+    static const char digits[] = "0123456789abcdef";
+    for (int i = 15; i >= 0; i--) {
+        if (n >= cap) return n;
+        out[n++] = digits[(v >> (i * 4)) & 0xF];
+    }
+    return n;
+}
+
 static char state_letter(proc_state_t state) {
     switch (state) {
     case PROC_READY:    return 'R';
     case PROC_RUNNING:  return 'R';
     case PROC_SLEEPING: return 'S';
     case PROC_ZOMBIE:   return 'Z';
+    case PROC_STOPPED:  return 'T';
     case PROC_UNUSED:   return 'X';
     default:            return '?';
+    }
+}
+
+static const char *state_descriptor(proc_state_t state) {
+    switch (state) {
+    case PROC_READY:    return "running";
+    case PROC_RUNNING:  return "running";
+    case PROC_SLEEPING: return "sleeping";
+    case PROC_ZOMBIE:   return "zombie";
+    case PROC_STOPPED:  return "stopped";
+    case PROC_UNUSED:   return "dead";
+    default:            return "unknown";
     }
 }
 
@@ -194,10 +217,15 @@ struct proc_snap {
     char         comm[16];
     uint64_t     vm_size_kb;
     uint64_t     vm_stk_kb;
+    uint64_t     vm_data_kb;   /* Linux-style VmData: data + heap, excludes stack. */
+    uint64_t     vm_exe_kb;    /* X-prot VMAs (text segment). */
     /* Page-granularity totals for /proc/<pid>/statm. */
     uint64_t     vm_size_pages;
     uint64_t     vm_text_pages;
     uint64_t     vm_data_pages;
+    /* Signal state for SigPnd/SigBlk. */
+    uint64_t     sig_pending;
+    uint64_t     sig_blocked;
 };
 
 static int prod_status(char *out, int cap, const struct proc_snap *s) {
@@ -207,10 +235,18 @@ static int prod_status(char *out, int cap, const struct proc_snap *s) {
     n = append_str(out, cap, n, cm);
     n = append_str(out, cap, n, "\nState:\t");
     if (n < cap) out[n++] = state_letter(s->state);
+    n = append_str(out, cap, n, " (");
+    n = append_str(out, cap, n, state_descriptor(s->state));
+    n = append_str(out, cap, n, ")\nTgid:\t");
+    /* Single-threaded per process — Tgid is just Pid. */
+    n = append_u64(out, cap, n, (uint64_t)s->pid);
     n = append_str(out, cap, n, "\nPid:\t");
     n = append_u64(out, cap, n, (uint64_t)s->pid);
     n = append_str(out, cap, n, "\nPPid:\t");
     n = append_u64(out, cap, n, (uint64_t)s->parent_pid);
+    /* Linux emits Pgrp and Pgid both, with the same value. */
+    n = append_str(out, cap, n, "\nPgrp:\t");
+    n = append_u64(out, cap, n, (uint64_t)s->pgid);
     n = append_str(out, cap, n, "\nPgid:\t");
     n = append_u64(out, cap, n, (uint64_t)s->pgid);
     n = append_str(out, cap, n, "\nSid:\t");
@@ -219,7 +255,16 @@ static int prod_status(char *out, int cap, const struct proc_snap *s) {
     n = append_u64(out, cap, n, s->vm_size_kb);
     n = append_str(out, cap, n, " kB\nVmStk:\t");
     n = append_u64(out, cap, n, s->vm_stk_kb);
-    n = append_str(out, cap, n, " kB\n");
+    n = append_str(out, cap, n, " kB\nVmData:\t");
+    n = append_u64(out, cap, n, s->vm_data_kb);
+    n = append_str(out, cap, n, " kB\nVmExe:\t");
+    n = append_u64(out, cap, n, s->vm_exe_kb);
+    /* KernelStack is always one PAGE_SIZE — single 4 KiB page per proc. */
+    n = append_str(out, cap, n, " kB\nKernelStack:\t4 kB\nThreads:\t1\nSigPnd:\t");
+    n = append_hex16(out, cap, n, s->sig_pending);
+    n = append_str(out, cap, n, "\nSigBlk:\t");
+    n = append_hex16(out, cap, n, s->sig_blocked);
+    n = append_str(out, cap, n, "\n");
     return n;
 }
 
@@ -612,9 +657,15 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
     }
     snap.vm_size_kb    = vm_bytes / 1024;
     snap.vm_stk_kb     = stk_bytes / 1024;
+    snap.vm_exe_kb     = text_bytes / 1024;
+    /* VmData = total minus text minus stack — matches Linux semantics
+     * (data + heap). statm's vm_data_pages keeps the "non-X" rollup. */
+    snap.vm_data_kb    = (vm_bytes - text_bytes - stk_bytes) / 1024;
     snap.vm_size_pages = vm_bytes / PAGE_SIZE;
     snap.vm_text_pages = text_bytes / PAGE_SIZE;
     snap.vm_data_pages = data_bytes / PAGE_SIZE;
+    snap.sig_pending   = pcb->sig_pending;
+    snap.sig_blocked   = pcb->sig_blocked;
     procfs_irq_restore(sstatus);
 
     char tmp[512];
