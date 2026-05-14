@@ -78,7 +78,7 @@ static int console_stat(struct inode *ip, struct stat *st) {
     st->st_uid   = 0;
     st->st_gid   = 0;
     st->st_size  = 0;
-    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    STAT_SET_TIMES(st, 0);
     st->st_rdev  = MKDEV(5, 1);
     st->st_blksize = 512;
     st->st_blocks  = 0;
@@ -192,7 +192,7 @@ static int loop_stat(struct inode *ip, struct stat *st) {
     st->st_nlink = 1;
     st->st_uid   = st->st_gid = 0;
     st->st_size  = 9;       /* strlen("/dev/loop") */
-    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    STAT_SET_TIMES(st, 0);
     st->st_blksize = 512;
     st->st_blocks  = 1;     /* 9 bytes rounds up to one 512-byte block */
     return 0;
@@ -223,7 +223,7 @@ static int null_stat(struct inode *ip, struct stat *st) {
     st->st_nlink = 1;
     st->st_uid   = st->st_gid = 0;
     st->st_size  = 0;
-    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    STAT_SET_TIMES(st, 0);
     st->st_rdev  = MKDEV(1, 3);
     st->st_blksize = 512;
     st->st_blocks  = 0;
@@ -258,7 +258,7 @@ static int zero_stat(struct inode *ip, struct stat *st) {
     st->st_nlink = 1;
     st->st_uid   = st->st_gid = 0;
     st->st_size  = 0;
-    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    STAT_SET_TIMES(st, 0);
     st->st_rdev  = MKDEV(1, 5);
     st->st_blksize = 512;
     st->st_blocks  = 0;
@@ -284,7 +284,7 @@ static int tty_stat(struct inode *ip, struct stat *st) {
     st->st_nlink = 1;
     st->st_uid   = st->st_gid = 0;
     st->st_size  = 0;
-    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    STAT_SET_TIMES(st, 0);
     st->st_rdev  = MKDEV(5, 0);
     st->st_blksize = 512;
     st->st_blocks  = 0;
@@ -316,7 +316,7 @@ static int devroot_stat(struct inode *ip, struct stat *st) {
     st->st_nlink = 1;
     st->st_uid   = st->st_gid = 0;
     st->st_size  = 0;
-    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    STAT_SET_TIMES(st, 0);
     st->st_blksize = 512;
     st->st_blocks  = 0;
     return 0;

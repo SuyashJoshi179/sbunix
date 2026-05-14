@@ -33,13 +33,9 @@ static void _struct_fields(void) {
     (void)st.st_uid; (void)st.st_gid; (void)st.st_size; (void)st.st_rdev;
     (void)st.st_blksize; (void)st.st_blocks;
 
-    /* DIVERGENCE: POSIX requires st_atim/st_mtim/st_ctim of type
-     * struct timespec. Our libc exposes legacy st_atime/st_mtime/st_ctime
-     * as uint64 instead. Uncomment after Phase 2 adds the timespec members.
-     * (void)st.st_atim.tv_sec; (void)st.st_atim.tv_nsec;
-     * (void)st.st_mtim.tv_sec; (void)st.st_mtim.tv_nsec;
-     * (void)st.st_ctim.tv_sec; (void)st.st_ctim.tv_nsec;
-     */
+    (void)st.st_atim.tv_sec; (void)st.st_atim.tv_nsec;
+    (void)st.st_mtim.tv_sec; (void)st.st_mtim.tv_nsec;
+    (void)st.st_ctim.tv_sec; (void)st.st_ctim.tv_nsec;
 }
 
 __attribute__((unused))

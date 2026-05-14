@@ -338,7 +338,7 @@ static int file_stat_generic(struct inode *ip, struct stat *st) {
     st->st_dev = 3; st->st_ino = (uint64_t)(uintptr_t)ip;
     st->st_mode = ip->mode; st->st_nlink = 1;
     st->st_uid = st->st_gid = 0; st->st_size = 0;
-    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    STAT_SET_TIMES(st, 0);
     st->st_blksize = 512;
     st->st_blocks  = 0;
     return 0;
@@ -429,7 +429,7 @@ static int piddir_link_stat(struct inode *ip, struct stat *st) {
     st->st_nlink = 1;
     st->st_uid = st->st_gid = 0;
     st->st_size  = (uint64_t)slen;
-    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    STAT_SET_TIMES(st, 0);
     st->st_blksize = 512;
     st->st_blocks  = (st->st_size + 511) / 512;
     return 0;
@@ -740,7 +740,7 @@ static int self_stat(struct inode *ip, struct stat *st) {
     st->st_nlink = 1;
     st->st_uid = st->st_gid = 0;
     st->st_size = self_target_len();
-    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    STAT_SET_TIMES(st, 0);
     st->st_blksize = 512;
     st->st_blocks  = (st->st_size + 511) / 512;
     return 0;
@@ -770,7 +770,7 @@ static int proc_root_stat(struct inode *ip, struct stat *st) {
     st->st_nlink = 1;
     st->st_uid = st->st_gid = 0;
     st->st_size = 0;
-    st->st_atime = st->st_mtime = st->st_ctime = 0;
+    STAT_SET_TIMES(st, 0);
     st->st_blksize = 512;
     st->st_blocks  = 0;
     return 0;
