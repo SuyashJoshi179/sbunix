@@ -3,6 +3,4 @@ build/disk_*.img
 CLAUDE.md
 zig-out/
 .zig-cache/
-docs/handoff/
-docs/susv5-html
-build/posix-check.log
+docs/susv5-html/
