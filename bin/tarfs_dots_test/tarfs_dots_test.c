@@ -21,16 +21,16 @@ int main(void) {
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
         total++;
-        if (strcmp(e->d_name, ".")  == 0) saw_dot++;
-        if (strcmp(e->d_name, "..") == 0) saw_dotdot++;
+        if (strcmp(e->d_name, ".")  == 0 && e->d_type == DT_DIR) saw_dot++;
+        if (strcmp(e->d_name, "..") == 0 && e->d_type == DT_DIR) saw_dotdot++;
     }
     closedir(d);
 
-    if (saw_dot == 1) { printf("[tarfs_dots_test] PASS '.' present exactly once\n"); pass++; }
-    else { printf("[tarfs_dots_test] FAIL '.' count=%d\n", saw_dot); fail++; }
+    if (saw_dot == 1) { printf("[tarfs_dots_test] PASS '.' present exactly once as DT_DIR\n"); pass++; }
+    else { printf("[tarfs_dots_test] FAIL '.' as DT_DIR count=%d\n", saw_dot); fail++; }
 
-    if (saw_dotdot == 1) { printf("[tarfs_dots_test] PASS '..' present exactly once\n"); pass++; }
-    else { printf("[tarfs_dots_test] FAIL '..' count=%d\n", saw_dotdot); fail++; }
+    if (saw_dotdot == 1) { printf("[tarfs_dots_test] PASS '..' present exactly once as DT_DIR\n"); pass++; }
+    else { printf("[tarfs_dots_test] FAIL '..' as DT_DIR count=%d\n", saw_dotdot); fail++; }
 
     if (fail == 0)
         printf("tarfs_dots_test: PASS (%d entries scanned, %d checks)\n", total, pass);
