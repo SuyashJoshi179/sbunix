@@ -251,6 +251,11 @@ static int64_t sys_open(const char *path, int flags) {
         if (crc < 0) return crc;
     } else if (rc < 0) {
         return rc;
+    } else if ((flags & 0100) && (flags & 0200) /* O_CREAT|O_EXCL */) {
+        /* POSIX: with both O_CREAT and O_EXCL, an existing target is a
+         * hard error — don't reopen, don't truncate. */
+        inode_put(ip);
+        return -EEXIST;
     }
 
     struct file *f = filealloc();
