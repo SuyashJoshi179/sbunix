@@ -14,6 +14,11 @@ struct timeval {
     int64_t tv_usec;
 };
 
+struct timezone {
+    int tz_minuteswest; /* minutes west of Greenwich */
+    int tz_dsttime;     /* type of DST correction */
+};
+
 struct tm {
     int tm_sec;     /* 0-60 (leap second) */
     int tm_min;     /* 0-59 */
@@ -35,7 +40,7 @@ struct tm {
 int    clock_gettime(int clockid, struct timespec *ts);
 int    clock_settime(int clockid, const struct timespec *ts);
 int    clock_getres(int clockid, struct timespec *res);
-int    gettimeofday(struct timeval *tv, void *tz);
+int    gettimeofday(struct timeval *tv, struct timezone *tz);
 int    nanosleep(const struct timespec *req, struct timespec *rem);
 time_t time(time_t *tloc);
 
