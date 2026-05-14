@@ -54,20 +54,20 @@ int close(int fd) {
     return (int)syscall_ret(ecall1(6, (long)fd));
 }
 
-int getpid(void) {
-    return (int)syscall_ret(ecall3(8, 0, 0, 0));
+pid_t getpid(void) {
+    return (pid_t)syscall_ret(ecall3(8, 0, 0, 0));
 }
 
-int fork(void) {
-    return (int)syscall_ret(ecall3(9, 0, 0, 0));
+pid_t fork(void) {
+    return (pid_t)syscall_ret(ecall3(9, 0, 0, 0));
 }
 
-int wait(int *status) {
-    return (int)syscall_ret(ecall3(7, (long)status, 0, 0));
+pid_t wait(int *status) {
+    return (pid_t)syscall_ret(ecall3(7, (long)status, 0, 0));
 }
 
-int getppid(void) {
-    return (int)syscall_ret(ecall3(11, 0, 0, 0));
+pid_t getppid(void) {
+    return (pid_t)syscall_ret(ecall3(11, 0, 0, 0));
 }
 
 int sched_yield(void) {
@@ -78,8 +78,8 @@ int sleep_ms(unsigned long ms) {
     return (int)syscall_ret(ecall3(13, (long)ms, 0, 0));
 }
 
-int usleep(unsigned long us) {
-    return sleep_ms((us + 999UL) / 1000UL);
+int usleep(useconds_t us) {
+    return sleep_ms(((unsigned long)us + 999UL) / 1000UL);
 }
 
 int dup(int fd) {
@@ -90,8 +90,8 @@ int dup2(int oldfd, int newfd) {
     return (int)syscall_ret(ecall2(15, (long)oldfd, (long)newfd));
 }
 
-long lseek(int fd, long off, int whence) {
-    return syscall_ret(ecall3(16, (long)fd, off, (long)whence));
+off_t lseek(int fd, off_t off, int whence) {
+    return (off_t)syscall_ret(ecall3(16, (long)fd, (long)off, (long)whence));
 }
 
 int fstat(int fd, struct stat *st) {
@@ -180,8 +180,8 @@ int execv(const char *path, char *const argv[]) {
     return (int)syscall_ret(ecall2(24, (long)path, (long)argv));
 }
 
-void *sbrk(long incr) {
-    long r = ecall1(70, incr);
+void *sbrk(intptr_t incr) {
+    long r = ecall1(70, (long)incr);
     if (r < 0 && r > -4096) {
         errno = (int)(-r);
         return (void *)-1;
