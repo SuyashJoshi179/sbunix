@@ -41,12 +41,9 @@
 
 /* Prototype pins: LHS types come verbatim from
  * docs/susv5-html/basedefs/time.h.html. */
-/* DIVERGENCE: clockid_t typedef missing from our libc; uncomment after
- * Phase 2 adds the typedef to <sys/types.h>.
- * PIN int        (*_pin_clock_gettime)(clockid_t, struct timespec *) = clock_gettime;
- * PIN int        (*_pin_clock_settime)(clockid_t, const struct timespec *) = clock_settime;
- * PIN int        (*_pin_clock_getres)(clockid_t, struct timespec *) = clock_getres;
- */
+PIN int        (*_pin_clock_gettime)(clockid_t, struct timespec *) = clock_gettime;
+PIN int        (*_pin_clock_settime)(clockid_t, const struct timespec *) = clock_settime;
+PIN int        (*_pin_clock_getres)(clockid_t, struct timespec *) = clock_getres;
 PIN int        (*_pin_nanosleep)(const struct timespec *, struct timespec *) = nanosleep;
 PIN time_t     (*_pin_time)(time_t *) = time;
 PIN clock_t    (*_pin_clock)(void) = clock;

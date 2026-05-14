@@ -37,9 +37,9 @@ struct tm {
 /* clock() unit; matches sys/times.h for the same reason: kernel HZ. */
 #define CLOCKS_PER_SEC 100
 
-int    clock_gettime(int clockid, struct timespec *ts);
-int    clock_settime(int clockid, const struct timespec *ts);
-int    clock_getres(int clockid, struct timespec *res);
+int    clock_gettime(clockid_t clockid, struct timespec *ts);
+int    clock_settime(clockid_t clockid, const struct timespec *ts);
+int    clock_getres(clockid_t clockid, struct timespec *res);
 int    gettimeofday(struct timeval *tv, struct timezone *tz);
 int    nanosleep(const struct timespec *req, struct timespec *rem);
 time_t time(time_t *tloc);
