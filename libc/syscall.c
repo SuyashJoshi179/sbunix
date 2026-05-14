@@ -38,12 +38,12 @@ static long ecall3(long num, long a0, long a1, long a2) {
     return _a0;
 }
 
-long write(int fd, const void *buf, long len) {
-    return syscall_ret(ecall3(2, (long)fd, (long)buf, len));
+ssize_t write(int fd, const void *buf, size_t len) {
+    return syscall_ret(ecall3(2, (long)fd, (long)buf, (long)len));
 }
 
-long read(int fd, void *buf, long len) {
-    return syscall_ret(ecall3(5, (long)fd, (long)buf, len));
+ssize_t read(int fd, void *buf, size_t len) {
+    return syscall_ret(ecall3(5, (long)fd, (long)buf, (long)len));
 }
 
 int open(const char *path, int flags, ...) {
@@ -248,8 +248,8 @@ int access(const char *path, int mode) {
     return -1;
 }
 
-long readlink(const char *path, char *buf, long n) {
-    return syscall_ret(ecall3(112, (long)path, (long)buf, n));
+ssize_t readlink(const char *path, char *buf, size_t n) {
+    return syscall_ret(ecall3(112, (long)path, (long)buf, (long)n));
 }
 
 int wait4(int pid, int *status, int options, void *rusage) {

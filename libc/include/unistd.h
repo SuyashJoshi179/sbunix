@@ -17,8 +17,8 @@
 #define SEEK_END 2
 #endif
 
-long  write(int fd, const void *buf, long len);
-long  read(int fd, void *buf, long len);
+ssize_t write(int fd, const void *buf, size_t len);
+ssize_t read(int fd, void *buf, size_t len);
 int   open(const char *path, int flags, ...);
 int   close(int fd);
 int   getpid(void);
@@ -70,7 +70,7 @@ int   setgid(gid_t gid);
 void  _exit(int status) __attribute__((noreturn));
 int   isatty(int fd);
 int   access(const char *path, int mode);
-long  readlink(const char *path, char *buf, long n);
+ssize_t readlink(const char *path, char *buf, size_t n);
 
 int   gethostname(char *buf, size_t len);
 int   sethostname(const char *name, size_t len);
