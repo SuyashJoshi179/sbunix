@@ -4,8 +4,8 @@ Generated from `make posix-check` output run on commit `b131620`.
 Reference: `docs/susv5-html/basedefs/<header>.h.html` (IEEE Std 1003.1-2024).
 
 **Phase 2 status (post-fixes):** `make posix-check` reports **38 passed, 0 failed**
-on HEAD. 8 of 9 Phase 2 work items shipped; 1 deferred (struct-stat-timespec —
-see "Phase 2 completion log" at end of this document).
+on HEAD. **All 9 Phase 2 work items shipped** in this PR — see "Phase 2
+completion log" at end of this document.
 
 ## Headline
 
@@ -365,7 +365,7 @@ Landed in the same PR as Phase 1 (per user request to keep work bundled).
 |---|------|--------|---------|
 | 1 | `<unistd.h>` read/write/readlink size param | **shipped** | `55c9224` |
 | 2 | `<sys/types.h>` clockid_t typedef + `<time.h>` clock_* signatures | **shipped** | `3c76a82` |
-| 3 | `<sys/stat.h>` struct stat timespec fields | **deferred** | — |
+| 3 | `<sys/stat.h>` struct stat timespec fields | **shipped** | `16628c0` |
 | 4 | `<stdio.h>` getline/getdelim return type | **shipped** | `9ad6766` |
 | 5 | `<stdlib.h>` multibyte wchar_t signatures | **shipped** | `fd371eb` |
 | 6 | `<sys/mman.h>` size_t/off_t exposure + signatures | **shipped** | `b80ec24` |
@@ -373,9 +373,9 @@ Landed in the same PR as Phase 1 (per user request to keep work bundled).
 | 8 | `<syslog.h>` function declarations | **shipped (audit error correction)** | `1f76c23` |
 | 9 | `<unistd.h>` cosmetic typedef renames (pid_t/off_t/intptr_t/useconds_t) | **shipped** | `98061c2` |
 
-**Item 3 deferred** because it touches 7 kernel files (devfs, tarfs, sbfs, tmpfs, procfs) and the kernel/userspace shared `struct stat` layout. The layout grows 24 bytes if `uint64_t st_atime/st_mtime/st_ctime` are replaced with `struct timespec st_atim/st_mtim/st_ctim`. Userspace consumers (`bin/timestamp_test`, `bin/stat`) use `st_atime` directly and require back-compat macros (`#define st_atime st_atim.tv_sec`).
+**Item 3 implementation notes:** Kernel-side struct stat (kernel/include/stat.h) and userspace mirror (libc/include/sys/stat.h) both gain `struct timespec st_atim/st_mtim/st_ctim`. Layout grows 24 bytes. Back-compat macros (`#define st_atime st_atim.tv_sec`, etc.) preserve all existing readers (bin/timestamp_test, bin/stat) without source edits. A STAT_SET_TIMES helper in kernel/include/stat.h collapses the 19 kernel-side assignment sites from 3 lines each to 1 line each, also ensuring tv_nsec is initialized to 0 instead of uninitialized.
 
-Higher regression risk than the other items. Recommended for a separate, focused PR.
+Verified via qemu boot: 278 selftests pass, all three mounts work, shell prompt reached. Struct-stat ABI change does not regress kernel↔userspace syscall path.
 
 **Item 8 was an audit error correction** rather than a code fix: Phase 1 recorded `openlog`/`closelog`/`syslog`/`setlogmask` as `missing-decl`, but both declarations (`libc/include/syslog.h:42-46`) and implementations (`libc/syslog.c`) already existed. The Phase 1 test file had them commented; uncommenting was the entire fix.
 
