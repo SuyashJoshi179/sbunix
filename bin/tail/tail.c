@@ -30,16 +30,21 @@ static int tail_fd(int fd, long n) {
             total = keep;
         }
     }
-    if (n <= 0) return 0;
-    /* Walk back through (n+1) newlines so we land *after* the n-th-from-
-     * end one. For files without a trailing newline we still want the
-     * last n lines, so the initial "current line" counts implicitly. */
+    if (n <= 0 || total == 0) return 0;
+    /* Files ending in '\n' have one newline per line, so the n-th line
+     * from the end starts after the (n+1)-th newline counted from the
+     * end. Files without a trailing newline have a partial last line
+     * after the last newline — its trailing fragment counts as one of
+     * the lines, so we only need n newlines from the end. */
+    long target = (buf[total - 1] == '\n') ? n : (n - 1);
     long start = 0;
-    long count = 0;
-    for (long i = total - 1; i >= 0; i--) {
-        if (buf[i] == '\n') {
-            count++;
-            if (count > n) { start = i + 1; break; }
+    if (target > 0) {
+        long count = 0;
+        for (long i = total - 1; i >= 0; i--) {
+            if (buf[i] == '\n') {
+                count++;
+                if (count > target) { start = i + 1; break; }
+            }
         }
     }
     write(1, buf + start, total - start);

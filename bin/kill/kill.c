@@ -19,7 +19,9 @@ int main(int argc, char **argv) {
     int i = 1;
     if (i < argc && argv[i][0] == '-' && argv[i][1] >= '0' && argv[i][1] <= '9') {
         sig = atoi(argv[i] + 1);
-        if (sig <= 0 || sig >= 64) {
+        /* POSIX: signal 0 is the "is this pid alive?" probe — permit it.
+         * Reject only negative or out-of-range values. */
+        if (sig < 0 || sig >= 64) {
             fprintf(stderr, "kill: invalid signal '%s'\n", argv[i]);
             return 1;
         }
