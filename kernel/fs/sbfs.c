@@ -51,7 +51,7 @@ static inline void fs_unlock(void) {
  * mtime — equivalent to mounting Linux with "noatime", which is the
  * right tradeoff for a teaching kernel without writeback batching. */
 static inline uint64_t sbfs_now(void) {
-    return rtc_read_ns() / 1000000000ULL;
+    return realtime_ns() / 1000000000ULL;
 }
 
 /* -----------------------------------------------------------------------
