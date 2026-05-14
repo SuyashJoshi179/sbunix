@@ -270,38 +270,49 @@ static int tarfs_getdents(struct inode *dir, uint64_t off, void *buf,
                            uint64_t n, uint64_t *out_next) {
     struct tarfs_ino_data *d = dir->fs_data;
 
-    // Walk to the 'off'-th child.
-    struct tarfs_child *c = d->children;
-    uint64_t idx = 0;
-    while (c && idx < off) { c = c->next; idx++; }
+    uint64_t written = 0;
+    uint64_t cursor  = off;
 
-    uint64_t written  = 0;
-    uint64_t next_off = off;
+    /* Emit one dirent if it fits; otherwise stop. `cursor` is an opaque
+     * stream position: 0 = ".", 1 = "..", 2+ = children[cursor - 2]. */
+    #define EMIT(name_str, ino_ptr, dtype) do {                          \
+        int namelen = 0;                                                  \
+        while ((name_str)[namelen]) namelen++;                            \
+        namelen++;                                                        \
+        int reclen = (DIRENT64_FIXED_LEN + namelen + 7) & ~7;             \
+        if (written + (uint64_t)reclen > n) goto done;                    \
+        struct dirent64 *de = (struct dirent64 *)((char *)buf + written); \
+        de->d_ino    = (uint64_t)(uintptr_t)(ino_ptr);                    \
+        de->d_off    = cursor + 1;                                        \
+        de->d_reclen = (uint16_t)reclen;                                  \
+        de->d_type   = (dtype);                                           \
+        for (int i = 0; i < namelen; i++) de->d_name[i] = (name_str)[i];  \
+        written += (uint64_t)reclen;                                      \
+        cursor++;                                                         \
+    } while (0)
+
+    /* Mirror tarfs_lookup: ".." of the root resolves to the root itself. */
+    if (cursor == 0) EMIT(".",  dir,                         DT_DIR);
+    if (cursor == 1) EMIT("..", d->parent ? d->parent : dir, DT_DIR);
+
+    /* Walk to children[cursor - 2]. */
+    uint64_t skip = (cursor >= 2) ? cursor - 2 : 0;
+    struct tarfs_child *c = d->children;
+    while (c && skip > 0) { c = c->next; skip--; }
 
     while (c) {
-        int namelen = 0;
-        while (c->name[namelen]) namelen++;
-        namelen++;  // include null terminator
-
-        int reclen = (DIRENT64_FIXED_LEN + namelen + 7) & ~7;
-        if (written + (uint64_t)reclen > n) break;
-
-        struct dirent64 *de = (struct dirent64 *)((char *)buf + written);
-        de->d_ino    = (uint64_t)(uintptr_t)c->ino;
-        de->d_off    = next_off + 1;
-        de->d_reclen = (uint16_t)reclen;
-        de->d_type   = (c->ino->type == I_DIR) ? DT_DIR :
-                       (c->ino->type == I_CHR) ? DT_CHR :
-                       (c->ino->type == I_LNK) ? DT_LNK : DT_REG;
-        for (int i = 0; i < namelen; i++) de->d_name[i] = c->name[i];
-
-        written  += (uint64_t)reclen;
-        next_off++;
+        EMIT(c->name, c->ino,
+             (c->ino->type == I_DIR) ? DT_DIR :
+             (c->ino->type == I_CHR) ? DT_CHR :
+             (c->ino->type == I_LNK) ? DT_LNK : DT_REG);
         c = c->next;
     }
 
-    if (out_next) *out_next = next_off;
+done:
+    if (out_next) *out_next = cursor;
     return (int)written;
+
+    #undef EMIT
 }
 
 static int tarfs_readpage(struct inode *ip, uint64_t pgidx, void *page) {
