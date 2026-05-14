@@ -1,4 +1,5 @@
 KLANG ?= c
+-include Makefile.local Makefile.custom
 SUBMIT_DIR ?= /submit
 
 CROSS   := riscv64-unknown-elf-
@@ -7,7 +8,7 @@ LD      := $(CROSS)ld
 AR      := $(CROSS)ar
 OBJCOPY := $(CROSS)objcopy
 CFLAGS  := -gdwarf-4 -Wall -Werror -Os -ffreestanding -fno-builtin -nostdlib -nostdinc -isystem $(shell $(CC) -print-file-name=include) -mcmodel=medany -march=rv64imac_zicsr_zifencei -mabi=lp64 -ffunction-sections -fdata-sections -fno-tree-switch-conversion
-RUSTFLAGS := --target riscv64imac-unknown-none-elf -C panic=abort -C linker=$(CC) -C code-model=medium -C link-arg=-nostartfiles -C link-arg=-march=rv64imac -C link-arg=-mabi=lp64
+RUSTFLAGS := --edition 2021 --target riscv64imac-unknown-none-elf -C panic=abort -C linker=$(CC) -C code-model=medium -C link-arg=-nostartfiles -C link-arg=-march=rv64imac -C link-arg=-mabi=lp64
 
 KERN_ASM := $(patsubst %,build/%.o,$(wildcard kernel/*.S))
 LIBC_OBJ := $(patsubst %,build/%.o,$(filter-out libc/crt.S,$(wildcard libc/*.c libc/*.S)))
@@ -30,9 +31,8 @@ endif
 DISK_SIZE ?= 16
 DISK_IMG  := build/disk.img
 
--include Makefile.local
-
 all: build/kernel.elf
+
 
 build/kernel/%.c.o: kernel/%.c
 	@mkdir -p $(@D)
@@ -65,14 +65,14 @@ zig-out/lib/libsbunix.a: $(wildcard kernel/*.zig) build.zig
 .SECONDEXPANSION:
 $(C_BIN): build/rootfs/bin/%: $$(wildcard bin/%/*.c) build/libc/crt.S.o build/libc.a
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -Ilibc/include build/libc/crt.S.o bin/$*/*.c build/libc.a -Wl,--gc-sections -o $@
+	$(CC) $(CFLAGS) -Ilibc/include build/libc/crt.S.o bin/$*/*.c build/libc.a -Wl,--gc-sections -Wl,--no-relax $(USER_LDFLAGS) -o $@
 
 $(RS_BIN): build/rootfs/bin/%: $$(wildcard bin/%/*.rs) build/libc/crt.S.o build/libc.a
 	@mkdir -p $(@D)
 	rustc $(RUSTFLAGS) -C link-arg=build/libc/crt.S.o -C link-arg=build/libc.a bin/$*/$*.rs -o $@
 
 build/tarfs.o: $(USER_BIN)
-	cp -a rootfs/. build/rootfs/
+	cp -a --remove-destination rootfs/. build/rootfs/
 	tar cf build/rootfs.tar -C build/rootfs .
 	cd build && $(OBJCOPY) -I binary -O elf64-littleriscv -B riscv \
 		--rename-section .data=.tarfs \
@@ -116,7 +116,7 @@ submit:
 	rsync -a \
 		--exclude='.git' --exclude='build/' --exclude='zig-out/' \
 		--exclude='.zig-cache/' --exclude='.claude/' --exclude='thirdparty/' \
-		--max-size=100K \
+		--max-size=1M \
 		. "$$STMP/"; \
 	cd "$$STMP"; \
 	git init -q; \
