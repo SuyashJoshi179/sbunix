@@ -91,8 +91,17 @@ static const char *tarfs_alloc_symlink(const char *raw, uint64_t *out_len) {
     }
     char *slot = symlink_pool[symlink_count++];
     int n = 0;
-    /* tar linkname is up to 100 bytes, may not be null-terminated. */
+    /* tar linkname is up to 100 bytes, may not be null-terminated. We
+     * don't parse GNU 'K' or pax 'x' long-link records, so a link with
+     * a target > 100 bytes would be silently truncated and resolve to
+     * the wrong path. Refuse to keep the entry in that case rather than
+     * planting a broken link in the filesystem. */
     while (n < 100 && raw[n]) { slot[n] = raw[n]; n++; }
+    if (n == 100) {
+        printk("tarfs: symlink target too long (>100 bytes), dropping entry\n");
+        symlink_count--;
+        return 0;
+    }
     slot[n] = '\0';
     if (out_len) *out_len = (uint64_t)n;
     return slot;
@@ -164,6 +173,31 @@ static void tarfs_dir_add(struct inode *dir, const char *name,
         t->next = c;
     }
     ((struct tarfs_ino_data *)child->fs_data)->parent = dir;
+}
+
+/* Walk from root looking up each component. Returns the inode at the
+ * end of the path, or NULL if any component is missing. Used for
+ * resolving hardlink targets during boot-time archive parsing. */
+static struct inode *tarfs_path_lookup(const char *path) {
+    struct inode *cur = tarfs_root;
+    const char *p = path;
+    while (*p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        char name[101];
+        int n = 0;
+        while (*p && *p != '/' && n < 100) name[n++] = *p++;
+        name[n] = '\0';
+        if (!n) break;
+        struct tarfs_ino_data *d = cur->fs_data;
+        struct inode *found = 0;
+        for (struct tarfs_child *c = d->children; c; c = c->next) {
+            if (streq(c->name, name)) { found = c->ino; break; }
+        }
+        if (!found) return 0;
+        cur = found;
+    }
+    return cur;
 }
 
 /* Walk from root to ensure path exists as a directory chain.
@@ -456,7 +490,71 @@ void tarfs_init(void) {
                 }
             }
         }
-        /* Hard links ('1') still skipped. */
+        else if (h->typeflag == '1') {
+            /* Hard link. tarfs doesn't support multi-name inodes, but we can
+             * approximate by resolving linkname to its existing inode and
+             * planting a directory entry that points at the same inode.
+             * The on-disk file size belongs to the *original* entry; data
+             * here is empty for a hardlink record.
+             *
+             * h->name and h->linkname are 100-byte fields that may not be
+             * NUL-terminated. Bound each scan to the bytes remaining in
+             * its field (after any strip_prefix offset) and refuse rather
+             * than over-read into adjacent tar-header fields — same
+             * discipline tarfs_alloc_symlink applies for symlinks. */
+            int fmax = (int)sizeof(h->name) - (int)(raw - h->name);
+            char fpath[101];
+            int n = 0;
+            while (n < fmax && raw[n]) { fpath[n] = raw[n]; n++; }
+            int bad = 0;
+            if (n == fmax) {
+                printk("tarfs: hardlink source name too long, dropping entry\n");
+                bad = 1;
+            } else {
+                fpath[n] = '\0';
+            }
+
+            char tpath[101];
+            int tn = 0;
+            if (!bad) {
+                const char *traw = strip_prefix(h->linkname);
+                int tmax = (int)sizeof(h->linkname) - (int)(traw - h->linkname);
+                while (tn < tmax && traw[tn]) { tpath[tn] = traw[tn]; tn++; }
+                if (tn == tmax) {
+                    printk("tarfs: hardlink target too long, dropping entry\n");
+                    bad = 1;
+                } else {
+                    tpath[tn] = '\0';
+                }
+            }
+
+            if (!bad) {
+                struct inode *target = tarfs_path_lookup(tpath);
+                if (!target) {
+                    printk("tarfs: hardlink %s -> %s: target missing\n",
+                           fpath, tpath);
+                } else {
+                    int slash = -1;
+                    for (int i = n - 1; i >= 0; i--) {
+                        if (fpath[i] == '/') { slash = i; break; }
+                    }
+                    const char *basename;
+                    struct inode *parent;
+                    if (slash < 0) {
+                        basename = fpath;
+                        parent   = tarfs_root;
+                    } else {
+                        fpath[slash] = '\0';
+                        basename     = fpath + slash + 1;
+                        parent       = tarfs_ensure_dir(fpath);
+                    }
+                    if (parent && basename[0]) {
+                        target->nlink++;
+                        tarfs_dir_add(parent, basename, target);
+                    }
+                }
+            }
+        }
 
         unsigned long data_blocks = (size + 511) / 512;
         p += 512 + data_blocks * 512;

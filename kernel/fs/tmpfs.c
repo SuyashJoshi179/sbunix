@@ -67,7 +67,30 @@ struct tmpfs_inode {
 /* ------------------------------------------------------------------ */
 
 static struct tmpfs_inode inodes[TMPFS_NINODES];
+/* Static dirent pool. Each inode owns at least one dirent at create time;
+ * hardlinks (tmpfs_op_link) consume an extra slot per additional name.
+ * Sizing at TMPFS_NINODES is enough for the common case of one name per
+ * inode and returns -ENOSPC gracefully if a link-heavy workload exhausts
+ * the pool. Replaces the previous one-page-per-dirent allocation (T3.25). */
+static struct tmpfs_dirent dirent_pool[TMPFS_NINODES];
 static int                tmpfs_ready = 0;
+
+static struct tmpfs_dirent *tmpfs_dirent_alloc(void) {
+    for (int i = 0; i < TMPFS_NINODES; i++) {
+        if (!dirent_pool[i].target) {
+            memset(&dirent_pool[i], 0, sizeof(dirent_pool[i]));
+            return &dirent_pool[i];
+        }
+    }
+    return 0;
+}
+
+static void tmpfs_dirent_free(struct tmpfs_dirent *d) {
+    /* Mark free via target=NULL; the pool sweep above relies on it. */
+    d->target = 0;
+    d->next   = 0;
+    d->name[0] = 0;
+}
 
 /* IRQ-off lock — same pattern as sbfs. */
 static int      fs_depth = 0;
@@ -169,7 +192,7 @@ static void tmpfs_ifree(struct tmpfs_inode *ti) {
         struct tmpfs_dirent *d = ti->dirents;
         while (d) {
             struct tmpfs_dirent *next = d->next;
-            page_free(d);
+            tmpfs_dirent_free(d);
             d = next;
         }
         ti->dirents = 0;
@@ -236,13 +259,8 @@ static struct tmpfs_dirent *tmpfs_dirfind(struct tmpfs_inode *dir, const char *n
  * Assumes caller has already verified name doesn't exist. */
 static int tmpfs_dirlink(struct tmpfs_inode *dir, const char *name,
                          struct tmpfs_inode *target) {
-    /* One dirent fits comfortably in one 4 KiB page (16 bytes header +
-     * 28 bytes name = 44 bytes). We use a whole page per dirent for
-     * simplicity — wasteful but TMPFS_NINODES caps total dirents. */
-    void *raw = page_alloc();
-    if (!raw) return -ENOSPC;
-    struct tmpfs_dirent *de = (struct tmpfs_dirent *)raw;
-    memset(de, 0, sizeof(*de));
+    struct tmpfs_dirent *de = tmpfs_dirent_alloc();
+    if (!de) return -ENOSPC;
     de->target = target;
     int i = 0;
     while (i < TMPFS_DIRSIZ - 1 && name[i]) { de->name[i] = name[i]; i++; }
@@ -260,9 +278,10 @@ static int tmpfs_dirunlink(struct tmpfs_inode *dir, const char *name) {
         struct tmpfs_dirent *d = *slot;
         if (d->target && name_eq(d->name, name)) {
             *slot = d->next;
-            page_free(d);
-            if (dir->vnode.size >= sizeof(*d))
-                dir->vnode.size -= sizeof(*d);
+            uint64_t sz = sizeof(*d);
+            tmpfs_dirent_free(d);
+            if (dir->vnode.size >= sz)
+                dir->vnode.size -= sz;
             return 0;
         }
         slot = &d->next;

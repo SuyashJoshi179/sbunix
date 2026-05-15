@@ -117,6 +117,14 @@ struct pcb {
 
     // POSIX rlimit table (indexed by resource id; sparse).
     struct rlimit  rlim[RLIMITS_NR];
+
+    // CPU time accounting in HZ ticks (HZ = TICKS_PER_SEC = CLOCKS_PER_SEC).
+    // Incremented by timer_handler against current_proc based on SPP at trap
+    // time. cu/cstime accumulate reaped children's totals (POSIX times()).
+    uint64_t       utime_ticks;
+    uint64_t       stime_ticks;
+    uint64_t       cutime_ticks;
+    uint64_t       cstime_ticks;
     struct pcb    *next;            // intrusive linked list
 };
 

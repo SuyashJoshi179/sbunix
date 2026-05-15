@@ -159,6 +159,49 @@ void *realloc(void *ptr, unsigned long size) {
     if (want == 0) return 0;
     if (old_size >= want) return ptr;
 
+    /* In-place grow paths (arena-only — direct mmap'd blocks need a real
+     * remap which we don't have, so they fall through to malloc+copy):
+     *   1. If this chunk sits at arena_top, just bump arena_top.
+     *   2. If the next free-list chunk is contiguous and the combined
+     *      size is enough, absorb it (and split the remainder back into
+     *      the free list if there is one). */
+    if (!(c->size & DIRECT_BIT)) {
+        char *c_end = (char *)c + HDR_SIZE + old_size;
+
+        if (c_end == arena_top) {
+            unsigned long extra = want - old_size;
+            if ((unsigned long)(arena_end - arena_top) >= extra) {
+                arena_top += extra;
+                c->size = (want) | USED_BIT;
+                return ptr;
+            }
+        }
+
+        struct chunk *prev = 0, *cur = free_list;
+        while (cur && (char *)cur < c_end) { prev = cur; cur = cur->next; }
+        if (cur && (char *)cur == c_end) {
+            unsigned long combined = old_size + HDR_SIZE + cur->size;
+            if (combined >= want) {
+                unsigned long leftover = combined - want;
+                if (leftover >= HDR_SIZE + ALIGN) {
+                    /* Split: keep the front, return the tail to the free list. */
+                    struct chunk *tail = (struct chunk *)((char *)c + HDR_SIZE + want);
+                    tail->size = leftover - HDR_SIZE;
+                    tail->next = cur->next;
+                    if (prev) prev->next = tail;
+                    else      free_list  = tail;
+                    c->size = want | USED_BIT;
+                } else {
+                    /* Absorb fully. */
+                    if (prev) prev->next = cur->next;
+                    else      free_list  = cur->next;
+                    c->size = combined | USED_BIT;
+                }
+                return ptr;
+            }
+        }
+    }
+
     void *newp = malloc(size);
     if (!newp) return 0;
     memcpy(newp, ptr, old_size);

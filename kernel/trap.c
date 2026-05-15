@@ -14,7 +14,7 @@
 #define SIE_SEIE  (1 << 9)   /* S-mode external interrupt enable */
 
 /* Catch corrupted return-to-user PC before sret. User text+stack live below
- * USER_STACK_TOP (0x40000000). Anything at/above is a kernel bug. */
+ * USER_STACK_TOP (0x4000000000, 256 GB). Anything at/above is a kernel bug. */
 static void check_user_return(uint64_t *tf, const char *tag) {
     uint64_t pc = tf[TF_SEPC];
     if (pc >= USER_STACK_TOP) {
@@ -67,7 +67,7 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
         int irq_from_user = (trapframe[TF_SSTATUS] & SSTATUS_SPP) == 0;
         switch (cause_code) {
             case 5:   /* supervisor timer interrupt */
-                timer_handler();
+                timer_handler(irq_from_user);
                 /* Preempt only when the timer fired in user mode. A timer
                  * trap raised while we were already executing kernel code
                  * (SPP=1) must not call yield(): that would let another

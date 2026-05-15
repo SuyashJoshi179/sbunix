@@ -7,6 +7,7 @@
 #define SSTATUS_SPIE (1 << 5)
 #define SSTATUS_SPP  (1 << 8)
 #define SSTATUS_SUM  (1 << 18)  // Supervisor User Memory: lets S-mode access U-mode pages
+#define SSTATUS_MXR  (1 << 19)  // Make eXecutable Readable: lets S-mode read X-only pages
 #define SIE_STIE     (1 << 5)
 
 static inline uint64_t read_sstatus(void) {

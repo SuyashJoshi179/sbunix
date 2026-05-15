@@ -88,6 +88,7 @@ int    ungetc(int c, FILE *stream);
 void   setbuf(FILE *stream, char *buf);
 int    setvbuf(FILE *stream, char *buf, int mode, size_t size);
 char  *tmpnam(char *s);
+FILE  *tmpfile(void);
 
 #define _IOFBF 0
 #define _IOLBF 1

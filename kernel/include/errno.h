@@ -33,6 +33,7 @@
 #define EXDEV        18    /* cross-device link */
 #define ENOEXEC       8    /* exec format error */
 #define EAGAIN       11    /* resource temporarily unavailable */
+#define E2BIG         7    /* argument list too long */
 
 /* Kernel-internal sentinels (must never reach userspace). Translated to
  * a real errno (typically EINTR) or used to trigger syscall restart by

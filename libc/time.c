@@ -4,6 +4,13 @@
 #include <stddef.h>
 #include "syscall_priv.h"
 
+static long ecall1(long num, long a0) {
+    register long _a7 asm("a7") = num;
+    register long _a0 asm("a0") = a0;
+    asm volatile("ecall" : "+r"(_a0) : "r"(_a7) : "memory");
+    return _a0;
+}
+
 static long ecall2(long num, long a0, long a1) {
     register long _a7 asm("a7") = num;
     register long _a0 asm("a0") = a0;
@@ -40,17 +47,12 @@ time_t time(time_t *tloc) {
 }
 
 clock_t times(struct tms *buf) {
-    if (buf) {
-        buf->tms_utime  = 0;
-        buf->tms_stime  = 0;
-        buf->tms_cutime = 0;
-        buf->tms_cstime = 0;
-    }
-    struct timespec ts;
-    int rc = clock_gettime(1 /* CLOCK_MONOTONIC */, &ts);
-    if (rc < 0) return (clock_t)-1;
-    return (clock_t)(ts.tv_sec * CLOCKS_PER_SEC
-                   + ts.tv_nsec * CLOCKS_PER_SEC / 1000000000L);
+    /* Kernel returns ticks since boot in a0 and fills the four counters
+     * in *buf (a struct k_tms with the same layout as struct tms). On
+     * failure (-EFAULT for a bad pointer) propagate (clock_t)-1. */
+    long r = ecall1(116 /* SYS_times */, (long)buf);
+    if (r < 0) return (clock_t)-1;
+    return (clock_t)r;
 }
 
 /* ------------------------------------------------------------------

@@ -366,20 +366,21 @@ int printf(const char *fmt, ...) {
 int fputs(const char *str, FILE *stream) {
     int fd = stream ? stream->fd : 1;
     size_t len = strlen(str);
-    write(fd, str, (long)len);
+    long w = write(fd, str, (long)len);
+    if (w < 0 || (size_t)w != len) return EOF;
     return (int)len;
 }
 
 int puts(const char *str) {
-    fputs(str, stdout);
-    write(1, "\n", 1);
+    if (fputs(str, stdout) == EOF) return EOF;
+    if (write(1, "\n", 1) != 1) return EOF;
     return 0;
 }
 
 int fputc(int c, FILE *stream) {
     int fd = stream ? stream->fd : 1;
     char ch = (char)c;
-    write(fd, &ch, 1);
+    if (write(fd, &ch, 1) != 1) return EOF;
     return (unsigned char)ch;
 }
 
@@ -464,12 +465,23 @@ FILE *fopen(const char *path, const char *mode) {
     if (!path || !mode) return NULL;
     int flags = 0;
     int has_plus = 0;
-    for (const char *p = mode; *p; p++) if (*p == '+') has_plus = 1;
+    int has_excl = 0;
+    for (const char *p = mode; *p; p++) {
+        if (*p == '+') has_plus = 1;
+        else if (*p == 'x') has_excl = 1;
+    }
     switch (mode[0]) {
     case 'r': flags = has_plus ? O_RDWR : O_RDONLY; break;
     case 'w': flags = (has_plus ? O_RDWR : O_WRONLY) | O_CREAT | O_TRUNC; break;
     case 'a': flags = (has_plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND; break;
     default: return NULL;
+    }
+    /* C11 'x' (exclusive create): only valid with 'w' since 'r' doesn't
+     * create and 'a' would silently succeed on an existing file even
+     * with O_EXCL semantics. */
+    if (has_excl) {
+        if (mode[0] != 'w') return NULL;
+        flags |= O_EXCL;
     }
     int fd = open(path, flags);
     if (fd < 0) return NULL;
@@ -577,8 +589,55 @@ int setvbuf(FILE *stream, char *buf, int mode, size_t size) {
     return 0;
 }
 
+/* tmpnam: build "/tmp/tmp.<pid>.<counter>" into the caller-supplied
+ * buffer (or a static slot when s == NULL). Each call advances the
+ * counter so two successive tmpnam invocations don't collide. */
 char *tmpnam(char *s) {
-    (void)s;
+    static char buf[L_tmpnam];
+    static unsigned counter = 0;
+    char *out = s ? s : buf;
+
+    long pid = getpid();
+    int i = 0;
+    static const char prefix[] = "/tmp/tmp.";
+    for (unsigned k = 0; k < sizeof(prefix) - 1 && i < L_tmpnam - 1; k++)
+        out[i++] = prefix[k];
+    /* pid as decimal. num[] sized for 20-digit uint64_t worst case. */
+    char num[21];
+    int nl = 0;
+    if (pid <= 0) num[nl++] = '0';
+    else { unsigned long v = (unsigned long)pid;
+        while (v) { num[nl++] = (char)('0' + v % 10); v /= 10; } }
+    while (nl > 0 && i < L_tmpnam - 1) out[i++] = num[--nl];
+    if (i < L_tmpnam - 1) out[i++] = '.';
+    unsigned c = ++counter;
+    nl = 0;
+    if (c == 0) num[nl++] = '0';
+    else { while (c) { num[nl++] = (char)('0' + c % 10); c /= 10; } }
+    while (nl > 0 && i < L_tmpnam - 1) out[i++] = num[--nl];
+    out[i] = '\0';
+    return out;
+}
+
+/* tmpfile: create+open a fresh /tmp file, unlink it immediately so it
+ * vanishes when the last fd closes. We rely on /tmp being mounted as
+ * tmpfs at boot; if it isn't, fopen fails and we return NULL.
+ *
+ * Mode is "w+x" so a name collision with another caller fails with
+ * EEXIST (kernel sys_open honors O_EXCL) and we retry, rather than
+ * silently truncating their temp file. POSIX also requires the returned
+ * stream's fd to be FD_CLOEXEC; set it after open. */
+FILE *tmpfile(void) {
+    for (int attempt = 0; attempt < 16; attempt++) {
+        char name[L_tmpnam];
+        (void)tmpnam(name);
+        FILE *f = fopen(name, "w+x");
+        if (f) {
+            unlink(name);
+            (void)fcntl(f->fd, F_SETFD, FD_CLOEXEC);
+            return f;
+        }
+    }
     return NULL;
 }
 

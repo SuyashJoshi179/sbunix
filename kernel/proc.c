@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <file.h>
 #include <inode.h>
+#include <limits.h>
 #include <pmem.h>
 #include <printk.h>
 #include <proc.h>
@@ -35,6 +36,10 @@ static struct context sched_context;
 struct pcb *current_proc(void)   { return current; }
 struct pcb *proc_list_head(void) { return procs;   }
 
+/* Single-hart safe: IRQs-off prevents any other code path from
+ * mutating the proc list while we're walking it. An SMP port would
+ * need a real reader-writer lock here (the audit notes T3.34); on
+ * one hart the cli/sti pair is correct and roughly free. */
 struct pcb *proc_find_by_pid(int pid) {
     uint64_t sstatus = read_sstatus();
     struct pcb *found = 0;
@@ -150,7 +155,28 @@ struct pcb *alloc_proc(void) {
         return 0;
     }
 
-    p->pid        = next_pid++;
+    /* Hand out a fresh pid. next_pid is signed and used to monotonically
+     * increase; before INT_MAX it just increments. Once we wrap, we have
+     * to skip any pid that's currently in use (or reserved 0) to avoid
+     * colliding with a long-lived process.
+     *
+     * Termination: the live-proc list has finitely many entries (capped
+     * by RLIMIT_NPROC and physical memory), so within (live_count + 1)
+     * iterations `candidate` skips past every taken pid and the inner
+     * walk reports !taken. */
+    int candidate = next_pid;
+    for (;;) {
+        if (candidate <= 0) candidate = 1;
+        int taken = 0;
+        for (struct pcb *q = procs; q; q = q->next) {
+            if (q->state == PROC_UNUSED) continue;
+            if (q->pid == candidate) { taken = 1; break; }
+        }
+        if (!taken) break;
+        candidate++;
+    }
+    p->pid    = candidate;
+    next_pid  = (candidate >= INT_MAX) ? 1 : candidate + 1;
     static uint64_t generation_seq = 0;
     p->generation = ++generation_seq;
     p->parent_pid = 0;
@@ -197,6 +223,10 @@ struct pcb *alloc_proc(void) {
         p->rlim[i].rlim_cur = RLIM_INFINITY;
         p->rlim[i].rlim_max = RLIM_INFINITY;
     }
+    p->utime_ticks  = 0;
+    p->stime_ticks  = 0;
+    p->cutime_ticks = 0;
+    p->cstime_ticks = 0;
     p->rlim[RLIMIT_STACK].rlim_cur  = DEFAULT_STACK_SOFT;
     p->rlim[RLIMIT_STACK].rlim_max  = DEFAULT_STACK_HARD;
     p->rlim[RLIMIT_NOFILE].rlim_cur = NOFILE;
@@ -355,6 +385,13 @@ int proc_fork_current(void) {
     child->sig_pending    = 0;
     child->in_sighandler  = 0;
     child->delivering_segv= 0;
+    /* sigsuspend bookkeeping: sigsuspend never returns until it delivers a
+     * signal, so a process inside sigsuspend cannot call fork(). The
+     * child therefore starts with the active flag cleared by design;
+     * keep an explicit assignment so a future caller that bypasses this
+     * invariant cannot leak a stale saved_mask. */
+    child->sig_suspend_active = 0;
+    child->sig_suspend_saved_mask = 0;
     /* POSIX: sigaltstack settings inherited across fork. The child is not
      * itself currently in a signal handler, but if the parent forked from
      * inside one running on the alt stack, the child must remember that
@@ -548,6 +585,11 @@ int proc_wait4_current(int pid, int *status, int options) {
             if (p->state == PROC_ZOMBIE) {
                 int cpid = p->pid;
                 if (status) *status = p->exit_status;
+                /* POSIX: roll the reaped child's CPU time (and any time it
+                 * already absorbed from its own reaped descendants) into the
+                 * parent's child-time counters before the PCB goes away. */
+                current->cutime_ticks += p->utime_ticks + p->cutime_ticks;
+                current->cstime_ticks += p->stime_ticks + p->cstime_ticks;
                 proc_destroy(p);
                 return cpid;
             }

@@ -38,6 +38,14 @@ static inline void flush_tlb() {
     asm volatile("sfence.vma zero, zero");
 }
 
+/* Per-VA TLB shootdown (single-hart). Cheaper than the full flush when
+ * we're only invalidating a known page (e.g. PTE_W flip on CoW fault,
+ * file-backed unmap). RISC-V SFENCE.VMA rs1, x0 invalidates entries
+ * for the virtual address in rs1 across all ASIDs. */
+static inline void flush_tlb_page(unsigned long va) {
+    asm volatile("sfence.vma %0, zero" :: "r" (va) : "memory");
+}
+
 #define SATP_SV39 (8L << 60)
 
 static inline unsigned long make_satp(pgtable_t pgtable) {

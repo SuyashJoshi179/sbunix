@@ -734,12 +734,17 @@ static uint64_t self_target_len(void) {
 }
 
 static int self_stat(struct inode *ip, struct stat *st) {
+    uint64_t tlen = self_target_len();
+    /* Keep inode->size in sync with the symlink target length so callers
+     * that read it directly (e.g. readdir-time stat fast paths) see the
+     * right number instead of the zero we initialised it to. */
+    ip->size = tlen;
     st->st_dev   = 3;
     st->st_ino   = (uint64_t)(uintptr_t)ip;
     st->st_mode  = ip->mode;
     st->st_nlink = 1;
     st->st_uid = st->st_gid = 0;
-    st->st_size = self_target_len();
+    st->st_size = tlen;
     STAT_SET_TIMES(st, 0);
     st->st_blksize = 512;
     st->st_blocks  = (st->st_size + 511) / 512;

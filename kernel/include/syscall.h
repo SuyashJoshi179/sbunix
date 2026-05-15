@@ -96,6 +96,7 @@
 #define SYS_readlink      112
 #define SYS_lstat         113
 #define SYS_msync         115
+#define SYS_times         116   // (struct tms *buf)
 #define SYS_getrlimit     117   // (resource, struct rlimit *)
 #define SYS_setrlimit     118   // (resource, const struct rlimit *)
 

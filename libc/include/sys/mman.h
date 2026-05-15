@@ -14,8 +14,14 @@
 
 #define MAP_FAILED ((void *)-1)
 
+#ifndef MS_ASYNC
+#define MS_ASYNC      0x1
+#endif
+#ifndef MS_INVALIDATE
+#define MS_INVALIDATE 0x2
+#endif
 #ifndef MS_SYNC
-#define MS_SYNC 0x4
+#define MS_SYNC       0x4
 #endif
 
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off);

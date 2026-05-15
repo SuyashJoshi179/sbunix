@@ -87,7 +87,16 @@ static struct buf *bget(uint32_t blockno) {
         }
     }
 
-    panic("bio: no free buffers (all pinned or dirty)");
+    /* Every clean slot is taken and the rest are dirty. We cannot evict
+     * a dirty buffer here: sbfs's write-ahead log marks every transaction
+     * buffer dirty and immediately brelse's it, so a dirty refcnt==0
+     * buffer is in the *uncommitted* set. Writing it to its home location
+     * before end_op writes the log commit block would let a crash leave
+     * the home location half-applied with no journal record to replay or
+     * roll back. Panicking is louder than the original message but is the
+     * only correctness-preserving choice short of routing the flush
+     * through the log itself. */
+    panic("bio: no free buffers (all pinned or dirty); raise NBUF or shorten transactions");
     return 0;
 }
 

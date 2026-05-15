@@ -13,18 +13,42 @@
  * success so installers/build systems don't bail out, while query ops
  * return the most permissive plausible answer. */
 
-int chmod(const char *path, mode_t mode)        { (void)path; (void)mode; return 0; }
-int fchmod(int fd, mode_t mode)                 { (void)fd;   (void)mode; return 0; }
+/* SBUnix has no on-disk permission bits, so chmod/fchmod cannot actually
+ * change anything. Validate the target exists (path lookup / fd
+ * validity) before returning success so callers can still distinguish
+ * "chmod a missing file" from "chmod a real file we don't enforce on". */
+int chmod(const char *path, mode_t mode) {
+    (void)mode;
+    struct stat st;
+    if (stat(path, &st) < 0) return -1;
+    return 0;
+}
+int fchmod(int fd, mode_t mode) {
+    (void)mode;
+    struct stat st;
+    if (fstat(fd, &st) < 0) return -1;
+    return 0;
+}
 
 /* Track umask in libc so install-style code that saves/restores via
- * `old = umask(0); ...; umask(old);` round-trips correctly. The kernel
- * has no permission bits to honor, so this is purely cosmetic state. */
+ * `old = umask(0); ...; umask(old);` round-trips correctly, and so a
+ * libc-side caller of get_umask() can apply the mask manually before
+ * a creation syscall. We intentionally don't propagate to the kernel:
+ * SBUnix has no on-disk permission bits to enforce, so a kernel-side
+ * umask register would be storage without observable effect. If/when
+ * the kernel gains a permission system, both pieces should land
+ * together (T3.12). */
 static mode_t current_umask = 022;
 mode_t umask(mode_t mask) {
     mode_t old = current_umask;
     current_umask = mask & 0777;
     return old;
 }
+mode_t __libc_get_umask(void) { return current_umask; }
+/* No FIFO support in the kernel (no character-mode pipe with a name) and
+ * no dynamic device-node creation — devfs is a hard-coded list. These
+ * remain ENOSYS by design; truncate/ftruncate/symlink (T1.14, T1.15)
+ * landed as real syscalls instead. (T3.20) */
 int mkfifo(const char *path, mode_t mode)       { (void)path; (void)mode; errno = ENOSYS; return -1; }
 int mknod(const char *p, mode_t m, dev_t d)     { (void)p; (void)m; (void)d; errno = ENOSYS; return -1; }
 

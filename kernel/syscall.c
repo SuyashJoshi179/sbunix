@@ -18,6 +18,7 @@
 #include <string.h>
 #include <syscall.h>
 #include <tarfs.h>
+#include <termios.h>
 #include <time.h>
 #include <timer.h>
 #include <vfs.h>
@@ -832,11 +833,14 @@ static int64_t sys_getpid(void) {
 // before copying the rest. If argv_user is NULL and nprefix == 0, an empty
 // frame (argc=0) is set up.
 //
-// Returns the user SP to use, or 0 on error.
+// Returns a positive user SP on success, or a negative -errno:
+//   -EFAULT  user argv pointer or string fails copyin
+//   -E2BIG   argv has too many entries, a string is too long, or the
+//            combined size overflows the kernel-side staging page.
 // ---------------------------------------------------------------------------
-static unsigned long setup_user_stack(void *kstack,
-                                       const char *const *kprefix, int nprefix,
-                                       char *const *argv_user, int skip_user) {
+static int64_t setup_user_stack(void *kstack,
+                                 const char *const *kprefix, int nprefix,
+                                 char *const *argv_user, int skip_user) {
     char *base = (char *)kstack;
     char *top  = base + 4096;
 
@@ -845,7 +849,7 @@ static unsigned long setup_user_stack(void *kstack,
         frame[0] = 0;  // argc
         frame[1] = 0;  // argv[0] = NULL
         frame[2] = 0;  // envp[0] = NULL
-        return USER_STACK_TOP - 24;
+        return (int64_t)(USER_STACK_TOP - 24);
     }
 
     int argc = 0;
@@ -853,14 +857,15 @@ static unsigned long setup_user_stack(void *kstack,
     unsigned long uaddrs[ARGV_MAX_LOCAL];
 
     // Place kernel-side prefix strings first.
-    for (int i = 0; i < nprefix && argc < ARGV_MAX_LOCAL; i++) {
+    for (int i = 0; i < nprefix; i++) {
+        if (argc >= ARGV_MAX_LOCAL) return -E2BIG;
         const char *s = kprefix[i];
         int len = 0;
         while (s[len] && len < 256) len++;
-        if (s[len] != 0) return 0;
+        if (s[len] != 0) return -E2BIG;
         len++;  // include NUL
         if (strp + len > top - (long)sizeof(uint64_t) * (argc + 4))
-            return 0;
+            return -E2BIG;
         for (int k = 0; k < len; k++) strp[k] = s[k];
         uaddrs[argc] = (USER_STACK_TOP - 4096) + (unsigned long)(strp - base);
         strp += len;
@@ -869,27 +874,28 @@ static unsigned long setup_user_stack(void *kstack,
 
     // Copy user-space argv strings (skipping the first `skip_user` entries).
     if (argv_user) {
-        for (int i = skip_user; argc < ARGV_MAX_LOCAL; i++) {
+        for (int i = skip_user;; i++) {
             uint64_t uarg = 0;
             if (copyin(&uarg,
                        (const char *)argv_user + i * sizeof(uint64_t),
                        sizeof(uint64_t)) < 0)
-                return 0;
+                return -EFAULT;
             if (uarg == 0) break;
+            if (argc >= ARGV_MAX_LOCAL) return -E2BIG;
 
             int len = 0;
             char c = 0;
             do {
                 if (copyin(&c, (const char *)(uintptr_t)(uarg + (uint64_t)len), 1) < 0)
-                    return 0;
+                    return -EFAULT;
                 len++;
             } while (c && len < 256);
-            if (c != 0) return 0;
+            if (c != 0) return -E2BIG;
 
             if (strp + len > top - (long)sizeof(uint64_t) * (argc + 4))
-                break;
+                return -E2BIG;
             if (copyin(strp, (const void *)(uintptr_t)uarg, (unsigned long)len) < 0)
-                return 0;
+                return -EFAULT;
             uaddrs[argc] = (USER_STACK_TOP - 4096) + (unsigned long)(strp - base);
             strp += len;
             argc++;
@@ -910,7 +916,7 @@ static unsigned long setup_user_stack(void *kstack,
     frame[2 + argc] = 0;  // envp[0] = NULL
 
     unsigned long frame_off = (unsigned long)((char *)frame - base);
-    return (USER_STACK_TOP - 4096) + frame_off;
+    return (int64_t)((USER_STACK_TOP - 4096) + frame_off);
 }
 
 // ---------------------------------------------------------------------------
@@ -1082,13 +1088,14 @@ static int64_t do_exec(const char *path, char *const *argv_user,
         kprefix[nprefix++] = shebang_script;
         skip_user = argv_user ? 1 : 0;
     }
-    unsigned long new_sp = setup_user_stack(kstack, kprefix, nprefix,
-                                             argv_user, skip_user);
-    if (new_sp == 0) {
+    int64_t sp_or_err = setup_user_stack(kstack, kprefix, nprefix,
+                                          argv_user, skip_user);
+    if (sp_or_err < 0) {
         vma_list_free(&vlist);
         free_user_pgtable(new_pt);
-        return -ENOMEM;
+        return sp_or_err;
     }
+    unsigned long new_sp = (unsigned long)sp_or_err;
 
     // Heap VMA (zero-length initially)
     struct vma *heap_vma = vma_alloc();
@@ -1393,10 +1400,17 @@ static int64_t sys_munmap(uint64_t addr, uint64_t len) {
 // ---------------------------------------------------------------------------
 // sys_msync
 // ---------------------------------------------------------------------------
-#define MS_SYNC 0x4
+#define MS_ASYNC      0x1
+#define MS_INVALIDATE 0x2
+#define MS_SYNC       0x4
 
 static int64_t sys_msync(uint64_t addr, uint64_t len, int flags) {
-    if (flags != MS_SYNC) return -EINVAL;
+    /* POSIX: exactly one of MS_SYNC | MS_ASYNC must be set; MS_INVALIDATE
+     * may be OR'd in. We always flush eagerly so MS_ASYNC degenerates to
+     * MS_SYNC, and MS_INVALIDATE is a no-op (caches are coherent here). */
+    int mode = flags & (MS_SYNC | MS_ASYNC);
+    if (mode != MS_SYNC && mode != MS_ASYNC) return -EINVAL;
+    if (flags & ~(MS_SYNC | MS_ASYNC | MS_INVALIDATE)) return -EINVAL;
     if (len == 0) return 0;
     if (addr & (PAGE_SIZE - 1)) return -EINVAL;
     uint64_t end = addr + len;
@@ -1426,6 +1440,32 @@ static int64_t sys_msync(uint64_t addr, uint64_t len, int flags) {
         }
     }
     return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sys_times — fill struct tms with this process's per-mode tick counts and
+// reaped children's totals. Return value is monotonic ticks since boot.
+// ---------------------------------------------------------------------------
+struct k_tms {
+    int64_t tms_utime;
+    int64_t tms_stime;
+    int64_t tms_cutime;
+    int64_t tms_cstime;
+};
+
+static int64_t sys_times(struct k_tms *ubuf) {
+    struct pcb *p = current_proc();
+    if (!p) return -EINVAL;
+    if (ubuf) {
+        struct k_tms k = {
+            .tms_utime  = (int64_t)p->utime_ticks,
+            .tms_stime  = (int64_t)p->stime_ticks,
+            .tms_cutime = (int64_t)p->cutime_ticks,
+            .tms_cstime = (int64_t)p->cstime_ticks,
+        };
+        if (copyout(ubuf, &k, sizeof(k)) < 0) return -EFAULT;
+    }
+    return (int64_t)timer_ticks();
 }
 
 // ---------------------------------------------------------------------------
@@ -1696,6 +1736,11 @@ static int64_t sys_getpgrp(void) {
 static int64_t sys_getsid(int pid) {
     struct pcb *p = pcb_target(pid);
     if (!p) return -ESRCH;
+    /* POSIX permits returning EPERM when the target is in a different
+     * session from the caller; doing so prevents enumeration of foreign
+     * sessions via /proc-less probing. */
+    struct pcb *me = current_proc();
+    if (me && p->sid != me->sid) return -EPERM;
     return p->sid;
 }
 
@@ -1709,6 +1754,14 @@ static int64_t sys_setsid(void) {
     }
     me->sid  = me->pid;
     me->pgid = me->pid;
+    /* POSIX: the calling process drops its controlling terminal. If we
+     * were the controlling session for the console, clear the global
+     * session/fg-pgid bookkeeping so the next process to call setsid +
+     * tcsetpgrp can claim it. */
+    if (termios_get_session() == me->pid) {
+        termios_set_session(0);
+        termios_set_fg_pgid(0);
+    }
     return me->sid;
 }
 
@@ -1959,6 +2012,8 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_msync:
             return sys_msync(trapframe[TF_A0], trapframe[TF_A1],
                              (int)trapframe[TF_A2]);
+        case SYS_times:
+            return sys_times((struct k_tms *)trapframe[TF_A0]);
 
         case SYS_getrlimit:
             return sys_getrlimit((int)trapframe[TF_A0],

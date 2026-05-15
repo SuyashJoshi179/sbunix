@@ -266,6 +266,11 @@ void check_signals(uint64_t *trapframe) {
      * can reach here. */
     if (h == SIG_DFL) {
         uint8_t act = (sig < NSIG) ? default_action[sig] : ACT_TERM;
+        /* SBUnix has no on-disk core-dump format, so ACT_CORE collapses
+         * to ACT_TERM here — proc_exit_current with the signal in the
+         * low byte is what wait4 surfaces to the parent. Adding real
+         * coredumps would require a kernel-side ELF writer and a
+         * userspace coredump tool; see T3.17. */
         if (act == ACT_STOP) {
             p->state = PROC_STOPPED;
             p->last_signal = sig;
@@ -505,14 +510,26 @@ int64_t sys_sigreturn(uint64_t *trapframe) {
     if (fr.magic != SIGFRAME_MAGIC)
         proc_exit_current(SIGSEGV & 0x7f);
 
-    /* Sanitize sstatus: force SPP=0, SPIE=1. */
+    /* Sanitize sstatus: force SPP=0, SPIE=1, and zero out the supervisor-
+     * mode bits that user code must not be able to fabricate. SUM lets
+     * S-mode read user pages, MXR lets it execute readable pages — a
+     * user-controlled sigframe that sets either would let a subsequent
+     * supervisor access bypass the page-table protection. */
     uint64_t safe_sstatus = fr.saved_trapframe[TF_SSTATUS];
     safe_sstatus &= ~(uint64_t)SSTATUS_SPP;
+    safe_sstatus &= ~(uint64_t)(SSTATUS_SUM | SSTATUS_MXR);
     safe_sstatus |=  (uint64_t)SSTATUS_SPIE;
     fr.saved_trapframe[TF_SSTATUS] = safe_sstatus;
 
-    /* Sanitize sepc: must be in user VA range. */
-    if (fr.saved_trapframe[TF_SEPC] >= KVMEM_OFFSET)
+    /* Sanitize sepc and sp: must both be in user VA range (and sp must
+     * be non-zero — sret with sp=0 would fault on the first push). Use
+     * the same USER_STACK_TOP cap as trap.c's check_user_return so a
+     * sigframe that survives validation here can't be killed by the
+     * trap-return check immediately afterwards. */
+    if (fr.saved_trapframe[TF_SEPC] >= USER_STACK_TOP)
+        proc_exit_current(SIGSEGV & 0x7f);
+    if (fr.saved_trapframe[1] == 0 ||
+        fr.saved_trapframe[1] >= USER_STACK_TOP)
         proc_exit_current(SIGSEGV & 0x7f);
 
     memcpy(trapframe, fr.saved_trapframe, 288);

@@ -468,6 +468,16 @@ struct inode *sbfs_dirlookup(struct inode *dir, const char *name) {
 /* Add (name, inum) to dir.  Must be inside a transaction. */
 int sbfs_dirlink(struct inode *dir, const char *name, uint32_t inum) {
     struct sbfs_inode *sd = (struct sbfs_inode *)dir;
+
+    /* Reject names that won't round-trip through strncpy without
+     * truncation. Stored names occupy SBFS_DIRSIZ bytes with a
+     * mandatory trailing NUL, so the effective limit is DIRSIZ-1 chars.
+     * Silent truncation here would create lookup-time collisions where
+     * two distinct callers store under the same prefix. */
+    int nl = 0;
+    while (name[nl] && nl < SBFS_DIRSIZ) nl++;
+    if (nl == 0 || nl >= SBFS_DIRSIZ) return -ENAMETOOLONG;
+
     sbfs_ilock(sd);
 
     /* Search for a free slot (inum==0) or append. */

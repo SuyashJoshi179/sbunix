@@ -55,7 +55,7 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact) {
 
 sighandler_t signal(int sig, sighandler_t handler) {
     struct sigaction sa;
-    struct sigaction old;
+    struct sigaction old = { 0 };
 
     sa.sa_handler = handler;
     sa.sa_mask = 0;
