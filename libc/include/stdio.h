@@ -42,6 +42,9 @@ char *fgets(char *buf, int n, FILE *stream);
 ssize_t getline(char **lineptr, size_t *n, FILE *stream);
 ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *stream);
 
+int renameat(int olddirfd, const char *oldpath,
+             int newdirfd, const char *newpath);
+
 int   sscanf(const char *str, const char *fmt, ...);
 int   fscanf(FILE *stream, const char *fmt, ...);
 int   scanf(const char *fmt, ...);

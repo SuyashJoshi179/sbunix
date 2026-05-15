@@ -85,6 +85,15 @@ int   isatty(int fd);
 int   access(const char *path, int mode);
 ssize_t readlink(const char *path, char *buf, size_t n);
 
+int   faccessat(int dirfd, const char *path, int mode, int flag);
+int   fchdir(int fd);
+int   fchownat(int dirfd, const char *path, uid_t uid, gid_t gid, int flag);
+int   linkat(int olddirfd, const char *oldpath,
+             int newdirfd, const char *newpath, int flags);
+int   unlinkat(int dirfd, const char *path, int flag);
+int   symlinkat(const char *target, int newdirfd, const char *linkpath);
+ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t n);
+
 int   gethostname(char *buf, size_t len);
 int   sethostname(const char *name, size_t len);
 int   getdomainname(char *buf, size_t len);

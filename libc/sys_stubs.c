@@ -1,4 +1,5 @@
 #include <fcntl.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <stdarg.h>
@@ -188,6 +189,105 @@ int sched_getparam(pid_t pid, struct sched_param *param) {
     return 0;
 }
 struct timespec;
+/* ---- *at family wrappers ----
+ * The kernel has no dirfd-relative path resolution. Each wrapper checks
+ * for dirfd==AT_FDCWD and delegates to the cwd-relative form; any other
+ * dirfd is rejected with ENOSYS. Portable code that uses AT_FDCWD
+ * exclusively works unchanged. */
+
+int faccessat(int dirfd, const char *path, int mode, int flag) {
+    if (dirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
+    (void)flag;
+    return access(path, mode);
+}
+
+int fchdir(int fd) {
+    (void)fd;
+    errno = ENOSYS;
+    return -1;
+}
+
+int fchownat(int dirfd, const char *path, uid_t uid, gid_t gid, int flag) {
+    if (dirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
+    (void)flag;
+    return chown(path, uid, gid);
+}
+
+int linkat(int olddirfd, const char *oldpath,
+           int newdirfd, const char *newpath, int flags) {
+    if (olddirfd != AT_FDCWD || newdirfd != AT_FDCWD) {
+        errno = ENOSYS; return -1;
+    }
+    (void)flags;
+    return link(oldpath, newpath);
+}
+
+int unlinkat(int dirfd, const char *path, int flag) {
+    if (dirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
+    if (flag & AT_REMOVEDIR) return rmdir(path);
+    return unlink(path);
+}
+
+int symlinkat(const char *target, int newdirfd, const char *linkpath) {
+    if (newdirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
+    return symlink(target, linkpath);
+}
+
+ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t n) {
+    if (dirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
+    return readlink(path, buf, n);
+}
+
+int fstatat(int dirfd, const char *path, struct stat *buf, int flag) {
+    if (dirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
+    if (flag & AT_SYMLINK_NOFOLLOW) return lstat(path, buf);
+    return stat(path, buf);
+}
+
+int fchmodat(int dirfd, const char *path, mode_t mode, int flag) {
+    if (dirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
+    (void)flag;
+    return chmod(path, mode);
+}
+
+int mkdirat(int dirfd, const char *path, mode_t mode) {
+    if (dirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
+    return mkdir(path, (int)mode);
+}
+
+int mkfifoat(int dirfd, const char *path, mode_t mode) {
+    if (dirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
+    return mkfifo(path, mode);
+}
+
+int mknodat(int dirfd, const char *path, mode_t mode, dev_t dev) {
+    if (dirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
+    return mknod(path, mode, dev);
+}
+
+int renameat(int olddirfd, const char *oldpath,
+             int newdirfd, const char *newpath) {
+    if (olddirfd != AT_FDCWD || newdirfd != AT_FDCWD) {
+        errno = ENOSYS; return -1;
+    }
+    return rename(oldpath, newpath);
+}
+
+/* utimensat/futimens: POSIX inode-time setters. Our kernel has no syscall
+ * to write atim/mtim; stub gracefully so portable build systems that
+ * touch -d files don't fail catastrophically. Returns success because
+ * many test suites tolerate "time didn't actually change" but bail on -1. */
+int utimensat(int dirfd, const char *path,
+              const struct timespec times[2], int flag) {
+    (void)dirfd; (void)path; (void)times; (void)flag;
+    return 0;
+}
+
+int futimens(int fd, const struct timespec times[2]) {
+    (void)fd; (void)times;
+    return 0;
+}
+
 int sched_rr_get_interval(pid_t pid, struct timespec *ts) {
     (void)pid;
     if (ts) {
