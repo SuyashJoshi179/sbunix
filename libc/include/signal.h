@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 #define NSIG    32
 
@@ -108,8 +109,8 @@ struct sigaction {
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
 
-int kill(int pid, int sig);
-int killpg(int pgid, int sig);
+int kill(pid_t pid, int sig);
+int killpg(pid_t pgid, int sig);
 int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact);
 sighandler_t signal(int sig, sighandler_t handler);
 sighandler_t sigset(int sig, sighandler_t handler);

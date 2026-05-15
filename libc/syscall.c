@@ -38,12 +38,12 @@ static long ecall3(long num, long a0, long a1, long a2) {
     return _a0;
 }
 
-long write(int fd, const void *buf, long len) {
-    return syscall_ret(ecall3(2, (long)fd, (long)buf, len));
+ssize_t write(int fd, const void *buf, size_t len) {
+    return syscall_ret(ecall3(2, (long)fd, (long)buf, (long)len));
 }
 
-long read(int fd, void *buf, long len) {
-    return syscall_ret(ecall3(5, (long)fd, (long)buf, len));
+ssize_t read(int fd, void *buf, size_t len) {
+    return syscall_ret(ecall3(5, (long)fd, (long)buf, (long)len));
 }
 
 int open(const char *path, int flags, ...) {
@@ -54,20 +54,20 @@ int close(int fd) {
     return (int)syscall_ret(ecall1(6, (long)fd));
 }
 
-int getpid(void) {
-    return (int)syscall_ret(ecall3(8, 0, 0, 0));
+pid_t getpid(void) {
+    return (pid_t)syscall_ret(ecall3(8, 0, 0, 0));
 }
 
-int fork(void) {
-    return (int)syscall_ret(ecall3(9, 0, 0, 0));
+pid_t fork(void) {
+    return (pid_t)syscall_ret(ecall3(9, 0, 0, 0));
 }
 
-int wait(int *status) {
-    return (int)syscall_ret(ecall3(7, (long)status, 0, 0));
+pid_t wait(int *status) {
+    return (pid_t)syscall_ret(ecall3(7, (long)status, 0, 0));
 }
 
-int getppid(void) {
-    return (int)syscall_ret(ecall3(11, 0, 0, 0));
+pid_t getppid(void) {
+    return (pid_t)syscall_ret(ecall3(11, 0, 0, 0));
 }
 
 int sched_yield(void) {
@@ -78,8 +78,8 @@ int sleep_ms(unsigned long ms) {
     return (int)syscall_ret(ecall3(13, (long)ms, 0, 0));
 }
 
-int usleep(unsigned long us) {
-    return sleep_ms((us + 999UL) / 1000UL);
+int usleep(useconds_t us) {
+    return sleep_ms(((unsigned long)us + 999UL) / 1000UL);
 }
 
 int dup(int fd) {
@@ -90,8 +90,8 @@ int dup2(int oldfd, int newfd) {
     return (int)syscall_ret(ecall2(15, (long)oldfd, (long)newfd));
 }
 
-long lseek(int fd, long off, int whence) {
-    return syscall_ret(ecall3(16, (long)fd, off, (long)whence));
+off_t lseek(int fd, off_t off, int whence) {
+    return (off_t)syscall_ret(ecall3(16, (long)fd, (long)off, (long)whence));
 }
 
 int fstat(int fd, struct stat *st) {
@@ -180,8 +180,8 @@ int execv(const char *path, char *const argv[]) {
     return (int)syscall_ret(ecall2(24, (long)path, (long)argv));
 }
 
-void *sbrk(long incr) {
-    long r = ecall1(70, incr);
+void *sbrk(intptr_t incr) {
+    long r = ecall1(70, (long)incr);
     if (r < 0 && r > -4096) {
         errno = (int)(-r);
         return (void *)-1;
@@ -204,8 +204,8 @@ static long ecall6(long num, long a0, long a1, long a2, long a3, long a4, long a
     return _a0;
 }
 
-void *mmap(void *addr, long len, int prot, int flags, int fd, long off) {
-    long r = ecall6(71, (long)addr, len, (long)prot, (long)flags, (long)fd, off);
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) {
+    long r = ecall6(71, (long)addr, (long)len, (long)prot, (long)flags, (long)fd, (long)off);
     if (r < 0 && r > -4096) {
         errno = (int)(-r);
         return MAP_FAILED;
@@ -213,12 +213,12 @@ void *mmap(void *addr, long len, int prot, int flags, int fd, long off) {
     return (void *)r;
 }
 
-int munmap(void *addr, long len) {
-    return (int)syscall_ret(ecall2(72, (long)addr, len));
+int munmap(void *addr, size_t len) {
+    return (int)syscall_ret(ecall2(72, (long)addr, (long)len));
 }
 
-int msync(void *addr, long len, int flags) {
-    return (int)syscall_ret(ecall3(115, (long)addr, len, (long)flags));
+int msync(void *addr, size_t len, int flags) {
+    return (int)syscall_ret(ecall3(115, (long)addr, (long)len, (long)flags));
 }
 
 int getrlimit(int resource, struct rlimit *rlim) {
@@ -248,8 +248,8 @@ int access(const char *path, int mode) {
     return -1;
 }
 
-long readlink(const char *path, char *buf, long n) {
-    return syscall_ret(ecall3(112, (long)path, (long)buf, n));
+ssize_t readlink(const char *path, char *buf, size_t n) {
+    return syscall_ret(ecall3(112, (long)path, (long)buf, (long)n));
 }
 
 int wait4(int pid, int *status, int options, void *rusage) {

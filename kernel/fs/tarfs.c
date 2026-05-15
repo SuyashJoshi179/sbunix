@@ -225,9 +225,7 @@ static int tarfs_stat(struct inode *ip, struct stat *st) {
     st->st_uid   = 0;
     st->st_gid   = 0;
     st->st_size  = d->file_size;
-    st->st_atime = ip->mtime;
-    st->st_mtime = ip->mtime;
-    st->st_ctime = ip->mtime;
+    STAT_SET_TIMES(st, ip->mtime);
     st->st_blksize = 512;
     st->st_blocks  = (d->file_size + 511) / 512;
     return 0;

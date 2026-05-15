@@ -355,9 +355,7 @@ static int tmpfs_op_stat(struct inode *ip, struct stat *st) {
     st->st_uid   = 0;
     st->st_gid   = 0;
     st->st_size  = ti->vnode.size;
-    st->st_atime = ti->vnode.mtime;
-    st->st_mtime = ti->vnode.mtime;
-    st->st_ctime = ti->vnode.mtime;
+    STAT_SET_TIMES(st, ti->vnode.mtime);
     /* tmpfs storage is page-based: report the page size as the preferred
      * I/O size, and count actually-allocated pages (not ceil(size/512))
      * so sparse holes don't inflate st_blocks. Each st_block is 512 B. */

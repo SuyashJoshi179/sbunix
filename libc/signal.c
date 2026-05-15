@@ -36,7 +36,7 @@ static long ecall3(long num, long a0, long a1, long a2) {
     return _a0;
 }
 
-int kill(int pid, int sig) {
+int kill(pid_t pid, int sig) {
     return (int)syscall_ret(ecall2(90, (long)pid, (long)sig));
 }
 
@@ -90,7 +90,7 @@ int sigaltstack(const stack_t *ss, stack_t *oss) {
 /* killpg(pgid, sig) — direct SYS_killpg, no kill(-pgid) trick.
  * The kernel side handles pgid == 0 (calling process's pgrp) and
  * pgid == 1 (no broadcast collision) correctly. */
-int killpg(int pgid, int sig) {
+int killpg(pid_t pgid, int sig) {
     if (pgid < 0) { errno = EINVAL; return -1; }
     return (int)syscall_ret(ecall2(29, (long)pgid, (long)sig));
 }

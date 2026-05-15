@@ -1,4 +1,5 @@
 #pragma once
+#include <sys/types.h>
 
 #define PROT_NONE   0x0
 #define PROT_READ   0x1
@@ -17,6 +18,6 @@
 #define MS_SYNC 0x4
 #endif
 
-void *mmap(void *addr, long len, int prot, int flags, int fd, long off);
-int   munmap(void *addr, long len);
-int   msync(void *addr, long len, int flags);
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off);
+int   munmap(void *addr, size_t len);
+int   msync(void *addr, size_t len, int flags);

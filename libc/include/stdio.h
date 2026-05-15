@@ -39,8 +39,8 @@ int   getchar(void);
 int   getc(FILE *stream);
 int   fgetc(FILE *stream);
 char *fgets(char *buf, int n, FILE *stream);
-long  getline(char **lineptr, unsigned long *n, FILE *stream);
-long  getdelim(char **lineptr, unsigned long *n, int delim, FILE *stream);
+ssize_t getline(char **lineptr, size_t *n, FILE *stream);
+ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *stream);
 
 int   sscanf(const char *str, const char *fmt, ...);
 int   fscanf(FILE *stream, const char *fmt, ...);
