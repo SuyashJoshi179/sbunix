@@ -191,6 +191,32 @@ int sched_getparam(pid_t pid, struct sched_param *param) {
 }
 struct timespec;
 
+/* pread/pwrite: POSIX-2001. Kernel has no SYS_pread/SYS_pwrite, so we
+ * emulate via lseek+read+lseek. NOT atomic — concurrent file ops on the
+ * same fd would race. SBUnix has single-threaded user processes so this
+ * is safe enough; the failure mode is "we briefly move the file offset
+ * while another caller from the same fd is mid-syscall," which already
+ * never happens with our single-threaded model. */
+static ssize_t _p_io(int fd, void *buf, size_t n, off_t off, int is_write,
+                     const void *src) {
+    off_t old = lseek(fd, 0, SEEK_CUR);
+    if (old < 0) return -1;
+    if (lseek(fd, off, SEEK_SET) < 0) return -1;
+    ssize_t r = is_write ? write(fd, src, n) : read(fd, buf, n);
+    int saved = errno;
+    lseek(fd, old, SEEK_SET);
+    errno = saved;
+    return r;
+}
+
+ssize_t pread(int fd, void *buf, size_t n, off_t off) {
+    return _p_io(fd, buf, n, off, 0, NULL);
+}
+
+ssize_t pwrite(int fd, const void *buf, size_t n, off_t off) {
+    return _p_io(fd, NULL, n, off, 1, buf);
+}
+
 /* getlogin / getlogin_r: POSIX. SBUnix has no login database; report a
  * fixed name. getlogin returns a static buffer per POSIX. */
 static char _login_name[] = "root";

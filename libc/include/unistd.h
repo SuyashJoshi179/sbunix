@@ -19,6 +19,8 @@
 
 ssize_t write(int fd, const void *buf, size_t len);
 ssize_t read(int fd, void *buf, size_t len);
+ssize_t pread(int fd, void *buf, size_t len, off_t off);
+ssize_t pwrite(int fd, const void *buf, size_t len, off_t off);
 int   open(const char *path, int flags, ...);
 int   close(int fd);
 pid_t getpid(void);
