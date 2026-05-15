@@ -366,20 +366,21 @@ int printf(const char *fmt, ...) {
 int fputs(const char *str, FILE *stream) {
     int fd = stream ? stream->fd : 1;
     size_t len = strlen(str);
-    write(fd, str, (long)len);
+    long w = write(fd, str, (long)len);
+    if (w < 0 || (size_t)w != len) return EOF;
     return (int)len;
 }
 
 int puts(const char *str) {
-    fputs(str, stdout);
-    write(1, "\n", 1);
+    if (fputs(str, stdout) == EOF) return EOF;
+    if (write(1, "\n", 1) != 1) return EOF;
     return 0;
 }
 
 int fputc(int c, FILE *stream) {
     int fd = stream ? stream->fd : 1;
     char ch = (char)c;
-    write(fd, &ch, 1);
+    if (write(fd, &ch, 1) != 1) return EOF;
     return (unsigned char)ch;
 }
 
