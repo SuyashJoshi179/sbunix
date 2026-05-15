@@ -8,6 +8,11 @@ _start:
 
     ld   a0, 0(sp)      # argc
     addi a1, sp, 8      # argv = sp + 8
+    # envp follows argv's NULL terminator at sp + 8*(argc + 2):
+    #   [argc] [argv[0]] ... [argv[argc-1]] [NULL] [envp[0]] ...
+    addi t0, a0, 2
+    slli t0, t0, 3
+    add  a2, sp, t0
     call main
     # a0 = main's return value, use as exit status. Go through exit()
     # rather than SYS_exit directly so registered atexit handlers fire
