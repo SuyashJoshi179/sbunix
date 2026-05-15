@@ -373,7 +373,10 @@ static void tokenize(void) {
             tokens[ntokens].val = p;
             while (*p && !is_space(*p) && *p != '|' && *p != '<' && *p != '>'
                    && *p != ';' && *p != '&') p++;
-            if (*p) { *p = 0; p++; }
+            /* Capture the stopping char *before* we overwrite it with a
+             * NUL terminator — we re-emit it as a structural token below. */
+            char term = *p;
+            if (term) { *p = 0; p++; }
             ntokens++;
 
             int next_type = -1;
