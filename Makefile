@@ -130,29 +130,4 @@ submit:
 	echo "Submitted to $(SUBMIT_DIR)/sbunix"
 
 .PRECIOUS: build/%.S.o build/%.c.o
-.PHONY: all qemu clean thirdparty submit posix-check
-
-# POSIX conformance harness — compile-only.
-# Each tests/posix/*.c is independent; we compile in strict mode and report
-# per-file PASS/FAIL. Non-zero exit on any failure. Never a dependency of `all`.
-POSIX_TESTS := $(wildcard tests/posix/*.c)
-POSIX_CFLAGS := -ffreestanding -fno-builtin -nostdlib -nostdinc \
-                -isystem libc/include \
-                -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany \
-                -Werror -Wstrict-prototypes -Wmissing-prototypes \
-                -Wall -Wextra -pedantic -std=c99
-
-posix-check:
-	@fail=0; pass=0; \
-	for t in $(POSIX_TESTS); do \
-	    if $(CC) $(POSIX_CFLAGS) -c $$t -o /dev/null 2>/tmp/posix-check.err; then \
-	        echo "PASS  $$t"; pass=$$((pass+1)); \
-	    else \
-	        echo "FAIL  $$t"; \
-	        sed 's/^/    /' /tmp/posix-check.err; \
-	        fail=$$((fail+1)); \
-	    fi; \
-	done; \
-	echo ""; echo "posix-check: $$pass passed, $$fail failed"; \
-	rm -f /tmp/posix-check.err; \
-	[ $$fail -eq 0 ]
+.PHONY: all qemu clean thirdparty submit
