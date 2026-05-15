@@ -352,6 +352,13 @@ int proc_fork_current(void) {
     child->sig_pending    = 0;
     child->in_sighandler  = 0;
     child->delivering_segv= 0;
+    /* sigsuspend bookkeeping: sigsuspend never returns until it delivers a
+     * signal, so a process inside sigsuspend cannot call fork(). The
+     * child therefore starts with the active flag cleared by design;
+     * keep an explicit assignment so a future caller that bypasses this
+     * invariant cannot leak a stale saved_mask. */
+    child->sig_suspend_active = 0;
+    child->sig_suspend_saved_mask = 0;
     /* POSIX: sigaltstack settings inherited across fork. The child is not
      * itself currently in a signal handler, but if the parent forked from
      * inside one running on the alt stack, the child must remember that
