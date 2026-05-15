@@ -266,6 +266,11 @@ void check_signals(uint64_t *trapframe) {
      * can reach here. */
     if (h == SIG_DFL) {
         uint8_t act = (sig < NSIG) ? default_action[sig] : ACT_TERM;
+        /* SBUnix has no on-disk core-dump format, so ACT_CORE collapses
+         * to ACT_TERM here — proc_exit_current with the signal in the
+         * low byte is what wait4 surfaces to the parent. Adding real
+         * coredumps would require a kernel-side ELF writer and a
+         * userspace coredump tool; see T3.17. */
         if (act == ACT_STOP) {
             p->state = PROC_STOPPED;
             p->last_signal = sig;
