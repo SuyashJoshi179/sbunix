@@ -99,6 +99,16 @@
 #define SYS_getrlimit     117   // (resource, struct rlimit *)
 #define SYS_setrlimit     118   // (resource, const struct rlimit *)
 
+// Filesystem: per-descriptor flags
+#define SYS_fcntl          119  // (fd, cmd, arg) — F_GETFD / F_SETFD only
+
+// fcntl commands and flags the kernel honors. Values must match
+// libc/include/fcntl.h verbatim — they are part of the kernel ABI.
+#define F_GETFD            1
+#define F_SETFD            2
+#define FD_CLOEXEC         1
+#define O_CLOEXEC          02000000
+
 #define SYS_wait4         106   // (pid, *status, options, *rusage)
 
 // Job control: process groups / sessions

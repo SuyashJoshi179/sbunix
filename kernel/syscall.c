@@ -278,6 +278,8 @@ static int64_t sys_open(const char *path, int flags) {
 
     int fd = alloc_fd(p, f);
     if (fd < 0) { fileclose(f); return fd; }
+    if (flags & O_CLOEXEC)
+        p->cloexec_mask |= (1ULL << fd);
     return fd;
 }
 
@@ -557,6 +559,7 @@ static int64_t sys_close(int fd) {
     if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
     fileclose(p->ofile[fd]);
     p->ofile[fd] = 0;
+    p->cloexec_mask &= ~(1ULL << fd);
     return 0;
 }
 
@@ -570,6 +573,7 @@ static int64_t sys_dup(int fd) {
     struct file *f = filedup(p->ofile[fd]);
     int newfd = alloc_fd(p, f);
     if (newfd < 0) { fileclose(f); return newfd; }
+    p->cloexec_mask &= ~(1ULL << newfd);
     return newfd;
 }
 
@@ -590,7 +594,29 @@ static int64_t sys_dup2(int oldfd, int newfd) {
 
     if (p->ofile[newfd]) fileclose(p->ofile[newfd]);
     p->ofile[newfd] = filedup(p->ofile[oldfd]);
+    p->cloexec_mask &= ~(1ULL << newfd);
     return newfd;
+}
+
+// ---------------------------------------------------------------------------
+// sys_fcntl — only the per-descriptor flag commands are kernel-backed.
+// F_GETFD / F_SETFD read and write the FD_CLOEXEC bit in cloexec_mask.
+// All other fcntl commands (F_DUPFD, F_GETFL/F_SETFL, locks) are handled
+// in libc and never reach here.
+// ---------------------------------------------------------------------------
+static int64_t sys_fcntl(int fd, int cmd, uint64_t arg) {
+    struct pcb *p = current_proc();
+    if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
+    switch (cmd) {
+    case F_GETFD:
+        return (p->cloexec_mask & (1ULL << fd)) ? FD_CLOEXEC : 0;
+    case F_SETFD:
+        if (arg & FD_CLOEXEC) p->cloexec_mask |=  (1ULL << fd);
+        else                  p->cloexec_mask &= ~(1ULL << fd);
+        return 0;
+    default:
+        return -EINVAL;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,6 +1166,16 @@ static int64_t do_exec(const char *path, char *const *argv_user,
     p->delivering_segv = 0;
     p->alarm_tick      = 0;        /* POSIX: pending alarm cleared on exec */
     p->did_exec        = 1;
+    /* POSIX: descriptors marked FD_CLOEXEC are closed across a successful
+     * exec. This runs only after the point of no return, so a failed exec
+     * leaves the fd table intact. */
+    for (int fd = 0; fd < NOFILE; fd++) {
+        if ((p->cloexec_mask & (1ULL << fd)) && p->ofile[fd]) {
+            fileclose(p->ofile[fd]);
+            p->ofile[fd] = 0;
+        }
+    }
+    p->cloexec_mask = 0;
     /* POSIX: alternate signal stack is cleared on exec. */
     p->sig_altstack.ss_sp    = 0;
     p->sig_altstack.ss_flags = SS_DISABLE;
@@ -1855,6 +1891,11 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_dup2:
             return sys_dup2((int)(int64_t)trapframe[TF_A0],
                             (int)(int64_t)trapframe[TF_A1]);
+
+        case SYS_fcntl:
+            return sys_fcntl((int)(int64_t)trapframe[TF_A0],
+                             (int)(int64_t)trapframe[TF_A1],
+                             trapframe[TF_A2]);
 
         case SYS_lseek:
             return sys_lseek((int)(int64_t)trapframe[TF_A0],

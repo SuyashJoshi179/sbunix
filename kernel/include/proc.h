@@ -80,6 +80,11 @@ struct pcb {
 
     // File descriptor table (Phase 4).
     struct file   *ofile[NOFILE];   // open files; null = free slot
+    // Bit `fd` set => the descriptor has FD_CLOEXEC and is closed across
+    // a successful exec. Invariant: (cloexec_mask >> fd) & 1 implies
+    // ofile[fd] != NULL — every fd-table mutation must update both.
+    // NOFILE==64 so the mask fits a single uint64_t.
+    uint64_t       cloexec_mask;
     struct inode  *cwd;             // current working directory (refcounted)
     char           cwd_path[256];   // string form of cwd, kept in sync by chdir
 

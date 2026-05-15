@@ -175,6 +175,7 @@ struct pcb *alloc_proc(void) {
     p->vma_list   = 0;
     p->heap_vma   = 0;
     p->brk_start  = 0;
+    p->cloexec_mask = 0;
     p->next       = 0;
 
     p->sig_pending    = 0;
@@ -316,6 +317,8 @@ int proc_fork_current(void) {
         if (parent->ofile[fd])
             child->ofile[fd] = filedup(parent->ofile[fd]);
     }
+    /* POSIX: fork preserves FD_CLOEXEC on inherited descriptors. */
+    child->cloexec_mask = parent->cloexec_mask;
     if (parent->cwd) {
         child->cwd = inode_get(parent->cwd);
         // Copy cwd path string.
