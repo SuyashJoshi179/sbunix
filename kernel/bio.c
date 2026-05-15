@@ -87,7 +87,32 @@ static struct buf *bget(uint32_t blockno) {
         }
     }
 
-    panic("bio: no free buffers (all pinned or dirty)");
+    /* 3. All clean buffers are gone. Find the LRU *unpinned* buffer
+     * regardless of dirty state, flush it synchronously, then reuse.
+     * This trades a stall for the panic the audit flagged (T3.24). */
+    for (struct buf *b = bhead.prev; b != &bhead; b = b->prev) {
+        if (b->refcnt == 0) {
+            if (b->dirty) {
+                virtio_disk_rw(b->blockno, b->data, 1);
+                b->dirty = 0;
+            }
+            b->blockno = blockno;
+            b->valid   = 0;
+            b->refcnt  = 1;
+            b->prev->next = b->next;
+            b->next->prev = b->prev;
+            b->next = bhead.next;
+            b->prev = &bhead;
+            bhead.next->prev = b;
+            bhead.next = b;
+            return b;
+        }
+    }
+
+    /* Truly everything is pinned — that means callers are holding more
+     * bread refs simultaneously than NBUF allows. Still a bug, but at
+     * least name it precisely. */
+    panic("bio: every buffer is pinned (refcnt > 0)");
     return 0;
 }
 
