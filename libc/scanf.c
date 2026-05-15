@@ -272,10 +272,9 @@ static int do_scanf(struct scan_src *s, const char *fmt, va_list ap) {
             for (; *p; p++) {
                 if (*p == ']' && !first) break;
                 /* Range: a-z when neither endpoint is the bracket itself
-                 * and the next char isn't the closing ']'. */
-                if (*p == '-' && !first && p[1] && p[1] != ']' &&
-                    /* previous char was a real set member, not a range start */
-                    1) {
+                 * and the next char isn't the closing ']'. A '-' at the
+                 * very start (first=1) or just before ']' is a literal. */
+                if (*p == '-' && !first && p[1] && p[1] != ']') {
                     unsigned char lo = (unsigned char)p[-1];
                     unsigned char hi = (unsigned char)p[1];
                     if (lo > hi) { unsigned char t = lo; lo = hi; hi = t; }

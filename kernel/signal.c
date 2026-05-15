@@ -522,11 +522,14 @@ int64_t sys_sigreturn(uint64_t *trapframe) {
     fr.saved_trapframe[TF_SSTATUS] = safe_sstatus;
 
     /* Sanitize sepc and sp: must both be in user VA range (and sp must
-     * be non-zero — sret with sp=0 would fault on the first push). */
-    if (fr.saved_trapframe[TF_SEPC] >= KVMEM_OFFSET)
+     * be non-zero — sret with sp=0 would fault on the first push). Use
+     * the same USER_STACK_TOP cap as trap.c's check_user_return so a
+     * sigframe that survives validation here can't be killed by the
+     * trap-return check immediately afterwards. */
+    if (fr.saved_trapframe[TF_SEPC] >= USER_STACK_TOP)
         proc_exit_current(SIGSEGV & 0x7f);
     if (fr.saved_trapframe[1] == 0 ||
-        fr.saved_trapframe[1] >= KVMEM_OFFSET)
+        fr.saved_trapframe[1] >= USER_STACK_TOP)
         proc_exit_current(SIGSEGV & 0x7f);
 
     memcpy(trapframe, fr.saved_trapframe, 288);

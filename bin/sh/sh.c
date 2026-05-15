@@ -277,17 +277,23 @@ static int readline(void) {
         return 0;
     }
     if (n <= 0) return -1;
-    /* If we filled the buffer without seeing a newline, the line is
-     * longer than MAXLINE-1. Tell the user and drain the rest of the
-     * line so the next prompt doesn't pick up its tail. */
+    /* If we filled the buffer without seeing a newline, either the line
+     * is longer than MAXLINE-1 (truncation) or the user typed exactly
+     * MAXLINE-1 chars and then hit EOF. Drain first to distinguish: if
+     * the next read returns 0 immediately, it was EOF and the line was
+     * delivered intact — don't lie about truncation. */
     if (n == MAXLINE - 1 && linebuf[n - 1] != '\n') {
-        const char *m = "sh: line too long, truncated\n";
-        write(2, m, strlen(m));
         char drain[64];
+        long drained = 0;
         for (;;) {
             long d = read(0, drain, sizeof(drain));
             if (d <= 0) break;
+            drained += d;
             if (drain[d - 1] == '\n') break;
+        }
+        if (drained > 0) {
+            const char *m = "sh: line too long, truncated\n";
+            write(2, m, strlen(m));
         }
     }
     if (n > 0 && linebuf[n - 1] == '\n') n--;

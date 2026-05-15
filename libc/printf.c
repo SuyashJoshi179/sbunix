@@ -602,8 +602,8 @@ char *tmpnam(char *s) {
     static const char prefix[] = "/tmp/tmp.";
     for (unsigned k = 0; k < sizeof(prefix) - 1 && i < L_tmpnam - 1; k++)
         out[i++] = prefix[k];
-    /* pid as decimal */
-    char num[12];
+    /* pid as decimal. num[] sized for 20-digit uint64_t worst case. */
+    char num[21];
     int nl = 0;
     if (pid <= 0) num[nl++] = '0';
     else { unsigned long v = (unsigned long)pid;

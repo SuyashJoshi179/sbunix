@@ -464,12 +464,12 @@ static void test_file_read(void) {
     st_check(f->off == 3, "file_read: offset advanced to 3");
 
     // SEEK_CUR+0: query position.
-    int pos = fileseek(f, 0, SEEK_CUR);
+    int64_t pos = fileseek(f, 0, SEEK_CUR);
     st_check(pos == 3, "file_read: SEEK_CUR+0 == 3");
 
     // SEEK_END+0: position equals file size.
-    int fsize = fileseek(f, 0, SEEK_END);
-    st_check(fsize >= 0 && (unsigned int)fsize == ip->size,
+    int64_t fsize = fileseek(f, 0, SEEK_END);
+    st_check(fsize >= 0 && (uint64_t)fsize == ip->size,
              "file_read: SEEK_END+0 equals ip->size");
 
     // Read at EOF returns 0.

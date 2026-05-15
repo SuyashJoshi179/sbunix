@@ -495,40 +495,63 @@ void tarfs_init(void) {
              * approximate by resolving linkname to its existing inode and
              * planting a directory entry that points at the same inode.
              * The on-disk file size belongs to the *original* entry; data
-             * here is empty for a hardlink record. */
-            char fpath[256];
+             * here is empty for a hardlink record.
+             *
+             * h->name and h->linkname are 100-byte fields that may not be
+             * NUL-terminated. Bound each scan to the bytes remaining in
+             * its field (after any strip_prefix offset) and refuse rather
+             * than over-read into adjacent tar-header fields — same
+             * discipline tarfs_alloc_symlink applies for symlinks. */
+            int fmax = (int)sizeof(h->name) - (int)(raw - h->name);
+            char fpath[101];
             int n = 0;
-            while (raw[n] && n < 254) { fpath[n] = raw[n]; n++; }
-            fpath[n] = '\0';
-
-            char tpath[256];
-            int tn = 0;
-            const char *traw = strip_prefix(h->linkname);
-            while (traw[tn] && tn < 254) { tpath[tn] = traw[tn]; tn++; }
-            tpath[tn] = '\0';
-
-            struct inode *target = tarfs_path_lookup(tpath);
-            if (!target) {
-                printk("tarfs: hardlink %s -> %s: target missing\n",
-                       fpath, tpath);
+            while (n < fmax && raw[n]) { fpath[n] = raw[n]; n++; }
+            int bad = 0;
+            if (n == fmax) {
+                printk("tarfs: hardlink source name too long, dropping entry\n");
+                bad = 1;
             } else {
-                int slash = -1;
-                for (int i = n - 1; i >= 0; i--) {
-                    if (fpath[i] == '/') { slash = i; break; }
-                }
-                const char *basename;
-                struct inode *parent;
-                if (slash < 0) {
-                    basename = fpath;
-                    parent   = tarfs_root;
+                fpath[n] = '\0';
+            }
+
+            char tpath[101];
+            int tn = 0;
+            if (!bad) {
+                const char *traw = strip_prefix(h->linkname);
+                int tmax = (int)sizeof(h->linkname) - (int)(traw - h->linkname);
+                while (tn < tmax && traw[tn]) { tpath[tn] = traw[tn]; tn++; }
+                if (tn == tmax) {
+                    printk("tarfs: hardlink target too long, dropping entry\n");
+                    bad = 1;
                 } else {
-                    fpath[slash] = '\0';
-                    basename     = fpath + slash + 1;
-                    parent       = tarfs_ensure_dir(fpath);
+                    tpath[tn] = '\0';
                 }
-                if (parent && basename[0]) {
-                    target->nlink++;
-                    tarfs_dir_add(parent, basename, target);
+            }
+
+            if (!bad) {
+                struct inode *target = tarfs_path_lookup(tpath);
+                if (!target) {
+                    printk("tarfs: hardlink %s -> %s: target missing\n",
+                           fpath, tpath);
+                } else {
+                    int slash = -1;
+                    for (int i = n - 1; i >= 0; i--) {
+                        if (fpath[i] == '/') { slash = i; break; }
+                    }
+                    const char *basename;
+                    struct inode *parent;
+                    if (slash < 0) {
+                        basename = fpath;
+                        parent   = tarfs_root;
+                    } else {
+                        fpath[slash] = '\0';
+                        basename     = fpath + slash + 1;
+                        parent       = tarfs_ensure_dir(fpath);
+                    }
+                    if (parent && basename[0]) {
+                        target->nlink++;
+                        tarfs_dir_add(parent, basename, target);
+                    }
                 }
             }
         }

@@ -158,7 +158,12 @@ struct pcb *alloc_proc(void) {
     /* Hand out a fresh pid. next_pid is signed and used to monotonically
      * increase; before INT_MAX it just increments. Once we wrap, we have
      * to skip any pid that's currently in use (or reserved 0) to avoid
-     * colliding with a long-lived process. */
+     * colliding with a long-lived process.
+     *
+     * Termination: the live-proc list has finitely many entries (capped
+     * by RLIMIT_NPROC and physical memory), so within (live_count + 1)
+     * iterations `candidate` skips past every taken pid and the inner
+     * walk reports !taken. */
     int candidate = next_pid;
     for (;;) {
         if (candidate <= 0) candidate = 1;
@@ -169,8 +174,6 @@ struct pcb *alloc_proc(void) {
         }
         if (!taken) break;
         candidate++;
-        /* Loop bound: if the table is somehow full (shouldn't happen with
-         * NPROC well below INT_MAX), fall through with whatever we have. */
     }
     p->pid    = candidate;
     next_pid  = (candidate >= INT_MAX) ? 1 : candidate + 1;

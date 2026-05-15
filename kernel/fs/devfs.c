@@ -139,15 +139,13 @@ static int console_ioctl(struct inode *ip, int cmd, unsigned long arg) {
                 if (sess == 0) termios_set_session(me->sid);
                 else if (sess != me->sid) { rc = -EPERM; break; }
                 /* POSIX: pgid must name an existing pgrp in the caller's
-                 * session. */
+                 * session. Interrupts are already off (outer scope at
+                 * line 105), so the proc-list walk is safe. */
                 int found = 0;
-                uint64_t s2 = read_sstatus();
-                write_sstatus(s2 & ~SSTATUS_SIE);
                 for (struct pcb *q = proc_list_head(); q; q = q->next) {
                     if (q->state == PROC_UNUSED) continue;
                     if (q->pgid == pgid && q->sid == me->sid) { found = 1; break; }
                 }
-                write_sstatus(read_sstatus() | (s2 & SSTATUS_SIE));
                 if (!found) { rc = -EPERM; break; }
             }
             termios_set_fg_pgid(pgid);
