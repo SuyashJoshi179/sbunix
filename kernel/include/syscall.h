@@ -38,6 +38,9 @@
 #define SYS_link       25  // (oldpath, newpath)
 #define SYS_rename     26  // (oldpath, newpath)
 
+// Path probing: POSIX access(2)
+#define SYS_access     31  // (path, mode)  mode = F_OK|R_OK|W_OK|X_OK
+
 // Phase 6: pipes and exec with argv
 #define SYS_pipe       23
 #define SYS_execv      24

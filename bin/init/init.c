@@ -77,6 +77,7 @@ int main(void) {
         "/bin/rename_test",
         "/bin/timestamp_test",
         "/bin/tmpfs_test",
+        "/bin/access_test",
         "/bin/pipe_test",
         "/bin/sbrk_test",
         "/bin/malloc_test",

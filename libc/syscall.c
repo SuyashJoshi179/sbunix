@@ -243,9 +243,7 @@ int isatty(int fd) {
 }
 
 int access(const char *path, int mode) {
-    (void)path; (void)mode;
-    errno = ENOSYS;
-    return -1;
+    return (int)syscall_ret(ecall2(31, (long)path, (long)mode));
 }
 
 ssize_t readlink(const char *path, char *buf, size_t n) {

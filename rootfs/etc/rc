@@ -3,4 +3,7 @@ echo Running $0
 mount -t proc proc /proc
 mount -t disk virtio /mnt
 mount -t tmpfs none /tmp
-exec /bin/sh
+# Exit cleanly so init can run the test suite and then launch the
+# interactive shell itself. Do NOT `exec /bin/sh` here — that would
+# replace the rc process with an interactive shell that never returns,
+# blocking init's wait() and skipping tests entirely.

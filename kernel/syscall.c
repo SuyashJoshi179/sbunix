@@ -554,6 +554,54 @@ static int64_t sys_rename(const char *oldpath, const char *newpath) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_access — POSIX access(2): probe a path for existence + permissions.
+//
+// mode is a bitmask of F_OK(0) / R_OK(4) / W_OK(2) / X_OK(1):
+//   F_OK alone — does the path exist and is it reachable?
+//   R/W/X     — would open with that mode succeed (under our weak perm model)?
+//
+// We don't enforce uid/gid, so:
+//   - R_OK: always granted if path exists
+//   - W_OK: denied (-EACCES) if the filesystem has no write op (tarfs)
+//   - X_OK: granted if the inode mode has any execute bit set
+//
+// Returns 0 on grant, -ENOENT if missing, -EACCES if denied, -EINVAL if
+// mode contains bits outside F_OK|R_OK|W_OK|X_OK.
+// ---------------------------------------------------------------------------
+static int64_t sys_access(const char *path, int mode) {
+    if (mode & ~(0x7)) return -EINVAL;   /* only low 3 bits + 0 are defined */
+
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+
+    struct inode *ip = 0;
+    if (namei(kpath, &ip) < 0) return -ENOENT;
+
+    /* F_OK = 0: bare existence check. */
+    if (mode == 0) {
+        inode_put(ip);
+        return 0;
+    }
+
+    int verdict = 0;
+    /* W_OK: deny on a read-only filesystem. We identify read-only by the
+     * absence of a 'create' op — tarfs installs a stub `write` that
+     * returns -EROFS, so the write-op pointer alone is unreliable. The
+     * mutating-op pointers (create/mkdir/unlink) are the ones that
+     * follow the "NULL on RO" convention documented in inode.h. */
+    if ((mode & 2 /* W_OK */) && (!ip->ops || !ip->ops->create))
+        verdict = -EACCES;
+    /* X_OK: grant if any execute bit is set in the inode mode. */
+    if ((mode & 1 /* X_OK */) && !(ip->mode & 0111))
+        verdict = -EACCES;
+    /* R_OK: always granted in our weak permission model. */
+
+    inode_put(ip);
+    return verdict;
+}
+
+// ---------------------------------------------------------------------------
 // sys_close
 // ---------------------------------------------------------------------------
 static int64_t sys_close(int fd) {
@@ -1994,6 +2042,10 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_link:
             return sys_link((const char *)trapframe[TF_A0],
                             (const char *)trapframe[TF_A1]);
+
+        case SYS_access:
+            return sys_access((const char *)trapframe[TF_A0],
+                              (int)(int64_t)trapframe[TF_A1]);
 
         case SYS_rename:
             return sys_rename((const char *)trapframe[TF_A0],
