@@ -18,6 +18,7 @@
 #include <string.h>
 #include <syscall.h>
 #include <tarfs.h>
+#include <termios.h>
 #include <time.h>
 #include <timer.h>
 #include <vfs.h>
@@ -1712,6 +1713,14 @@ static int64_t sys_setsid(void) {
     }
     me->sid  = me->pid;
     me->pgid = me->pid;
+    /* POSIX: the calling process drops its controlling terminal. If we
+     * were the controlling session for the console, clear the global
+     * session/fg-pgid bookkeeping so the next process to call setsid +
+     * tcsetpgrp can claim it. */
+    if (termios_get_session() == me->pid) {
+        termios_set_session(0);
+        termios_set_fg_pgid(0);
+    }
     return me->sid;
 }
 
