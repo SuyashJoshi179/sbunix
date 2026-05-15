@@ -65,17 +65,23 @@ thirdparty` hooks work.
    waits, and backs off if the shell keeps exec-failing. PID 1 must
    never exit.
 
-8. **Remove dev artifacts.** `rm -rf docs thirdparty scripts` and any
-   root-level audit/devicetree files (`merged_audit_report.md`,
-   `my_devicetree.dtb`, `readable_devicetree.dts`). Do **not** use
-   `scripts/prep-submit.sh` — the user has disavowed it as wrong and
-   unmaintained. The repo root should be: `bin kernel libc Makefile
-   README.md rootfs tools`.
+8. **Remove dev artifacts.** `rm -rf docs thirdparty scripts tests`.
+   Devicetree files (`my_devicetree.dtb`, `readable_devicetree.dts`)
+   may be kept — they are reference material, not dev-only. Do
+   **not** use `scripts/prep-submit.sh` — the user has disavowed it
+   as wrong and unmaintained.
 
 9. **Makefile bit-identical to master.** `git checkout master --
    Makefile`. `git diff master -- Makefile` must be empty. Leave the
    `thirdparty` target rule alone — the grader injects their own
    `thirdparty/` subtree and the rule is their compile hook.
+
+   The reset also strips any develop-only targets (e.g.
+   `posix-check`). This is safe iff step 8 has already removed the
+   matching source tree (`tests/` for `posix-check`). Invariant:
+   **every develop-only target must have its source tree deleted in
+   step 8.** If you add a new dev-only target later, update step 8
+   to drop its sources too.
 
 10. **Build and smoke-test.** `make clean && make` must succeed. Then
     build the disk image and boot under qemu with a 20s timeout. The
