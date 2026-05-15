@@ -92,6 +92,9 @@ int   unlinkat(int dirfd, const char *path, int flag);
 int   symlinkat(const char *target, int newdirfd, const char *linkpath);
 ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t n);
 
+char *getlogin(void);
+int   getlogin_r(char *buf, size_t len);
+
 int   gethostname(char *buf, size_t len);
 int   sethostname(const char *name, size_t len);
 int   getdomainname(char *buf, size_t len);

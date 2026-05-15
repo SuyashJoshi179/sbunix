@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -189,6 +190,36 @@ int sched_getparam(pid_t pid, struct sched_param *param) {
     return 0;
 }
 struct timespec;
+
+/* getlogin / getlogin_r: POSIX. SBUnix has no login database; report a
+ * fixed name. getlogin returns a static buffer per POSIX. */
+static char _login_name[] = "root";
+char *getlogin(void) { return _login_name; }
+int getlogin_r(char *buf, size_t len) {
+    if (!buf || len == 0) { errno = ERANGE; return ERANGE; }
+    size_t need = sizeof _login_name; /* incl. NUL */
+    if (len < need) { errno = ERANGE; return ERANGE; }
+    for (size_t i = 0; i < need; i++) buf[i] = _login_name[i];
+    return 0;
+}
+
+/* posix_memalign: POSIX-2001 aligned allocator. alignment must be a
+ * power of two and a multiple of sizeof(void *). We over-allocate by
+ * (alignment - 1 + sizeof(void *)) and stash the original malloc pointer
+ * just before the returned address so free() works. */
+int posix_memalign(void **memptr, size_t alignment, size_t size) {
+    if (!memptr) return EINVAL;
+    if (alignment < sizeof(void *) || (alignment & (alignment - 1)) != 0)
+        return EINVAL;
+    void *raw = malloc(size + alignment - 1 + sizeof(void *));
+    if (!raw) return ENOMEM;
+    uintptr_t base = (uintptr_t)raw + sizeof(void *);
+    uintptr_t aligned = (base + alignment - 1) & ~(uintptr_t)(alignment - 1);
+    ((void **)aligned)[-1] = raw;
+    *memptr = (void *)aligned;
+    return 0;
+}
+
 /* ---- *at family wrappers ----
  * The kernel has no dirfd-relative path resolution. Each wrapper checks
  * for dirfd==AT_FDCWD and delegates to the cwd-relative form; any other
