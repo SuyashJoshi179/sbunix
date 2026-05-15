@@ -255,7 +255,7 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
                     /* (b): drop the anon refcnt this PTE held. */
                     page_put(old_pa);
                 }
-                flush_tlb();
+                flush_tlb_page(fault_va);
                 return 0;
             }
             if (v->flags & VMA_FLAG_SHARED) {
@@ -275,7 +275,7 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
                 unsigned long pa = pte_to_phyaddr(*pte_existing);
                 *pte_existing =
                     phyaddr_to_pte(pa) | perm | PTE_LEAF_AD;
-                flush_tlb();
+                flush_tlb_page(fault_va);
                 return 0;
             }
             return -1;
@@ -292,7 +292,7 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
          * present-PTE branch above. We never install PTE_W here in T9. */
         unsigned long pa = virt_to_phys((unsigned long)pp->page);
         vmem_map(p->pagetable, fault_va, pa, PAGE_SIZE, perm);
-        flush_tlb();
+        flush_tlb_page(fault_va);
         /* refcnt remains held; released in vma teardown (Task 12). */
         return 0;
     }
@@ -304,7 +304,7 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
             unsigned long old_pa = pte_to_phyaddr(*pte);
             if (page_ref_get(old_pa) == 1) {
                 *pte |= PTE_W | PTE_D;
-                flush_tlb();
+                flush_tlb_page(fault_va);
                 return 0;
             }
             void *new_page = page_alloc();
@@ -315,7 +315,7 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
             if (v->prot & VMA_PROT_X) perm |= PTE_X;
             *pte = phyaddr_to_pte(new_pa) | perm | PTE_LEAF_AD;
             page_put(old_pa);
-            flush_tlb();
+            flush_tlb_page(fault_va);
             return 0;
         }
         return -1;
@@ -335,7 +335,7 @@ int user_page_fault(uint64_t scause, uint64_t stval, uint64_t *trapframe) {
 
     vmem_map(p->pagetable, fault_va, virt_to_phys((unsigned long)page),
              PAGE_SIZE, perm);
-    flush_tlb();
+    flush_tlb_page(fault_va);
     return 0;
 }
 
