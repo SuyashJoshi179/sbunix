@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <time.h>
 
 int main(void) {
     int fd = open("/bin/init", O_RDONLY);
@@ -28,7 +29,61 @@ int main(void) {
         return 1;
     }
 
-    printf("stat_test: PASS (size=%lu mode=0x%x)\n",
-           (unsigned long)st.st_size, st.st_mode);
+    /* Read-only-fs mtime must be non-zero so POSIX make and friends
+     * don't treat archived files as "never built". tarfs sources it
+     * from the tar header (or, failing that, boot wall-clock). */
+    uint64_t tarfs_mtime = st.st_mtime;
+    if (tarfs_mtime == 0) {
+        printf("stat_test: FAIL /bin/init st_mtime is 0 (read-only fs lost timestamp)\n");
+        return 1;
+    }
+    printf("stat_test: /bin/init (tarfs) st_mtime=%lu\n", (unsigned long)tarfs_mtime);
+
+    /* Writable-storage mtime must be a plausible current wall-clock
+     * value — sbfs sources it from the Goldfish RTC at create time. */
+    (void)unlink("/mnt/stat_test.probe");
+    fd = open("/mnt/stat_test.probe", O_WRONLY | O_CREAT);
+    if (fd < 0) {
+        printf("stat_test: FAIL open /mnt/stat_test.probe: %d\n", fd);
+        return 1;
+    }
+    if (write(fd, "x", 1) != 1) {
+        printf("stat_test: FAIL write probe\n");
+        close(fd);
+        return 1;
+    }
+    rc = fstat(fd, &st);
+    close(fd);
+    if (rc < 0) {
+        printf("stat_test: FAIL fstat probe: %d\n", rc);
+        return 1;
+    }
+    if (st.st_mtime == 0) {
+        printf("stat_test: FAIL /mnt/stat_test.probe st_mtime is 0 (writable fs lost timestamp)\n");
+        (void)unlink("/mnt/stat_test.probe");
+        return 1;
+    }
+
+    struct timespec now;
+    if (clock_gettime(CLOCK_REALTIME, &now) == 0) {
+        /* Probe was just created — its mtime should be within a few
+         * seconds of the real clock. Skews larger than that mean the
+         * fs is hard-coding a fake timestamp instead of reading the
+         * RTC. Wide window because tests run on a slow QEMU. */
+        long delta = (long)now.tv_sec - (long)st.st_mtime;
+        if (delta < 0) delta = -delta;
+        if (delta > 60) {
+            printf("stat_test: FAIL probe mtime=%lu but clock=%lu (delta=%ld)\n",
+                   (unsigned long)st.st_mtime, (unsigned long)now.tv_sec, delta);
+            (void)unlink("/mnt/stat_test.probe");
+            return 1;
+        }
+    }
+    printf("stat_test: /mnt/stat_test.probe (sbfs) st_mtime=%lu\n",
+           (unsigned long)st.st_mtime);
+
+    (void)unlink("/mnt/stat_test.probe");
+
+    printf("stat_test: PASS\n");
     return 0;
 }

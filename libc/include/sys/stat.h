@@ -1,8 +1,13 @@
 #pragma once
 #include <stdint.h>
 #include <sys/types.h>
+#include <time.h>
 
-/* The initial fields must match kernel/include/stat.h byte-for-byte. */
+/* POSIX struct stat. Layout must match kernel/include/stat.h byte-for-byte
+ * (the kernel writes this struct directly into a user buffer via the
+ * stat/fstat/lstat syscalls). Timestamps use struct timespec per
+ * POSIX-2008+; legacy bare-time_t names (st_atime/st_mtime/st_ctime) are
+ * provided as macros for backward compatibility. */
 struct stat {
     uint64_t st_dev;
     uint64_t st_ino;
@@ -11,13 +16,20 @@ struct stat {
     uint32_t st_uid;
     uint32_t st_gid;
     uint64_t st_size;
-    uint64_t st_atime;
-    uint64_t st_mtime;
-    uint64_t st_ctime;
+    struct timespec st_atim;   /* last access time          */
+    struct timespec st_mtim;   /* last data modification    */
+    struct timespec st_ctim;   /* last status change        */
     uint64_t st_rdev;
     uint64_t st_blksize;
     uint64_t st_blocks;
 };
+
+/* Back-compat aliases for POSIX-2001-era code that uses bare time_t names.
+ * These work as rvalues only (st_atime, &st_atime); assignments must use
+ * the new st_atim.tv_sec form. */
+#define st_atime st_atim.tv_sec
+#define st_mtime st_mtim.tv_sec
+#define st_ctime st_ctim.tv_sec
 
 #define S_IFMT   0170000
 #define S_IFIFO  0010000

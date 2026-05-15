@@ -19,15 +19,15 @@ static long ecall2(long num, long a0, long a1) {
     return _a0;
 }
 
-int clock_gettime(int clockid, struct timespec *ts) {
+int clock_gettime(clockid_t clockid, struct timespec *ts) {
     return (int)syscall_ret(ecall2(80, (long)clockid, (long)ts));
 }
 
-int clock_settime(int clockid, const struct timespec *ts) {
+int clock_settime(clockid_t clockid, const struct timespec *ts) {
     return (int)syscall_ret(ecall2(88, (long)clockid, (long)ts));
 }
 
-int clock_getres(int clockid, struct timespec *res) {
+int clock_getres(clockid_t clockid, struct timespec *res) {
     return (int)syscall_ret(ecall2(89, (long)clockid, (long)res));
 }
 

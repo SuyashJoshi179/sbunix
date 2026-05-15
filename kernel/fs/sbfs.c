@@ -707,9 +707,7 @@ static int sbfs_op_stat(struct inode *ip, struct stat *st) {
     }
     /* sbfs v1 has a single on-disk timestamp; report it as all three
      * stat fields. Documented deviation from POSIX. */
-    st->st_atime = si->d.mtime;
-    st->st_mtime = si->d.mtime;
-    st->st_ctime = si->d.mtime;
+    STAT_SET_TIMES(st, si->d.mtime);
     st->st_blksize = SBFS_BSIZE;
     /* Count actually-allocated data blocks (and indirect blocks they
      * consume), not ceil(size/512) — sbfs files can be sparse if
