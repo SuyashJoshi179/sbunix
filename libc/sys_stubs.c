@@ -30,14 +30,20 @@ int fchmod(int fd, mode_t mode) {
 }
 
 /* Track umask in libc so install-style code that saves/restores via
- * `old = umask(0); ...; umask(old);` round-trips correctly. The kernel
- * has no permission bits to honor, so this is purely cosmetic state. */
+ * `old = umask(0); ...; umask(old);` round-trips correctly, and so a
+ * libc-side caller of get_umask() can apply the mask manually before
+ * a creation syscall. We intentionally don't propagate to the kernel:
+ * SBUnix has no on-disk permission bits to enforce, so a kernel-side
+ * umask register would be storage without observable effect. If/when
+ * the kernel gains a permission system, both pieces should land
+ * together (T3.12). */
 static mode_t current_umask = 022;
 mode_t umask(mode_t mask) {
     mode_t old = current_umask;
     current_umask = mask & 0777;
     return old;
 }
+mode_t __libc_get_umask(void) { return current_umask; }
 int mkfifo(const char *path, mode_t mode)       { (void)path; (void)mode; errno = ENOSYS; return -1; }
 int mknod(const char *p, mode_t m, dev_t d)     { (void)p; (void)m; (void)d; errno = ENOSYS; return -1; }
 
