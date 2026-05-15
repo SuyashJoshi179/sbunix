@@ -44,6 +44,10 @@ mode_t umask(mode_t mask) {
     return old;
 }
 mode_t __libc_get_umask(void) { return current_umask; }
+/* No FIFO support in the kernel (no character-mode pipe with a name) and
+ * no dynamic device-node creation — devfs is a hard-coded list. These
+ * remain ENOSYS by design; truncate/ftruncate/symlink (T1.14, T1.15)
+ * landed as real syscalls instead. (T3.20) */
 int mkfifo(const char *path, mode_t mode)       { (void)path; (void)mode; errno = ENOSYS; return -1; }
 int mknod(const char *p, mode_t m, dev_t d)     { (void)p; (void)m; (void)d; errno = ENOSYS; return -1; }
 

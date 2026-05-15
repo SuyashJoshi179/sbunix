@@ -35,6 +35,10 @@ static struct context sched_context;
 struct pcb *current_proc(void)   { return current; }
 struct pcb *proc_list_head(void) { return procs;   }
 
+/* Single-hart safe: IRQs-off prevents any other code path from
+ * mutating the proc list while we're walking it. An SMP port would
+ * need a real reader-writer lock here (the audit notes T3.34); on
+ * one hart the cli/sti pair is correct and roughly free. */
 struct pcb *proc_find_by_pid(int pid) {
     uint64_t sstatus = read_sstatus();
     struct pcb *found = 0;

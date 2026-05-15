@@ -6,6 +6,12 @@
 #include <proc.h>
 #include <page_cache.h>
 
+/* Static caps. NMOUNT=8 is enough for /, /proc, /mnt, /tmp, /dev plus
+ * a couple of optional probe filesystems. MOUNT_PATH_MAX=64 holds the
+ * deepest mount-point path the teaching OS ever needs. mount_fs returns
+ * an error past these — they're not runtime-configurable. SYMLINK_MAX
+ * caps how many symlink hops a single resolve will follow before
+ * returning -ELOOP. (T3.26) */
 #define NMOUNT 8
 #define MOUNT_PATH_MAX 64
 #define SYMLINK_MAX 8
