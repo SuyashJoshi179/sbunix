@@ -578,8 +578,51 @@ int setvbuf(FILE *stream, char *buf, int mode, size_t size) {
     return 0;
 }
 
+/* tmpnam: build "/tmp/tmp.<pid>.<counter>" into the caller-supplied
+ * buffer (or a static slot when s == NULL). Each call advances the
+ * counter so two successive tmpnam invocations don't collide. */
 char *tmpnam(char *s) {
-    (void)s;
+    static char buf[L_tmpnam];
+    static unsigned counter = 0;
+    char *out = s ? s : buf;
+
+    long pid = getpid();
+    int i = 0;
+    static const char prefix[] = "/tmp/tmp.";
+    for (unsigned k = 0; k < sizeof(prefix) - 1 && i < L_tmpnam - 1; k++)
+        out[i++] = prefix[k];
+    /* pid as decimal */
+    char num[12];
+    int nl = 0;
+    if (pid <= 0) num[nl++] = '0';
+    else { unsigned long v = (unsigned long)pid;
+        while (v) { num[nl++] = (char)('0' + v % 10); v /= 10; } }
+    while (nl > 0 && i < L_tmpnam - 1) out[i++] = num[--nl];
+    if (i < L_tmpnam - 1) out[i++] = '.';
+    unsigned c = ++counter;
+    nl = 0;
+    if (c == 0) num[nl++] = '0';
+    else { while (c) { num[nl++] = (char)('0' + c % 10); c /= 10; } }
+    while (nl > 0 && i < L_tmpnam - 1) out[i++] = num[--nl];
+    out[i] = '\0';
+    return out;
+}
+
+/* tmpfile: create+open a fresh /tmp file, unlink it immediately so it
+ * vanishes when the last fd closes. We rely on /tmp being mounted as
+ * tmpfs at boot; if it isn't, fopen fails and we return NULL. */
+FILE *tmpfile(void) {
+    /* Try a handful of names so a concurrent caller's collision doesn't
+     * defeat us. */
+    for (int attempt = 0; attempt < 16; attempt++) {
+        char name[L_tmpnam];
+        (void)tmpnam(name);
+        FILE *f = fopen(name, "w+");
+        if (f) {
+            unlink(name);
+            return f;
+        }
+    }
     return NULL;
 }
 
