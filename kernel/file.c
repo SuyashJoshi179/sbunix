@@ -104,7 +104,7 @@ int filestat(struct file *f, struct stat *st) {
     return f->ip->ops->stat(f->ip, st);
 }
 
-int fileseek(struct file *f, int64_t off, int whence) {
+int64_t fileseek(struct file *f, int64_t off, int whence) {
     if (f->type == FD_PIPE) return -ESPIPE;
     if (f->type != FD_INODE) return -ESPIPE;
     // Character devices are not seekable.
@@ -120,7 +120,7 @@ int fileseek(struct file *f, int64_t off, int whence) {
     int64_t newoff = base + off;
     if (newoff < 0) return -EINVAL;
     f->off = (uint64_t)newoff;
-    return (int)newoff;
+    return newoff;
 }
 
 int fileioctl(struct file *f, int cmd, unsigned long arg) {
