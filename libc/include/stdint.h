@@ -79,7 +79,10 @@ typedef unsigned long         uintmax_t;
 #define INT16_MAX     (32767)
 #define UINT16_MAX    (65535)
 
-#define INT32_MIN     (-2147483648)
+/* -2147483648 alone doesn't fit in int (so it's typed long), which
+ * breaks _Generic dispatch and trips -Wsign-conversion when INT32_MIN
+ * is passed to APIs declared with int parameters. */
+#define INT32_MIN     (-2147483647 - 1)
 #define INT32_MAX     (2147483647)
 #define UINT32_MAX    (4294967295U)
 
