@@ -41,10 +41,10 @@ int main(void) {
 
     /* Writable-storage mtime must be a plausible current wall-clock
      * value — sbfs sources it from the Goldfish RTC at create time. */
-    (void)unlink("/mnt/stat_test.probe");
-    fd = open("/mnt/stat_test.probe", O_WRONLY | O_CREAT);
+    (void)unlink("/mnt/stprobe");
+    fd = open("/mnt/stprobe", O_WRONLY | O_CREAT);
     if (fd < 0) {
-        printf("stat_test: FAIL open /mnt/stat_test.probe: %d\n", fd);
+        printf("stat_test: FAIL open /mnt/stprobe: %d\n", fd);
         return 1;
     }
     if (write(fd, "x", 1) != 1) {
@@ -59,8 +59,8 @@ int main(void) {
         return 1;
     }
     if (st.st_mtime == 0) {
-        printf("stat_test: FAIL /mnt/stat_test.probe st_mtime is 0 (writable fs lost timestamp)\n");
-        (void)unlink("/mnt/stat_test.probe");
+        printf("stat_test: FAIL /mnt/stprobe st_mtime is 0 (writable fs lost timestamp)\n");
+        (void)unlink("/mnt/stprobe");
         return 1;
     }
 
@@ -75,14 +75,14 @@ int main(void) {
         if (delta > 60) {
             printf("stat_test: FAIL probe mtime=%lu but clock=%lu (delta=%ld)\n",
                    (unsigned long)st.st_mtime, (unsigned long)now.tv_sec, delta);
-            (void)unlink("/mnt/stat_test.probe");
+            (void)unlink("/mnt/stprobe");
             return 1;
         }
     }
-    printf("stat_test: /mnt/stat_test.probe (sbfs) st_mtime=%lu\n",
+    printf("stat_test: /mnt/stprobe (sbfs) st_mtime=%lu\n",
            (unsigned long)st.st_mtime);
 
-    (void)unlink("/mnt/stat_test.probe");
+    (void)unlink("/mnt/stprobe");
 
     printf("stat_test: PASS\n");
     return 0;
