@@ -277,6 +277,19 @@ static int readline(void) {
         return 0;
     }
     if (n <= 0) return -1;
+    /* If we filled the buffer without seeing a newline, the line is
+     * longer than MAXLINE-1. Tell the user and drain the rest of the
+     * line so the next prompt doesn't pick up its tail. */
+    if (n == MAXLINE - 1 && linebuf[n - 1] != '\n') {
+        const char *m = "sh: line too long, truncated\n";
+        write(2, m, strlen(m));
+        char drain[64];
+        for (;;) {
+            long d = read(0, drain, sizeof(drain));
+            if (d <= 0) break;
+            if (drain[d - 1] == '\n') break;
+        }
+    }
     if (n > 0 && linebuf[n - 1] == '\n') n--;
     linebuf[n] = 0;
     return (int)n;
@@ -357,6 +370,14 @@ static void tokenize(void) {
             if (*p) { *p = 0; p++; }
             ntokens++;
         }
+    }
+    /* Hitting the cap with non-whitespace remaining means we silently
+     * dropped tokens. Warn so the user notices rather than getting
+     * mysterious "missing argument" behaviour. */
+    while (*p && is_space(*p)) p++;
+    if (*p) {
+        const char *m = "sh: too many tokens, command truncated\n";
+        write(2, m, strlen(m));
     }
     tokens[ntokens].type = T_END;
 }
