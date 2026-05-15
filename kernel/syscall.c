@@ -801,11 +801,14 @@ static int64_t sys_getpid(void) {
 // before copying the rest. If argv_user is NULL and nprefix == 0, an empty
 // frame (argc=0) is set up.
 //
-// Returns the user SP to use, or 0 on error.
+// Returns a positive user SP on success, or a negative -errno:
+//   -EFAULT  user argv pointer or string fails copyin
+//   -E2BIG   argv has too many entries, a string is too long, or the
+//            combined size overflows the kernel-side staging page.
 // ---------------------------------------------------------------------------
-static unsigned long setup_user_stack(void *kstack,
-                                       const char *const *kprefix, int nprefix,
-                                       char *const *argv_user, int skip_user) {
+static int64_t setup_user_stack(void *kstack,
+                                 const char *const *kprefix, int nprefix,
+                                 char *const *argv_user, int skip_user) {
     char *base = (char *)kstack;
     char *top  = base + 4096;
 
@@ -814,7 +817,7 @@ static unsigned long setup_user_stack(void *kstack,
         frame[0] = 0;  // argc
         frame[1] = 0;  // argv[0] = NULL
         frame[2] = 0;  // envp[0] = NULL
-        return USER_STACK_TOP - 24;
+        return (int64_t)(USER_STACK_TOP - 24);
     }
 
     int argc = 0;
@@ -822,14 +825,15 @@ static unsigned long setup_user_stack(void *kstack,
     unsigned long uaddrs[ARGV_MAX_LOCAL];
 
     // Place kernel-side prefix strings first.
-    for (int i = 0; i < nprefix && argc < ARGV_MAX_LOCAL; i++) {
+    for (int i = 0; i < nprefix; i++) {
+        if (argc >= ARGV_MAX_LOCAL) return -E2BIG;
         const char *s = kprefix[i];
         int len = 0;
         while (s[len] && len < 256) len++;
-        if (s[len] != 0) return 0;
+        if (s[len] != 0) return -E2BIG;
         len++;  // include NUL
         if (strp + len > top - (long)sizeof(uint64_t) * (argc + 4))
-            return 0;
+            return -E2BIG;
         for (int k = 0; k < len; k++) strp[k] = s[k];
         uaddrs[argc] = (USER_STACK_TOP - 4096) + (unsigned long)(strp - base);
         strp += len;
@@ -838,27 +842,28 @@ static unsigned long setup_user_stack(void *kstack,
 
     // Copy user-space argv strings (skipping the first `skip_user` entries).
     if (argv_user) {
-        for (int i = skip_user; argc < ARGV_MAX_LOCAL; i++) {
+        for (int i = skip_user;; i++) {
             uint64_t uarg = 0;
             if (copyin(&uarg,
                        (const char *)argv_user + i * sizeof(uint64_t),
                        sizeof(uint64_t)) < 0)
-                return 0;
+                return -EFAULT;
             if (uarg == 0) break;
+            if (argc >= ARGV_MAX_LOCAL) return -E2BIG;
 
             int len = 0;
             char c = 0;
             do {
                 if (copyin(&c, (const char *)(uintptr_t)(uarg + (uint64_t)len), 1) < 0)
-                    return 0;
+                    return -EFAULT;
                 len++;
             } while (c && len < 256);
-            if (c != 0) return 0;
+            if (c != 0) return -E2BIG;
 
             if (strp + len > top - (long)sizeof(uint64_t) * (argc + 4))
-                break;
+                return -E2BIG;
             if (copyin(strp, (const void *)(uintptr_t)uarg, (unsigned long)len) < 0)
-                return 0;
+                return -EFAULT;
             uaddrs[argc] = (USER_STACK_TOP - 4096) + (unsigned long)(strp - base);
             strp += len;
             argc++;
@@ -879,7 +884,7 @@ static unsigned long setup_user_stack(void *kstack,
     frame[2 + argc] = 0;  // envp[0] = NULL
 
     unsigned long frame_off = (unsigned long)((char *)frame - base);
-    return (USER_STACK_TOP - 4096) + frame_off;
+    return (int64_t)((USER_STACK_TOP - 4096) + frame_off);
 }
 
 // ---------------------------------------------------------------------------
@@ -1051,13 +1056,14 @@ static int64_t do_exec(const char *path, char *const *argv_user,
         kprefix[nprefix++] = shebang_script;
         skip_user = argv_user ? 1 : 0;
     }
-    unsigned long new_sp = setup_user_stack(kstack, kprefix, nprefix,
-                                             argv_user, skip_user);
-    if (new_sp == 0) {
+    int64_t sp_or_err = setup_user_stack(kstack, kprefix, nprefix,
+                                          argv_user, skip_user);
+    if (sp_or_err < 0) {
         vma_list_free(&vlist);
         free_user_pgtable(new_pt);
-        return -ENOMEM;
+        return sp_or_err;
     }
+    unsigned long new_sp = (unsigned long)sp_or_err;
 
     // Heap VMA (zero-length initially)
     struct vma *heap_vma = vma_alloc();
