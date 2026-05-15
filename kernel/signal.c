@@ -510,14 +510,23 @@ int64_t sys_sigreturn(uint64_t *trapframe) {
     if (fr.magic != SIGFRAME_MAGIC)
         proc_exit_current(SIGSEGV & 0x7f);
 
-    /* Sanitize sstatus: force SPP=0, SPIE=1. */
+    /* Sanitize sstatus: force SPP=0, SPIE=1, and zero out the supervisor-
+     * mode bits that user code must not be able to fabricate. SUM lets
+     * S-mode read user pages, MXR lets it execute readable pages — a
+     * user-controlled sigframe that sets either would let a subsequent
+     * supervisor access bypass the page-table protection. */
     uint64_t safe_sstatus = fr.saved_trapframe[TF_SSTATUS];
     safe_sstatus &= ~(uint64_t)SSTATUS_SPP;
+    safe_sstatus &= ~(uint64_t)(SSTATUS_SUM | SSTATUS_MXR);
     safe_sstatus |=  (uint64_t)SSTATUS_SPIE;
     fr.saved_trapframe[TF_SSTATUS] = safe_sstatus;
 
-    /* Sanitize sepc: must be in user VA range. */
+    /* Sanitize sepc and sp: must both be in user VA range (and sp must
+     * be non-zero — sret with sp=0 would fault on the first push). */
     if (fr.saved_trapframe[TF_SEPC] >= KVMEM_OFFSET)
+        proc_exit_current(SIGSEGV & 0x7f);
+    if (fr.saved_trapframe[1] == 0 ||
+        fr.saved_trapframe[1] >= KVMEM_OFFSET)
         proc_exit_current(SIGSEGV & 0x7f);
 
     memcpy(trapframe, fr.saved_trapframe, 288);
