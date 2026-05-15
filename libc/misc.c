@@ -1,5 +1,6 @@
 #include <unistd.h>
 #include <sys/utsname.h>
+#include <sys/stat.h>
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
@@ -58,9 +59,27 @@ unsigned sleep(unsigned secs) {
 }
 
 /* truncate() / ftruncate() implementations live in libc/syscall.c. */
-int chown(const char *p, uid_t u, gid_t g)    { (void)p; (void)u; (void)g; return 0; }
-int fchown(int fd, uid_t u, gid_t g)          { (void)fd; (void)u; (void)g; return 0; }
-int lchown(const char *p, uid_t u, gid_t g)   { (void)p; (void)u; (void)g; return 0; }
+/* Ownership stubs: SBUnix doesn't track per-file owners, so we accept
+ * the call but verify the target exists so a typo (or a chown on a
+ * deleted file) still fails. */
+int chown(const char *p, uid_t u, gid_t g) {
+    (void)u; (void)g;
+    struct stat st;
+    if (stat(p, &st) < 0) return -1;
+    return 0;
+}
+int fchown(int fd, uid_t u, gid_t g) {
+    (void)u; (void)g;
+    struct stat st;
+    if (fstat(fd, &st) < 0) return -1;
+    return 0;
+}
+int lchown(const char *p, uid_t u, gid_t g) {
+    (void)u; (void)g;
+    struct stat st;
+    if (lstat(p, &st) < 0) return -1;
+    return 0;
+}
 /* link() / symlink() are real syscalls — see libc/syscall.c. */
 int rmdir(const char *p)                      { return unlink(p); }
 
