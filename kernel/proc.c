@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <file.h>
 #include <inode.h>
+#include <limits.h>
 #include <pmem.h>
 #include <printk.h>
 #include <proc.h>
@@ -172,7 +173,7 @@ struct pcb *alloc_proc(void) {
          * NPROC well below INT_MAX), fall through with whatever we have. */
     }
     p->pid    = candidate;
-    next_pid  = (candidate >= 0x7fffffff) ? 1 : candidate + 1;
+    next_pid  = (candidate >= INT_MAX) ? 1 : candidate + 1;
     static uint64_t generation_seq = 0;
     p->generation = ++generation_seq;
     p->parent_pid = 0;

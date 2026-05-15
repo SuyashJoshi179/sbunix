@@ -87,32 +87,16 @@ static struct buf *bget(uint32_t blockno) {
         }
     }
 
-    /* 3. All clean buffers are gone. Find the LRU *unpinned* buffer
-     * regardless of dirty state, flush it synchronously, then reuse.
-     * This trades a stall for the panic the audit flagged (T3.24). */
-    for (struct buf *b = bhead.prev; b != &bhead; b = b->prev) {
-        if (b->refcnt == 0) {
-            if (b->dirty) {
-                virtio_disk_rw(b->blockno, b->data, 1);
-                b->dirty = 0;
-            }
-            b->blockno = blockno;
-            b->valid   = 0;
-            b->refcnt  = 1;
-            b->prev->next = b->next;
-            b->next->prev = b->prev;
-            b->next = bhead.next;
-            b->prev = &bhead;
-            bhead.next->prev = b;
-            bhead.next = b;
-            return b;
-        }
-    }
-
-    /* Truly everything is pinned — that means callers are holding more
-     * bread refs simultaneously than NBUF allows. Still a bug, but at
-     * least name it precisely. */
-    panic("bio: every buffer is pinned (refcnt > 0)");
+    /* Every clean slot is taken and the rest are dirty. We cannot evict
+     * a dirty buffer here: sbfs's write-ahead log marks every transaction
+     * buffer dirty and immediately brelse's it, so a dirty refcnt==0
+     * buffer is in the *uncommitted* set. Writing it to its home location
+     * before end_op writes the log commit block would let a crash leave
+     * the home location half-applied with no journal record to replay or
+     * roll back. Panicking is louder than the original message but is the
+     * only correctness-preserving choice short of routing the flush
+     * through the log itself. */
+    panic("bio: no free buffers (all pinned or dirty); raise NBUF or shorten transactions");
     return 0;
 }
 

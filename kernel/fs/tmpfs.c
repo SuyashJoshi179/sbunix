@@ -67,9 +67,11 @@ struct tmpfs_inode {
 /* ------------------------------------------------------------------ */
 
 static struct tmpfs_inode inodes[TMPFS_NINODES];
-/* Static dirent pool. Each non-root inode is reachable via at most one
- * dirent (no hardlinks in tmpfs), so TMPFS_NINODES slots is enough.
- * Replaces the previous one-page-per-dirent allocation (T3.25). */
+/* Static dirent pool. Each inode owns at least one dirent at create time;
+ * hardlinks (tmpfs_op_link) consume an extra slot per additional name.
+ * Sizing at TMPFS_NINODES is enough for the common case of one name per
+ * inode and returns -ENOSPC gracefully if a link-heavy workload exhausts
+ * the pool. Replaces the previous one-page-per-dirent allocation (T3.25). */
 static struct tmpfs_dirent dirent_pool[TMPFS_NINODES];
 static int                tmpfs_ready = 0;
 
