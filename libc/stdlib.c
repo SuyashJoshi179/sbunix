@@ -8,6 +8,12 @@
 
 void _Exit(int status) { _exit(status); }
 
+/* quick_exit: POSIX/C11. We don't track at_quick_exit handlers (project
+ * has no thread/lib teardown needs), so quick_exit behaves like _Exit. */
+void quick_exit(int status) { _exit(status); }
+
+int at_quick_exit(void (*func)(void)) { (void)func; return 0; }
+
 void abort(void) {
     raise(SIGABRT);
     exit(128 + 6);
@@ -433,6 +439,11 @@ int rand(void) {
     return (int)((_rand_state >> 16) & 0x7fffffff);
 }
 void srand(unsigned seed) { _rand_state = seed; }
+
+/* POSIX random()/srandom(): same generator as rand()/srand() but returns
+ * a long. Period and quality match rand(); not a separate stream. */
+long random(void) { return (long)rand(); }
+void srandom(unsigned seed) { srand(seed); }
 
 /* Insertion sort — fine for small N; user code should not feed huge arrays. */
 void qsort(void *base, size_t nmemb, size_t size,

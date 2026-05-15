@@ -62,6 +62,10 @@ pid_t fork(void) {
     return (pid_t)syscall_ret(ecall3(9, 0, 0, 0));
 }
 
+/* _Fork: POSIX async-signal-safe variant. Our fork is already
+ * AS-safe (single syscall) so this is a direct alias. */
+pid_t _Fork(void) { return fork(); }
+
 pid_t wait(int *status) {
     return (pid_t)syscall_ret(ecall3(7, (long)status, 0, 0));
 }
@@ -88,6 +92,16 @@ int dup(int fd) {
 
 int dup2(int oldfd, int newfd) {
     return (int)syscall_ret(ecall2(15, (long)oldfd, (long)newfd));
+}
+
+/* dup3: POSIX. Same as dup2 but with a flags param (currently only
+ * O_CLOEXEC is defined). Our kernel does not track FD_CLOEXEC, so flags
+ * are accepted but ignored. dup3(old, new, 0) differs from dup2 only in
+ * rejecting old==new with EINVAL. */
+int dup3(int oldfd, int newfd, int flags) {
+    if (oldfd == newfd) { errno = EINVAL; return -1; }
+    (void)flags;
+    return dup2(oldfd, newfd);
 }
 
 off_t lseek(int fd, off_t off, int whence) {
