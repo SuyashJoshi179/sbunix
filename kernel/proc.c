@@ -150,7 +150,25 @@ struct pcb *alloc_proc(void) {
         return 0;
     }
 
-    p->pid        = next_pid++;
+    /* Hand out a fresh pid. next_pid is signed and used to monotonically
+     * increase; before INT_MAX it just increments. Once we wrap, we have
+     * to skip any pid that's currently in use (or reserved 0) to avoid
+     * colliding with a long-lived process. */
+    int candidate = next_pid;
+    for (;;) {
+        if (candidate <= 0) candidate = 1;
+        int taken = 0;
+        for (struct pcb *q = procs; q; q = q->next) {
+            if (q->state == PROC_UNUSED) continue;
+            if (q->pid == candidate) { taken = 1; break; }
+        }
+        if (!taken) break;
+        candidate++;
+        /* Loop bound: if the table is somehow full (shouldn't happen with
+         * NPROC well below INT_MAX), fall through with whatever we have. */
+    }
+    p->pid    = candidate;
+    next_pid  = (candidate >= 0x7fffffff) ? 1 : candidate + 1;
     static uint64_t generation_seq = 0;
     p->generation = ++generation_seq;
     p->parent_pid = 0;
