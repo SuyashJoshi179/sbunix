@@ -62,6 +62,7 @@ int main(void) {
         "/bin/dev_zero_tty_test",
         "/bin/stat_test",
         "/bin/getdents_test",
+        "/bin/tarfs_dots_test",
         "/bin/chdir_test",
         "/bin/open_read_test",
         "/bin/o_excl_test",
