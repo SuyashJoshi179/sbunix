@@ -621,16 +621,20 @@ char *tmpnam(char *s) {
 
 /* tmpfile: create+open a fresh /tmp file, unlink it immediately so it
  * vanishes when the last fd closes. We rely on /tmp being mounted as
- * tmpfs at boot; if it isn't, fopen fails and we return NULL. */
+ * tmpfs at boot; if it isn't, fopen fails and we return NULL.
+ *
+ * Mode is "w+x" so a name collision with another caller fails with
+ * EEXIST (kernel sys_open honors O_EXCL) and we retry, rather than
+ * silently truncating their temp file. POSIX also requires the returned
+ * stream's fd to be FD_CLOEXEC; set it after open. */
 FILE *tmpfile(void) {
-    /* Try a handful of names so a concurrent caller's collision doesn't
-     * defeat us. */
     for (int attempt = 0; attempt < 16; attempt++) {
         char name[L_tmpnam];
         (void)tmpnam(name);
-        FILE *f = fopen(name, "w+");
+        FILE *f = fopen(name, "w+x");
         if (f) {
             unlink(name);
+            (void)fcntl(f->fd, F_SETFD, FD_CLOEXEC);
             return f;
         }
     }
