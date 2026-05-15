@@ -1352,10 +1352,17 @@ static int64_t sys_munmap(uint64_t addr, uint64_t len) {
 // ---------------------------------------------------------------------------
 // sys_msync
 // ---------------------------------------------------------------------------
-#define MS_SYNC 0x4
+#define MS_ASYNC      0x1
+#define MS_INVALIDATE 0x2
+#define MS_SYNC       0x4
 
 static int64_t sys_msync(uint64_t addr, uint64_t len, int flags) {
-    if (flags != MS_SYNC) return -EINVAL;
+    /* POSIX: exactly one of MS_SYNC | MS_ASYNC must be set; MS_INVALIDATE
+     * may be OR'd in. We always flush eagerly so MS_ASYNC degenerates to
+     * MS_SYNC, and MS_INVALIDATE is a no-op (caches are coherent here). */
+    int mode = flags & (MS_SYNC | MS_ASYNC);
+    if (mode != MS_SYNC && mode != MS_ASYNC) return -EINVAL;
+    if (flags & ~(MS_SYNC | MS_ASYNC | MS_INVALIDATE)) return -EINVAL;
     if (len == 0) return 0;
     if (addr & (PAGE_SIZE - 1)) return -EINVAL;
     uint64_t end = addr + len;
