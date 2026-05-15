@@ -1401,6 +1401,32 @@ static int64_t sys_msync(uint64_t addr, uint64_t len, int flags) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_times — fill struct tms with this process's per-mode tick counts and
+// reaped children's totals. Return value is monotonic ticks since boot.
+// ---------------------------------------------------------------------------
+struct k_tms {
+    int64_t tms_utime;
+    int64_t tms_stime;
+    int64_t tms_cutime;
+    int64_t tms_cstime;
+};
+
+static int64_t sys_times(struct k_tms *ubuf) {
+    struct pcb *p = current_proc();
+    if (!p) return -EINVAL;
+    if (ubuf) {
+        struct k_tms k = {
+            .tms_utime  = (int64_t)p->utime_ticks,
+            .tms_stime  = (int64_t)p->stime_ticks,
+            .tms_cutime = (int64_t)p->cutime_ticks,
+            .tms_cstime = (int64_t)p->cstime_ticks,
+        };
+        if (copyout(ubuf, &k, sizeof(k)) < 0) return -EFAULT;
+    }
+    return (int64_t)timer_ticks();
+}
+
+// ---------------------------------------------------------------------------
 // sys_getrlimit / sys_setrlimit (POSIX)
 // ---------------------------------------------------------------------------
 static int64_t sys_getrlimit(int resource, struct rlimit *urlim) {
@@ -1931,6 +1957,8 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_msync:
             return sys_msync(trapframe[TF_A0], trapframe[TF_A1],
                              (int)trapframe[TF_A2]);
+        case SYS_times:
+            return sys_times((struct k_tms *)trapframe[TF_A0]);
 
         case SYS_getrlimit:
             return sys_getrlimit((int)trapframe[TF_A0],

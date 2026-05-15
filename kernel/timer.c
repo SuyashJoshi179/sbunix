@@ -14,9 +14,18 @@ void timer_init(void) {
     sbi_set_timer(now + TIMER_INTERVAL);
 }
 
-void timer_handler(void) {
+void timer_handler(int from_user) {
     ticks++;
     sbi_set_timer(read_time() + TIMER_INTERVAL);
+
+    /* Bill this tick to the current process: utime if the timer fired while
+     * user code was running, stime otherwise. Skips between-process windows
+     * (current == NULL or the scheduler thread). */
+    struct pcb *cur = current_proc();
+    if (cur && cur->is_user) {
+        if (from_user) cur->utime_ticks++;
+        else           cur->stime_ticks++;
+    }
 
     // Wake any processes sleeping on a timed deadline.
     struct pcb *prev = 0;

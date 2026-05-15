@@ -196,6 +196,10 @@ struct pcb *alloc_proc(void) {
         p->rlim[i].rlim_cur = RLIM_INFINITY;
         p->rlim[i].rlim_max = RLIM_INFINITY;
     }
+    p->utime_ticks  = 0;
+    p->stime_ticks  = 0;
+    p->cutime_ticks = 0;
+    p->cstime_ticks = 0;
     p->rlim[RLIMIT_STACK].rlim_cur  = DEFAULT_STACK_SOFT;
     p->rlim[RLIMIT_STACK].rlim_max  = DEFAULT_STACK_HARD;
     p->rlim[RLIMIT_NOFILE].rlim_cur = NOFILE;
@@ -552,6 +556,11 @@ int proc_wait4_current(int pid, int *status, int options) {
             if (p->state == PROC_ZOMBIE) {
                 int cpid = p->pid;
                 if (status) *status = p->exit_status;
+                /* POSIX: roll the reaped child's CPU time (and any time it
+                 * already absorbed from its own reaped descendants) into the
+                 * parent's child-time counters before the PCB goes away. */
+                current->cutime_ticks += p->utime_ticks + p->cutime_ticks;
+                current->cstime_ticks += p->stime_ticks + p->cstime_ticks;
                 proc_destroy(p);
                 return cpid;
             }

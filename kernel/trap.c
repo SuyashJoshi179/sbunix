@@ -67,7 +67,7 @@ void trap_handler(uint64_t scause, uint64_t sepc, uint64_t stval, uint64_t *trap
         int irq_from_user = (trapframe[TF_SSTATUS] & SSTATUS_SPP) == 0;
         switch (cause_code) {
             case 5:   /* supervisor timer interrupt */
-                timer_handler();
+                timer_handler(irq_from_user);
                 /* Preempt only when the timer fired in user mode. A timer
                  * trap raised while we were already executing kernel code
                  * (SPP=1) must not call yield(): that would let another

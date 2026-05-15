@@ -16,7 +16,7 @@ static inline uint64_t ms_to_ticks(uint64_t ms) {
 }
 
 void     timer_init(void);
-void     timer_handler(void);
+void     timer_handler(int from_user);
 uint64_t timer_ticks(void);   // current tick count
 
 #endif
