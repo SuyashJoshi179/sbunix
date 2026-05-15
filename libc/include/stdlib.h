@@ -8,12 +8,10 @@
 
 #define RAND_MAX 0x7fffffff
 
-void  exit(int status)        __attribute__((noreturn));
-void  _Exit(int status)       __attribute__((noreturn));
-void  quick_exit(int status)  __attribute__((noreturn));
-void  abort(void)             __attribute__((noreturn));
+void  exit(int status)  __attribute__((noreturn));
+void  _Exit(int status) __attribute__((noreturn));
+void  abort(void)       __attribute__((noreturn));
 int   atexit(void (*func)(void));
-int   at_quick_exit(void (*func)(void));
 
 void *malloc(size_t size);
 void *calloc(size_t nmemb, size_t size);

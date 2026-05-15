@@ -48,34 +48,9 @@ size_t strxfrm(char *dst, const char *src, size_t n) {
     return slen;
 }
 
-/* strlcpy: BSD/POSIX-2024. Always NUL-terminates if n > 0. Returns
- * src length (caller can detect truncation when retval >= n). */
-size_t strlcpy(char *dst, const char *src, size_t n) {
-    size_t slen = strlen(src);
-    if (n > 0) {
-        size_t copy = slen < n - 1 ? slen : n - 1;
-        for (size_t i = 0; i < copy; i++) dst[i] = src[i];
-        dst[copy] = 0;
-    }
-    return slen;
-}
-
-/* strlcat: BSD/POSIX-2024. Returns total intended length
- * (initial dst length + src length). */
-size_t strlcat(char *dst, const char *src, size_t n) {
-    size_t dlen = 0;
-    while (dlen < n && dst[dlen]) dlen++;
-    size_t slen = strlen(src);
-    if (dlen == n) return n + slen;
-    size_t room = n - dlen - 1;
-    size_t copy = slen < room ? slen : room;
-    for (size_t i = 0; i < copy; i++) dst[dlen + i] = src[i];
-    dst[dlen + copy] = 0;
-    return dlen + slen;
-}
-
-/* memccpy: copy up to n bytes, stopping just past the first occurrence
- * of c. Returns pointer one past the copied c, or NULL if c not found. */
+/* memccpy: POSIX. Copy up to n bytes, stopping just past the first
+ * occurrence of c. Returns pointer one past the copied c, or NULL if c
+ * was not found in the copied range. */
 void *memccpy(void *dst, const void *src, int c, size_t n) {
     unsigned char *d = dst;
     const unsigned char *s = src;
@@ -83,20 +58,6 @@ void *memccpy(void *dst, const void *src, int c, size_t n) {
     for (size_t i = 0; i < n; i++) {
         d[i] = s[i];
         if (s[i] == uc) return d + i + 1;
-    }
-    return 0;
-}
-
-/* memmem: locate needle within haystack. GNU/BSD; added to POSIX-2024. */
-void *memmem(const void *hay, size_t hlen, const void *needle, size_t nlen) {
-    if (nlen == 0) return (void *)hay;
-    if (nlen > hlen) return 0;
-    const unsigned char *h = hay;
-    const unsigned char *n = needle;
-    for (size_t i = 0; i + nlen <= hlen; i++) {
-        size_t j = 0;
-        while (j < nlen && h[i + j] == n[j]) j++;
-        if (j == nlen) return (void *)(h + i);
     }
     return 0;
 }
