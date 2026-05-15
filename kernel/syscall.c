@@ -1668,6 +1668,11 @@ static int64_t sys_getpgrp(void) {
 static int64_t sys_getsid(int pid) {
     struct pcb *p = pcb_target(pid);
     if (!p) return -ESRCH;
+    /* POSIX permits returning EPERM when the target is in a different
+     * session from the caller; doing so prevents enumeration of foreign
+     * sessions via /proc-less probing. */
+    struct pcb *me = current_proc();
+    if (me && p->sid != me->sid) return -EPERM;
     return p->sid;
 }
 
