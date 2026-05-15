@@ -5,10 +5,10 @@
 #include <ctype.h>
 
 /* scanf family — string and stream sources. Handles %d %i %u %o %x %X %s %c
- * with optional length modifier (h, hh, l, ll, z) and field width. Supports
- * suppression with '*'. No %f / %e / %g (no float support). No %[ class set.
- * No %n — a real character counter would need to thread through every
- * get/unget path; callers that need it should compute offsets themselves.
+ * %[...] (scanset, with caret negation and a-z range expansion) and %n
+ * (consumed-character count, tracked through src_get/src_unget wrappers).
+ * Supports length modifiers h/hh/l/ll/z and field width. %f / %e / %g
+ * unsupported (no float toolchain).
  *
  * Source abstraction: caller supplies get/unget callbacks plus a cookie.
  * Used for sscanf (string cookie) and fscanf (FILE cookie). */
@@ -18,7 +18,21 @@ struct scan_src {
     int (*unget)(int c, void *cookie);
     void *cookie;
     int eof_or_err;     /* set when get returns EOF without prior conversion */
+    int consumed;       /* net bytes pulled from source (for %n) */
 };
+
+static int src_get(struct scan_src *s) {
+    int c = s->get(s->cookie);
+    if (c != EOF) s->consumed++;
+    return c;
+}
+
+static int src_unget(int c, struct scan_src *s) {
+    if (c == EOF) return EOF;
+    int r = s->unget(c, s->cookie);
+    s->consumed--;
+    return r;
+}
 
 /* String source: cookie = char ** (advances on read). Single pushback slot. */
 struct str_src {
@@ -53,21 +67,21 @@ static int file_unget(int c, void *cookie) {
 
 static int skip_ws(struct scan_src *s) {
     int c;
-    do { c = s->get(s->cookie); } while (c != EOF && isspace(c));
+    do { c = src_get(s); } while (c != EOF && isspace(c));
     if (c == EOF) { s->eof_or_err = 1; return EOF; }
-    s->unget(c, s->cookie);
+    src_unget(c, s);
     return 0;
 }
 
 static int parse_int(struct scan_src *s, int base, int width,
                      unsigned long long *out, int *neg) {
-    int c = s->get(s->cookie);
+    int c = src_get(s);
     int saw = 0;
     *neg = 0;
     if (c == '+' || c == '-') {
         *neg = (c == '-');
         if (width > 0) width--;
-        c = s->get(s->cookie);
+        c = src_get(s);
     }
     /* Helper test: is `ch` a digit valid in `b`? Only used for 0x lookahead. */
     #define IS_HEX_DIGIT(ch) \
@@ -83,9 +97,9 @@ static int parse_int(struct scan_src *s, int base, int width,
         base = 10;
         if (c == '0') {
             saw = 1;
-            int c2 = s->get(s->cookie);
+            int c2 = src_get(s);
             if (c2 == 'x' || c2 == 'X') {
-                int c3 = s->get(s->cookie);
+                int c3 = src_get(s);
                 if (IS_HEX_DIGIT(c3)) {
                     base = 16;
                     c = c3;
@@ -93,18 +107,18 @@ static int parse_int(struct scan_src *s, int base, int width,
                 } else {
                     base = 8;
                     c = EOF;                       /* end the digit loop */
-                    if (c3 != EOF) s->unget(c3, s->cookie);
+                    if (c3 != EOF) src_unget(c3, s);
                 }
             } else {
                 base = 8;
-                if (c2 != EOF) s->unget(c2, s->cookie);
+                if (c2 != EOF) src_unget(c2, s);
             }
         }
     } else if (base == 16) {
         if (c == '0') {
-            int c2 = s->get(s->cookie);
+            int c2 = src_get(s);
             if (c2 == 'x' || c2 == 'X') {
-                int c3 = s->get(s->cookie);
+                int c3 = src_get(s);
                 if (IS_HEX_DIGIT(c3)) {
                     c = c3;
                     if (width > 0) width -= 2;
@@ -112,10 +126,10 @@ static int parse_int(struct scan_src *s, int base, int width,
                     /* "0x" without hex digit: keep leading 0 as matched value. */
                     saw = 1;
                     c = EOF;
-                    if (c3 != EOF) s->unget(c3, s->cookie);
+                    if (c3 != EOF) src_unget(c3, s);
                 }
             } else {
-                if (c2 != EOF) s->unget(c2, s->cookie);
+                if (c2 != EOF) src_unget(c2, s);
                 /* leading '0' is a valid digit */
             }
         }
@@ -132,9 +146,9 @@ static int parse_int(struct scan_src *s, int base, int width,
         v = v * (unsigned)base + (unsigned)d;
         saw = 1;
         if (width > 0) width--;
-        c = s->get(s->cookie);
+        c = src_get(s);
     }
-    if (c != EOF) s->unget(c, s->cookie);
+    if (c != EOF) src_unget(c, s);
     if (!saw) { if (c == EOF) s->eof_or_err = 1; return -1; }
     *out = v;
     return 0;
@@ -142,19 +156,16 @@ static int parse_int(struct scan_src *s, int base, int width,
 
 static int do_scanf(struct scan_src *s, const char *fmt, va_list ap) {
     int matched = 0;
-    int total_chars = 0;
-    /* total_chars tracks consumed bytes for %n; we count via wrappers below. */
-    (void)total_chars;
     for (const char *p = fmt; *p; p++) {
         if (isspace((unsigned char)*p)) {
             if (skip_ws(s) == EOF) goto done;
             continue;
         }
         if (*p != '%') {
-            int c = s->get(s->cookie);
+            int c = src_get(s);
             if (c != *p) {
                 if (c == EOF) s->eof_or_err = 1;
-                else s->unget(c, s->cookie);
+                else src_unget(c, s);
                 goto done;
             }
             continue;
@@ -212,13 +223,13 @@ static int do_scanf(struct scan_src *s, const char *fmt, va_list ap) {
             char *out = suppress ? 0 : va_arg(ap, char *);
             int n = 0;
             int c;
-            while ((c = s->get(s->cookie)) != EOF && !isspace(c)) {
-                if (width >= 0 && n >= width) { s->unget(c, s->cookie); break; }
+            while ((c = src_get(s)) != EOF && !isspace(c)) {
+                if (width >= 0 && n >= width) { src_unget(c, s); break; }
                 if (out) out[n] = (char)c;
                 n++;
             }
             if (c == EOF && n == 0) { s->eof_or_err = 1; goto done; }
-            if (c != EOF && (width < 0 || n < width)) s->unget(c, s->cookie);
+            if (c != EOF && (width < 0 || n < width)) src_unget(c, s);
             if (out) out[n] = 0;
             if (!suppress) matched++;
             break;
@@ -227,7 +238,7 @@ static int do_scanf(struct scan_src *s, const char *fmt, va_list ap) {
             int n = (width < 0) ? 1 : width;
             char *out = suppress ? 0 : va_arg(ap, char *);
             for (int i = 0; i < n; i++) {
-                int c = s->get(s->cookie);
+                int c = src_get(s);
                 if (c == EOF) {
                     if (i == 0) { s->eof_or_err = 1; goto done; }
                     break;
@@ -238,18 +249,76 @@ static int do_scanf(struct scan_src *s, const char *fmt, va_list ap) {
             break;
         }
         case '%': {
-            int c = s->get(s->cookie);
+            int c = src_get(s);
             if (c != '%') {
                 if (c == EOF) s->eof_or_err = 1;
-                else s->unget(c, s->cookie);
+                else src_unget(c, s);
                 goto done;
             }
             break;
         }
-        /* %n intentionally not implemented: a real char counter would have to
-         * thread through every get/unget path. Fall through to default so a
-         * caller using %n gets a clear "format failure" instead of silent
-         * zeros. */
+        case '[': {
+            /* Scanset. Build a 256-entry membership table by scanning
+             * forward in the format string until the matching ']'. A
+             * leading '^' inverts the set; a literal ']' as the first
+             * char (after optional '^') is part of the set. '-' inside
+             * the set forms a-z style ranges except at the very start or
+             * end. */
+            p++;
+            int negate = 0;
+            if (*p == '^') { negate = 1; p++; }
+            unsigned char set[256] = {0};
+            int first = 1;
+            for (; *p; p++) {
+                if (*p == ']' && !first) break;
+                /* Range: a-z when neither endpoint is the bracket itself
+                 * and the next char isn't the closing ']'. */
+                if (*p == '-' && !first && p[1] && p[1] != ']' &&
+                    /* previous char was a real set member, not a range start */
+                    1) {
+                    unsigned char lo = (unsigned char)p[-1];
+                    unsigned char hi = (unsigned char)p[1];
+                    if (lo > hi) { unsigned char t = lo; lo = hi; hi = t; }
+                    for (int i = lo; i <= hi; i++) set[i] = 1;
+                    p++;  /* consume the hi endpoint */
+                } else {
+                    set[(unsigned char)*p] = 1;
+                }
+                first = 0;
+            }
+            if (*p != ']') goto done;  /* malformed format */
+            if (negate) for (int i = 0; i < 256; i++) set[i] = !set[i];
+
+            char *out = suppress ? 0 : va_arg(ap, char *);
+            int n = 0;
+            int c;
+            while ((c = src_get(s)) != EOF) {
+                if (!set[(unsigned char)c]) { src_unget(c, s); break; }
+                if (width >= 0 && n >= width) { src_unget(c, s); break; }
+                if (out) out[n] = (char)c;
+                n++;
+            }
+            if (c == EOF && n == 0) { s->eof_or_err = 1; goto done; }
+            if (n == 0) goto done;  /* matched nothing — input mismatch */
+            if (out) out[n] = 0;
+            if (!suppress) matched++;
+            break;
+        }
+        case 'n': {
+            /* No char consumed and no value matched, but the caller's int
+             * pointer is written with the running consumed-character count.
+             * Per POSIX %n does not count toward the return value. */
+            if (!suppress) {
+                int v = s->consumed;
+                if      (len_mod == 5) *va_arg(ap, signed char *) = (signed char)v;
+                else if (len_mod == 1) *va_arg(ap, short *)       = (short)v;
+                else if (len_mod == 2) *va_arg(ap, long *)        = (long)v;
+                else if (len_mod == 3) *va_arg(ap, long long *)   = (long long)v;
+                else if (len_mod == 4) *va_arg(ap, size_t *)      = (size_t)v;
+                else                   *va_arg(ap, int *)         = v;
+            }
+            break;
+        }
         default:
             goto done;
         }
@@ -260,7 +329,7 @@ done:
 
 int vsscanf(const char *str, const char *fmt, va_list ap) {
     struct str_src ss = { str, -1 };
-    struct scan_src s = { str_get, str_unget, &ss, 0 };
+    struct scan_src s = { str_get, str_unget, &ss, 0, 0 };
     return do_scanf(&s, fmt, ap);
 }
 
@@ -272,7 +341,7 @@ int sscanf(const char *str, const char *fmt, ...) {
 }
 
 int vfscanf(FILE *stream, const char *fmt, va_list ap) {
-    struct scan_src s = { file_get, file_unget, stream, 0 };
+    struct scan_src s = { file_get, file_unget, stream, 0, 0 };
     return do_scanf(&s, fmt, ap);
 }
 
