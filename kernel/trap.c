@@ -14,7 +14,7 @@
 #define SIE_SEIE  (1 << 9)   /* S-mode external interrupt enable */
 
 /* Catch corrupted return-to-user PC before sret. User text+stack live below
- * USER_STACK_TOP (0x40000000). Anything at/above is a kernel bug. */
+ * USER_STACK_TOP (0x4000000000, 256 GB). Anything at/above is a kernel bug. */
 static void check_user_return(uint64_t *tf, const char *tag) {
     uint64_t pc = tf[TF_SEPC];
     if (pc >= USER_STACK_TOP) {
