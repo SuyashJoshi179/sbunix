@@ -113,3 +113,88 @@ int fcntl(int fd, int cmd, ...) {
     va_end(ap);
     return r;
 }
+
+/* ---- Tier-1 no-op stubs ----
+ * POSIX requires these in our libc surface but the kernel does not back
+ * them. Returning success (or a permissive value) lets portable code link
+ * and run without exercising the missing feature. */
+
+/* nice: process priority. Kernel scheduler is fixed round-robin; ignore. */
+int nice(int incr) { (void)incr; return 0; }
+
+/* lockf: advisory file lock. No file-lock subsystem in kernel. */
+int lockf(int fd, int cmd, off_t len) { (void)fd; (void)cmd; (void)len; errno = ENOSYS; return -1; }
+
+/* swab: copy n bytes from src to dst, swapping adjacent bytes per pair.
+ * n is intentionally signed; POSIX says negative n is a no-op. */
+void swab(const void *src, void *dst, ssize_t n) {
+    if (n <= 0) return;
+    const unsigned char *s = src;
+    unsigned char *d = dst;
+    for (ssize_t i = 0; i + 1 < n; i += 2) {
+        d[i]   = s[i + 1];
+        d[i+1] = s[i];
+    }
+}
+
+/* confstr: configuration strings. Return 0 (no string available). */
+size_t confstr(int name, char *buf, size_t len) {
+    (void)name; (void)buf; (void)len; return 0;
+}
+
+/* posix_madvise: memory advice. Kernel ignores hints; always succeeds. */
+int posix_madvise(void *addr, size_t len, int advice) {
+    (void)addr; (void)len; (void)advice; return 0;
+}
+
+/* Memory locking: kernel does not swap, so all pages are de-facto locked. */
+int mlock(const void *addr, size_t len)   { (void)addr; (void)len; return 0; }
+int munlock(const void *addr, size_t len) { (void)addr; (void)len; return 0; }
+int mlockall(int flags)   { (void)flags; return 0; }
+int munlockall(void)      { return 0; }
+
+/* Extended uid/gid setters. Kernel stores only a single uid/gid pair;
+ * setting real/effective/saved to the same value is the natural behavior. */
+int setregid(gid_t rgid, gid_t egid)              { (void)rgid; return setgid(egid); }
+int setreuid(uid_t ruid, uid_t euid)              { (void)ruid; return setuid(euid); }
+int setresgid(gid_t rgid, gid_t egid, gid_t sgid) { (void)rgid; (void)sgid; return setgid(egid); }
+int setresuid(uid_t ruid, uid_t euid, uid_t suid) { (void)ruid; (void)suid; return setuid(euid); }
+int getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid) {
+    gid_t g = getgid();
+    if (rgid) *rgid = g;
+    if (egid) *egid = g;
+    if (sgid) *sgid = g;
+    return 0;
+}
+int getresuid(uid_t *ruid, uid_t *euid, uid_t *suid) {
+    uid_t u = getuid();
+    if (ruid) *ruid = u;
+    if (euid) *euid = u;
+    if (suid) *suid = u;
+    return 0;
+}
+
+/* sched_setparam / sched_getparam / sched_rr_get_interval: kernel uses a
+ * fixed round-robin scheduler with no priority. Stub gracefully. */
+struct sched_param;
+int sched_setparam(pid_t pid, const struct sched_param *param) {
+    (void)pid; (void)param; return 0;
+}
+int sched_getparam(pid_t pid, struct sched_param *param) {
+    (void)pid;
+    /* sched_param's first member is int sched_priority; zero it without
+     * pulling <sched.h> into this file (avoids type-decl ordering churn). */
+    if (param) *(int *)param = 0;
+    return 0;
+}
+struct timespec;
+int sched_rr_get_interval(pid_t pid, struct timespec *ts) {
+    (void)pid;
+    if (ts) {
+        /* Report ~10ms (matches kernel timer tick HZ=100). */
+        long *p = (long *)ts;   /* {tv_sec, tv_nsec} */
+        p[0] = 0;
+        p[1] = 10000000L;
+    }
+    return 0;
+}

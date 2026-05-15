@@ -21,3 +21,18 @@
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off);
 int   munmap(void *addr, size_t len);
 int   msync(void *addr, size_t len, int flags);
+
+int   mlock(const void *addr, size_t len);
+int   munlock(const void *addr, size_t len);
+int   mlockall(int flags);
+int   munlockall(void);
+int   posix_madvise(void *addr, size_t len, int advice);
+
+#define POSIX_MADV_NORMAL     0
+#define POSIX_MADV_RANDOM     1
+#define POSIX_MADV_SEQUENTIAL 2
+#define POSIX_MADV_WILLNEED   3
+#define POSIX_MADV_DONTNEED   4
+
+#define MCL_CURRENT 1
+#define MCL_FUTURE  2

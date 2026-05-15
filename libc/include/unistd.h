@@ -68,6 +68,17 @@ gid_t getgid(void);
 gid_t getegid(void);
 int   setuid(uid_t uid);
 int   setgid(gid_t gid);
+int   setreuid(uid_t ruid, uid_t euid);
+int   setregid(gid_t rgid, gid_t egid);
+int   setresuid(uid_t ruid, uid_t euid, uid_t suid);
+int   setresgid(gid_t rgid, gid_t egid, gid_t sgid);
+int   getresuid(uid_t *ruid, uid_t *euid, uid_t *suid);
+int   getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid);
+
+int   nice(int incr);
+int   lockf(int fd, int cmd, off_t len);
+void  swab(const void *src, void *dst, ssize_t n);
+size_t confstr(int name, char *buf, size_t len);
 
 void  _exit(int status) __attribute__((noreturn));
 int   isatty(int fd);
