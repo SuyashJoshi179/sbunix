@@ -465,12 +465,23 @@ FILE *fopen(const char *path, const char *mode) {
     if (!path || !mode) return NULL;
     int flags = 0;
     int has_plus = 0;
-    for (const char *p = mode; *p; p++) if (*p == '+') has_plus = 1;
+    int has_excl = 0;
+    for (const char *p = mode; *p; p++) {
+        if (*p == '+') has_plus = 1;
+        else if (*p == 'x') has_excl = 1;
+    }
     switch (mode[0]) {
     case 'r': flags = has_plus ? O_RDWR : O_RDONLY; break;
     case 'w': flags = (has_plus ? O_RDWR : O_WRONLY) | O_CREAT | O_TRUNC; break;
     case 'a': flags = (has_plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND; break;
     default: return NULL;
+    }
+    /* C11 'x' (exclusive create): only valid with 'w' since 'r' doesn't
+     * create and 'a' would silently succeed on an existing file even
+     * with O_EXCL semantics. */
+    if (has_excl) {
+        if (mode[0] != 'w') return NULL;
+        flags |= O_EXCL;
     }
     int fd = open(path, flags);
     if (fd < 0) return NULL;
