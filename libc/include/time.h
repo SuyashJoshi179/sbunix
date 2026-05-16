@@ -34,6 +34,11 @@ struct tm {
 #define CLOCK_REALTIME  0
 #define CLOCK_MONOTONIC 1
 
+/* utimensat(2): tv_nsec sentinels meaning "use current time" and "leave
+ * this timestamp unchanged". Values match Linux's <sys/stat.h>. */
+#define UTIME_NOW    ((1L << 30) - 1L)
+#define UTIME_OMIT   ((1L << 30) - 2L)
+
 /* clock() unit; matches sys/times.h for the same reason: kernel HZ. */
 #define CLOCKS_PER_SEC 100
 

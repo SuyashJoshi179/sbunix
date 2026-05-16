@@ -787,6 +787,64 @@ static int64_t sys_lstat(const char *path, struct stat *st) {
 #define ACCESS_R_OK 4
 #define ACCESS_MODE_MASK (ACCESS_R_OK | ACCESS_W_OK | ACCESS_X_OK)
 
+// ---------------------------------------------------------------------------
+// sys_utimensat — POSIX utimensat(2). Updates a file's mtime to a caller-
+// supplied or current-clock value. Returns EROFS on filesystems that lack
+// any mutating directory op (tarfs, devfs, procfs) — see design spec §10
+// decision Q1 ("strict EROFS"). Currently dirfd must be AT_FDCWD (-100);
+// arbitrary dirfd support lands with Task 5 (openat). UTIME_NOW /
+// UTIME_OMIT in either timespec are honored.
+// ---------------------------------------------------------------------------
+#define UTIME_NOW    ((1L << 30) - 1L)
+#define UTIME_OMIT   ((1L << 30) - 2L)
+#define K_AT_FDCWD   (-100)
+
+static int64_t sys_utimensat(int dirfd, const char *path,
+                              const void *times_user, int flags) {
+    (void)flags;
+    if (dirfd != K_AT_FDCWD) return -ENOSYS;
+
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+
+    struct timespec kts[2];
+    if (times_user) {
+        if (copyin(kts, times_user, sizeof(kts)) < 0) return -EFAULT;
+    } else {
+        uint64_t now = realtime_ns() / 1000000000UL;
+        kts[0].tv_sec = (int64_t)now; kts[0].tv_nsec = 0;
+        kts[1].tv_sec = (int64_t)now; kts[1].tv_nsec = 0;
+    }
+
+    struct inode *ip;
+    rc = namei(kpath, &ip);
+    if (rc < 0) return rc;
+
+    /* Read-only fs detection: no mutating directory ops means we can't
+     * persist a new mtime. tarfs, devfs, procfs all leave create/unlink
+     * NULL; sbfs and tmpfs provide them. Matches the design-spec Q1
+     * "tarfs returns EROFS" decision without adding a new ops slot. */
+    if (!ip->ops || (!ip->ops->create && !ip->ops->unlink)) {
+        inode_put(ip);
+        return -EROFS;
+    }
+
+    if (kts[1].tv_nsec == UTIME_OMIT) {
+        /* leave mtime alone */
+    } else if (kts[1].tv_nsec == UTIME_NOW) {
+        ip->mtime = (uint64_t)(realtime_ns() / 1000000000UL);
+    } else {
+        if (kts[1].tv_sec < 0) { inode_put(ip); return -EINVAL; }
+        ip->mtime = (uint64_t)kts[1].tv_sec;
+    }
+    /* atime is dropped silently — struct inode has no atime field, and
+     * stat synthesises atime from mtime anyway. */
+
+    inode_put(ip);
+    return 0;
+}
+
 static int64_t sys_access(const char *path, int mode) {
     if (mode & ~(ACCESS_F_OK | ACCESS_MODE_MASK)) return -EINVAL;
 
@@ -2155,6 +2213,12 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_access:
             return sys_access((const char *)trapframe[TF_A0],
                               (int)(int64_t)trapframe[TF_A1]);
+
+        case SYS_utimensat:
+            return sys_utimensat((int)(int64_t)trapframe[TF_A0],
+                                 (const char *)trapframe[TF_A1],
+                                 (const void *)trapframe[TF_A2],
+                                 (int)(int64_t)trapframe[TF_A3]);
 
         case SYS_getdents64:
             return sys_getdents64((int)(int64_t)trapframe[TF_A0],

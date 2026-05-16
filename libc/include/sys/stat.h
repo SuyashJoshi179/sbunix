@@ -73,3 +73,5 @@ int    fchmod(int fd, mode_t mode);
 mode_t umask(mode_t mask);
 int    mkfifo(const char *path, mode_t mode);
 int    mknod(const char *path, mode_t mode, dev_t dev);
+int    utimensat(int dirfd, const char *path,
+                 const struct timespec times[2], int flags);
