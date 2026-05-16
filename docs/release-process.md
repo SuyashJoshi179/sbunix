@@ -58,12 +58,12 @@ thirdparty` hooks work.
    Comment-only mentions of "selftest" elsewhere in the kernel are
    harmless; leave them. Grep to confirm no stray refs remain.
 
-7. **Rewrite `bin/init/init.c` as the minimal init.** Two
-   responsibilities: run `/etc/rc` once (fork+exec
-   `/bin/sh /etc/rc`, wait), then enter an infinite loop that reaps
-   orphans, forks `/bin/sh`, hands foreground pgrp via TIOCSPGRP,
-   waits, and backs off if the shell keeps exec-failing. PID 1 must
-   never exit.
+7. **Strip the test-runner line from `/etc/rc`.** Open
+   `rootfs/etc/rc` and delete the `/bin/runtests` line. The remaining
+   script must still mount procfs, sbfs, and tmpfs and then
+   `exec /bin/sh`. `bin/init/init.c` itself no longer needs editing —
+   the boot-time test loop now lives in `/bin/runtests`, which step 5
+   already strips (`runtests` matches the `contains test` rule).
 
 8. **Remove dev artifacts.** `rm -rf docs thirdparty scripts tests`.
    Devicetree files (`my_devicetree.dtb`, `readable_devicetree.dts`)
@@ -149,7 +149,9 @@ thirdparty` hooks work.
 - **Makefile identical to master** preserves the `thirdparty` target
   the grader uses to compile their own test binaries against our
   libc.
-- **Init rewrite** drops the in-tree test loop; the grader doesn't
-  want our test harness running on boot.
+- **`/etc/rc` strip of `/bin/runtests`** drops the boot-time test
+  loop; the grader doesn't want our test harness running on boot.
+  `init` itself stays as-is — the loop lives in `/bin/runtests` and
+  that binary is removed by the `bin/` strip in step 5.
 - **No PR for release branches** because the grader expects a
   submission snapshot, not a feature stream.
