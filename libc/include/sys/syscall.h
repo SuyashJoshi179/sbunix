@@ -68,6 +68,7 @@
 #define SYS_meminfo      111
 #define SYS_readlink     112
 #define SYS_lstat        113
+#define SYS_access       114
 #define SYS_msync        115
 #define SYS_getrlimit    117
 #define SYS_setrlimit    118

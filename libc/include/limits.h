@@ -35,4 +35,5 @@
 #define OPEN_MAX     64
 #define IOV_MAX      16
 #define PIPE_BUF     4096
+#define LINK_MAX     127
 #define SSIZE_MAX    LONG_MAX

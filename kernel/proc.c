@@ -184,6 +184,8 @@ struct pcb *alloc_proc(void) {
     p->state      = PROC_UNUSED;
     p->pgid       = p->pid;
     p->sid        = p->pid;
+    p->uid        = 0;
+    p->gid        = 0;
     p->last_signal = 0;
     p->stopped_reported = 0;
     p->continued_pending = 0;
@@ -370,6 +372,9 @@ int proc_fork_current(void) {
     /* Inherit pgid/sid; pid-derived defaults from alloc_proc are overwritten. */
     child->pgid       = parent->pgid;
     child->sid        = parent->sid;
+    /* POSIX: fork inherits the parent's real/effective uid and gid. */
+    child->uid        = parent->uid;
+    child->gid        = parent->gid;
     for (int i = 0; i < (int)sizeof(child->comm); i++)
         child->comm[i] = parent->comm[i];
     for (int i = 0; i < (int)sizeof(child->exe_path); i++)

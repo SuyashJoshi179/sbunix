@@ -104,13 +104,10 @@ static int dup_to_minfd(int fd, int minfd) {
     return out;
 }
 
-/* fcntl: F_GETFD/F_SETFD are kernel-backed (per-descriptor FD_CLOEXEC).
+/* fcntl: F_GETFD/F_SETFD, F_GETFL/F_SETFL are kernel-backed; the kernel
+ * reconstructs F_GETFL from the per-file readable/writable/append fields.
  * F_DUPFD is serviced via dup; F_DUPFD_CLOEXEC additionally sets the
- * cloexec flag on the new descriptor. The kernel does track a small
- * amount of open-file state (currently just O_APPEND on struct file),
- * but this stub does not reconstruct it for F_GETFL nor honor changes
- * via F_SETFL — both keep their permissive zero/success behavior.
- * Advisory locks report ENOSYS. */
+ * cloexec flag on the new descriptor. Advisory locks report ENOSYS. */
 int fcntl(int fd, int cmd, ...) {
     va_list ap; va_start(ap, cmd);
     int r = -1;
@@ -132,20 +129,15 @@ int fcntl(int fd, int cmd, ...) {
         break;
     }
     case F_GETFD:
-        r = (int)syscall(SYS_fcntl, fd, F_GETFD);
+    case F_GETFL:
+        r = (int)syscall(SYS_fcntl, fd, cmd);
         break;
-    case F_SETFD: {
+    case F_SETFD:
+    case F_SETFL: {
         int arg = va_arg(ap, int);
-        r = (int)syscall(SYS_fcntl, fd, F_SETFD, arg);
+        r = (int)syscall(SYS_fcntl, fd, cmd, arg);
         break;
     }
-    case F_GETFL:
-        r = 0;
-        break;
-    case F_SETFL:
-        (void)va_arg(ap, int);
-        r = 0;
-        break;
     case F_GETLK:
     case F_SETLK:
     case F_SETLKW:

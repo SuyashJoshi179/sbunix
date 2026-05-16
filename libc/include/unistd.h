@@ -101,8 +101,15 @@ long  sysconf(int name);
 #define _SC_NPROCESSORS_CONF  83
 #define _SC_CLK_TCK           2
 
+#define _PC_LINK_MAX          0
+#define _PC_MAX_CANON         1
+#define _PC_MAX_INPUT         2
 #define _PC_NAME_MAX          3
 #define _PC_PATH_MAX          4
+#define _PC_PIPE_BUF          5
+#define _PC_CHOWN_RESTRICTED  6
+#define _PC_NO_TRUNC          7
+#define _PC_VDISABLE          8
 
 #define F_OK 0
 #define R_OK 4

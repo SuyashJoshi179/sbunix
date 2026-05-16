@@ -95,6 +95,7 @@
 #define SYS_meminfo       111   // () -> free physical pages
 #define SYS_readlink      112
 #define SYS_lstat         113
+#define SYS_access        114   // (const char *path, int mode) — F_OK/R_OK/W_OK/X_OK
 #define SYS_msync         115
 #define SYS_times         116   // (struct tms *buf)
 #define SYS_getrlimit     117   // (resource, struct rlimit *)
@@ -107,6 +108,8 @@
 // libc/include/fcntl.h verbatim — they are part of the kernel ABI.
 #define F_GETFD            1
 #define F_SETFD            2
+#define F_GETFL            3
+#define F_SETFL            4
 #define FD_CLOEXEC         1
 #define O_CLOEXEC          02000000
 

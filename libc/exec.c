@@ -56,7 +56,8 @@ int execle(const char *path, const char *arg0, ...) {
 
 /* PATH search for execvp/execlp. We dont have getenv("PATH") backed by
  * a real environment, so we hardcode the conventional dirs. The probe
- * uses open(O_RDONLY) instead of access() since access() is a stub. */
+ * uses open(O_RDONLY) rather than access(X_OK) so we surface ENOTDIR
+ * vs ENOENT verbatim from the kernel and don't double-walk the path. */
 static const char *exec_path_dirs[] = { "/bin", "/usr/bin", 0 };
 
 static int try_exec(const char *full, char *const argv[]) {
