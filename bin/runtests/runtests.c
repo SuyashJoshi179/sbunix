@@ -140,6 +140,7 @@ int main(void) {
         "/bin/mkfifo_test",
         "/bin/at_family_test",
         "/bin/poll_test",
+        "/bin/execvp_path_test",
         "/bin/sh_hardening_test",
         "/bin/usertests",
         "/bin/mmap_smoke_test",

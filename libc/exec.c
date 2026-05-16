@@ -56,46 +56,99 @@ int execle(const char *path, const char *arg0, ...) {
     return execv(path, argv);
 }
 
-/* PATH search for execvp/execlp. We dont have getenv("PATH") backed by
- * a real environment, so we hardcode the conventional dirs. The probe
- * uses open(O_RDONLY) rather than access(X_OK) so we surface ENOTDIR
- * vs ENOENT verbatim from the kernel and don't double-walk the path. */
-static const char *exec_path_dirs[] = { "/bin", "/usr/bin", 0 };
+/* PATH search for execvp/execvpe/execlp. POSIX says: if PATH is present
+ * in the (calling or passed-in) environment, split it on ':' — each
+ * segment is a directory to search, an empty segment means cwd. If PATH
+ * is unset, the default is implementation-defined; we follow the
+ * historical "/bin:/usr/bin" fallback that matches what real shells
+ * synthesize when launched without a PATH. */
+#define EXEC_DEFAULT_PATH "/bin:/usr/bin"
 
-static int try_exec(const char *full, char *const argv[]) {
-    int fd = open(full, O_RDONLY);
-    if (fd < 0) return -1;
-    close(fd);
-    return execv(full, argv);
+/* Look up "PATH" in a caller-supplied envp[]. Mirrors getenv but works
+ * on an arbitrary env array (execvpe doesn't get to use the runtime
+ * `environ`). Returns the value side after the '=' or NULL. */
+static const char *envp_lookup_path(char *const envp[]) {
+    if (!envp) return 0;
+    for (int i = 0; envp[i]; i++) {
+        const char *e = envp[i];
+        if (e[0] == 'P' && e[1] == 'A' && e[2] == 'T' && e[3] == 'H' &&
+            e[4] == '=')
+            return e + 5;
+    }
+    return 0;
 }
 
-int execvp(const char *file, char *const argv[]) {
-    if (!file) { errno = EINVAL; return -1; }
-    /* If the name contains a slash, treat it as a path. */
-    if (strchr(file, '/')) return execv(file, argv);
+/* Walk a colon-separated PATH, trying file in each directory. `do_exec`
+ * is the callback that actually invokes execv or execve depending on
+ * the caller — that's the only thing differing between execvp and
+ * execvpe. Empty segments mean "current directory" (POSIX). Returns
+ * only on failure; errno carries the most informative status, with
+ * ENOENT/ENOTDIR demoted in favor of EACCES/ENOEXEC/E2BIG when any
+ * candidate hits one of those. */
+typedef int (*exec_fn_t)(const char *path, char *const argv[],
+                         char *const envp[]);
+
+static int path_search(const char *path_val, const char *file,
+                       char *const argv[], char *const envp[],
+                       exec_fn_t do_exec) {
     char buf[256];
     size_t flen = strlen(file);
-    /* POSIX: if every candidate fails with ENOENT-class errors, return
-     * ENOENT; if any candidate fails with EACCES/ENOEXEC/etc., surface
-     * the most informative failure rather than masking it as ENOENT. */
     int saved = ENOENT;
-    for (int i = 0; exec_path_dirs[i]; i++) {
-        size_t dlen = strlen(exec_path_dirs[i]);
-        if (dlen + 1 + flen + 1 > sizeof(buf)) continue;
-        memcpy(buf, exec_path_dirs[i], dlen);
-        buf[dlen] = '/';
-        memcpy(buf + dlen + 1, file, flen + 1);
-        errno = 0;
-        try_exec(buf, argv);
-        if (errno && errno != ENOENT && errno != ENOTDIR) saved = errno;
+    const char *p = path_val;
+
+    while (1) {
+        const char *colon = strchr(p, ':');
+        size_t dlen = colon ? (size_t)(colon - p) : strlen(p);
+        size_t total = (dlen ? dlen + 1 : 0) + flen + 1;
+        if (total <= sizeof(buf)) {
+            if (dlen) {
+                memcpy(buf, p, dlen);
+                buf[dlen] = '/';
+                memcpy(buf + dlen + 1, file, flen + 1);
+            } else {
+                /* Empty segment → cwd-relative; don't prepend a slash
+                 * because that would make it absolute. */
+                memcpy(buf, file, flen + 1);
+            }
+            errno = 0;
+            int fd = open(buf, O_RDONLY);
+            if (fd >= 0) {
+                close(fd);
+                do_exec(buf, argv, envp);
+                /* exec*() returned → it failed; errno set */
+            }
+            if (errno && errno != ENOENT && errno != ENOTDIR) saved = errno;
+        }
+        if (!colon) break;
+        p = colon + 1;
     }
     errno = saved;
     return -1;
 }
 
-int execvpe(const char *file, char *const argv[], char *const envp[]) {
+static int do_execv(const char *p, char *const argv[], char *const envp[]) {
     (void)envp;
-    return execvp(file, argv);
+    return execv(p, argv);
+}
+
+static int do_execve(const char *p, char *const argv[], char *const envp[]) {
+    return execve(p, argv, envp);
+}
+
+int execvp(const char *file, char *const argv[]) {
+    if (!file || !*file) { errno = ENOENT; return -1; }
+    if (strchr(file, '/')) return execv(file, argv);
+    const char *path = getenv("PATH");
+    if (!path || !*path) path = EXEC_DEFAULT_PATH;
+    return path_search(path, file, argv, 0, do_execv);
+}
+
+int execvpe(const char *file, char *const argv[], char *const envp[]) {
+    if (!file || !*file) { errno = ENOENT; return -1; }
+    if (strchr(file, '/')) return execve(file, argv, envp);
+    const char *path = envp_lookup_path(envp);
+    if (!path || !*path) path = EXEC_DEFAULT_PATH;
+    return path_search(path, file, argv, envp, do_execve);
 }
 
 int execlp(const char *file, const char *arg0, ...) {
