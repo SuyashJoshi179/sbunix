@@ -466,10 +466,14 @@ static int64_t sys_unlink(const char *path) {
 //   - target's filesystem must support link           → -EROFS
 // ---------------------------------------------------------------------------
 static int64_t do_link(struct inode *old_start, char *kold,
-                       struct inode *new_start, char *knew) {
-    // Resolve target.
+                       struct inode *new_start, char *knew,
+                       int follow_old) {
+    // Resolve target. linkat(2) follows the oldpath symlink only when
+    // AT_SYMLINK_FOLLOW is set (Linux default is no-follow, matching POSIX).
+    // Plain link(2) inherits whichever default the caller picks.
     struct inode *target = 0;
-    int nrc = namei_at(old_start, kold, &target);
+    int nrc = follow_old ? namei_at(old_start, kold, &target)
+                         : lnamei_at(old_start, kold, &target);
     if (nrc < 0) return nrc;
 
     if (target->type == I_DIR) {
@@ -535,7 +539,9 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
     if (rc < 0) return rc;
     rc = copyin_cstr(newpath, knew, sizeof(knew));
     if (rc < 0) return rc;
-    return do_link(0, kold, 0, knew);
+    /* Historic POSIX link(2) follows the oldpath symlink. Preserve that
+     * shape so existing callers keep their current semantics. */
+    return do_link(0, kold, 0, knew, /*follow_old=*/1);
 }
 
 // ---------------------------------------------------------------------------
@@ -844,11 +850,7 @@ static int64_t do_stat(struct inode *start_dir, const char *kpath,
                        int follow, struct stat *st) {
     struct inode *ip;
     int rc = follow ? namei_at(start_dir, kpath, &ip)
-                    : lnamei(kpath, &ip);
-    /* lnamei doesn't yet take a start_dir — sbunix's lstat ABI only ever
-     * sees absolute paths in practice. AT_SYMLINK_NOFOLLOW + relative
-     * path against a non-AT_FDCWD dirfd is the one combo we can't
-     * resolve without extending lnamei; reject it explicitly below. */
+                    : lnamei_at(start_dir, kpath, &ip);
     if (rc < 0) return rc;
 
     if (!ip->ops || !ip->ops->stat) {
@@ -916,22 +918,19 @@ static int64_t sys_fstatat(int dirfd, const char *path,
     if (err) return err;
 
     int follow = !(flags & AT_SYMLINK_NOFOLLOW_K);
-    /* lnamei currently lacks an `_at` variant; reject the combination
-     * "relative path + non-AT_FDCWD dirfd + AT_SYMLINK_NOFOLLOW" rather
-     * than silently following the symlink. Absolute paths and AT_FDCWD
-     * paths still work for both follow modes. */
-    if (!follow && start && kpath[0] != '/') return -ENOSYS;
-
     return do_stat(start, kpath, follow, st);
 }
 
 // ---------------------------------------------------------------------------
-// sys_unlinkat — POSIX unlinkat(2). The AT_REMOVEDIR flag is accepted
-// but ignored: SBUnix has no separate rmdir op (the per-fs unlink hook
-// removes both regular files and empty directories).
+// sys_unlinkat — POSIX unlinkat(2). SBUnix has no separate rmdir op (the
+// per-fs unlink hook removes both regular files and empty directories), so
+// we enforce the dir-vs-file distinction here instead of in the backend:
+//   - without AT_REMOVEDIR, a directory target → EISDIR
+//   - with    AT_REMOVEDIR, a non-directory   → ENOTDIR
+// The target is looked up no-follow (lnamei_at): unlinking a symlink should
+// remove the link itself, not whatever it points to.
 // ---------------------------------------------------------------------------
 static int64_t sys_unlinkat(int dirfd, const char *path, int flags) {
-    (void)flags;
     char kpath[PATH_MAX_LOCAL];
     int rc = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc < 0) return rc;
@@ -939,6 +938,17 @@ static int64_t sys_unlinkat(int dirfd, const char *path, int flags) {
     int err = 0;
     struct inode *start = dirfd_to_inode(dirfd, &err);
     if (err) return err;
+
+    struct inode *target = 0;
+    int trc = lnamei_at(start, kpath, &target);
+    if (trc < 0) return trc;
+    int is_dir = (target->type == I_DIR);
+    inode_put(target);
+
+    int want_dir = (flags & AT_REMOVEDIR_K) != 0;
+    if (is_dir && !want_dir)  return -EISDIR;
+    if (!is_dir && want_dir)  return -ENOTDIR;
+
     return do_unlink(start, kpath);
 }
 
@@ -960,19 +970,14 @@ static int64_t sys_mkdirat(int dirfd, const char *path, int mode) {
 
 // ---------------------------------------------------------------------------
 // sys_linkat — POSIX linkat(2). Resolves oldpath relative to olddirfd and
-// newpath relative to newdirfd; either may be AT_FDCWD. AT_SYMLINK_FOLLOW
-// (0x400) means follow oldpath's trailing symlink; default behavior is to
-// NOT follow (Linux default differs from POSIX, but we match Linux to keep
-// the common case — `ln a b` — link the target rather than the link itself
-// when oldpath is a symlink). We follow symlinks unconditionally here
-// because that matches the underlying do_link's namei_at semantics; the
-// flag is accepted but treated as informational.
+// newpath relative to newdirfd; either may be AT_FDCWD. By default we do
+// NOT follow a trailing symlink in oldpath (Linux convention); set
+// AT_SYMLINK_FOLLOW (0x400) to opt into POSIX-style follow.
 // ---------------------------------------------------------------------------
 #define AT_SYMLINK_FOLLOW_K   0x400
 
 static int64_t sys_linkat(int olddirfd, const char *oldpath,
                           int newdirfd, const char *newpath, int flags) {
-    (void)flags;
     char kold[PATH_MAX_LOCAL], knew[PATH_MAX_LOCAL];
     int rc = copyin_cstr(oldpath, kold, sizeof(kold));
     if (rc < 0) return rc;
@@ -984,7 +989,8 @@ static int64_t sys_linkat(int olddirfd, const char *oldpath,
     if (err) return err;
     struct inode *new_s = dirfd_to_inode(newdirfd, &err);
     if (err) return err;
-    return do_link(old_s, kold, new_s, knew);
+    int follow_old = (flags & AT_SYMLINK_FOLLOW_K) != 0;
+    return do_link(old_s, kold, new_s, knew, follow_old);
 }
 
 // ---------------------------------------------------------------------------
@@ -1060,8 +1066,8 @@ static int64_t sys_readlinkat(int dirfd, const char *path,
 // sys_utimensat — POSIX utimensat(2). Updates a file's mtime to a caller-
 // supplied or current-clock value. Returns EROFS on filesystems that lack
 // any mutating directory op (tarfs, devfs, procfs) — see design spec §10
-// decision Q1 ("strict EROFS"). Currently dirfd must be AT_FDCWD (-100);
-// arbitrary dirfd support lands with Task 5 (openat). UTIME_NOW /
+// decision Q1 ("strict EROFS"). dirfd may be AT_FDCWD or any open
+// directory fd; relative paths resolve from that dir. UTIME_NOW /
 // UTIME_OMIT in either timespec are honored.
 // ---------------------------------------------------------------------------
 #define UTIME_NOW    ((1L << 30) - 1L)
@@ -1071,11 +1077,14 @@ static int64_t sys_readlinkat(int dirfd, const char *path,
 static int64_t sys_utimensat(int dirfd, const char *path,
                               const void *times_user, int flags) {
     (void)flags;
-    if (dirfd != K_AT_FDCWD) return -ENOSYS;
 
     char kpath[PATH_MAX_LOCAL];
     int rc = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc < 0) return rc;
+
+    int err = 0;
+    struct inode *start = dirfd_to_inode(dirfd, &err);
+    if (err) return err;
 
     struct timespec kts[2];
     if (times_user) {
@@ -1087,7 +1096,7 @@ static int64_t sys_utimensat(int dirfd, const char *path,
     }
 
     struct inode *ip;
-    rc = namei(kpath, &ip);
+    rc = namei_at(start, kpath, &ip);
     if (rc < 0) return rc;
 
     /* Read-only fs detection: no mutating directory ops means we can't

@@ -33,6 +33,12 @@ struct file *filealloc(void) {
             ftable[i].type   = FD_INODE;  // placeholder; caller may adjust
             ftable[i].refcnt = 1;
             ftable[i].append = 0;
+            /* path[] is populated by do_open for directories so fchdir
+             * can update cwd_path; everything else (pipes, sockets, the
+             * stdio fds wired up by proc_spawn_setup_stdio) must start
+             * with an empty string so a stale buffer from a recycled
+             * slot cannot be read back as a valid path. */
+            ftable[i].path[0] = '\0';
             file_unlock();
             return &ftable[i];
         }
@@ -105,6 +111,10 @@ int filepread(struct file *f, void *dst, uint64_t n, uint64_t off) {
     if (!f->readable) return -EBADF;
     if (f->type == FD_PIPE) return -ESPIPE;
     if (f->type != FD_INODE || !f->ip || !f->ip->ops->read) return -EBADF;
+    /* Character devices (tty, /dev/zero, …) are not seekable: an explicit
+     * offset is meaningless, so POSIX requires ESPIPE rather than silently
+     * pretending the read happened at byte 0. */
+    if (f->ip->type == I_CHR) return -ESPIPE;
     return f->ip->ops->read(f->ip, off, dst, n);
 }
 
@@ -112,6 +122,7 @@ int filepwrite(struct file *f, const void *src, uint64_t n, uint64_t off) {
     if (!f->writable) return -EBADF;
     if (f->type == FD_PIPE) return -ESPIPE;
     if (f->type != FD_INODE || !f->ip || !f->ip->ops->write) return -EBADF;
+    if (f->ip->type == I_CHR) return -ESPIPE;
     return f->ip->ops->write(f->ip, off, src, n);
 }
 

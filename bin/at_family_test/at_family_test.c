@@ -65,8 +65,8 @@ int main(void) {
     int tfd = open("/tmp", O_RDONLY);
     if (tfd < 0) { printf("FAIL: open /tmp errno=%d\n", errno); return 1; }
 
-    /* Clean stale state from prior runs. */
-    unlinkat(tfd, "atfam_d", 0);
+    /* Clean stale state from prior runs (dir → AT_REMOVEDIR per POSIX). */
+    unlinkat(tfd, "atfam_d", AT_REMOVEDIR);
 
     if (mkdirat(tfd, "atfam_d", 0755) < 0) {
         printf("FAIL: mkdirat(/tmp,atfam_d) errno=%d\n", errno);
@@ -77,8 +77,16 @@ int main(void) {
                (unsigned)st2.st_mode, errno);
         return 1;
     }
-    if (unlinkat(tfd, "atfam_d", 0) < 0) {
-        printf("FAIL: unlinkat(/tmp,atfam_d) errno=%d\n", errno);
+    /* unlinkat without AT_REMOVEDIR on a directory must report EISDIR
+     * (POSIX). */
+    errno = 0;
+    if (unlinkat(tfd, "atfam_d", 0) >= 0 || errno != EISDIR) {
+        printf("FAIL: unlinkat dir without AT_REMOVEDIR errno=%d (want EISDIR=%d)\n",
+               errno, EISDIR);
+        return 1;
+    }
+    if (unlinkat(tfd, "atfam_d", AT_REMOVEDIR) < 0) {
+        printf("FAIL: unlinkat(AT_REMOVEDIR /tmp,atfam_d) errno=%d\n", errno);
         return 1;
     }
     if (fstatat(tfd, "atfam_d", &st2, 0) >= 0) {
@@ -91,7 +99,7 @@ int main(void) {
         printf("FAIL: mkdirat AT_FDCWD errno=%d\n", errno);
         return 1;
     }
-    if (unlinkat(AT_FDCWD, "/tmp/atfam_d2", 0) < 0) {
+    if (unlinkat(AT_FDCWD, "/tmp/atfam_d2", AT_REMOVEDIR) < 0) {
         printf("FAIL: unlinkat AT_FDCWD errno=%d\n", errno);
         return 1;
     }

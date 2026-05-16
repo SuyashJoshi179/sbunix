@@ -161,13 +161,16 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
         return nval;
     }
     if (maxfd < 0) {
-        /* Nothing selectable. Honor timeout via plain sleep, then
-         * return 0 (no events). timeout < 0 = block forever; no fd
-         * will ever become ready, so this would block indefinitely
-         * if we let it. Treat as immediate 0 to avoid deadlock — the
-         * caller passed no real work. */
-        if (timeout > 0) usleep((unsigned)timeout * 1000U);
-        return 0;
+        /* Nothing selectable. Honor the caller's timeout exactly:
+         *   timeout == 0 → return immediately
+         *   timeout >  0 → sleep that many ms, return 0
+         *   timeout <  0 → block forever per POSIX
+         * Kernel sys_sleep is non-interruptible today, so the -1 case
+         * truly never returns; a future EINTR-aware sleep_ms would let
+         * this break out on signal delivery without changing this code. */
+        if (timeout == 0) return 0;
+        if (timeout > 0) { usleep((unsigned)timeout * 1000U); return 0; }
+        for (;;) usleep(1000U * 1000U);
     }
 
     struct timeval tv, *ptv = 0;
