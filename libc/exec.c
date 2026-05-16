@@ -4,11 +4,14 @@
 #include <stdarg.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/syscall.h>
 
-/* The kernel only implements SYS_execv (no environment). The execve/execle
- * wrappers accept envp for source compatibility; the env block is silently
- * dropped. We expose `environ` as an empty list so getenv() callers on a
- * fresh exec dont read uninitialized memory. */
+/* SYS_execve propagates envp to the child. The execle path still ignores
+ * its trailing envp (existing callers don't depend on it for env
+ * delivery — they `setenv()` after start), but execve hands it to the
+ * kernel. We expose `environ` as an empty list so getenv() callers on a
+ * fresh exec don't read uninitialized memory; crt.S separately passes the
+ * stack envp to main(int, char **, char **). */
 static char *_environ_empty[] = { 0 };
 char **environ = _environ_empty;
 
@@ -30,8 +33,7 @@ static int build_argv(char *out[], int cap, const char *arg0, va_list ap) {
 }
 
 int execve(const char *path, char *const argv[], char *const envp[]) {
-    (void)envp;
-    return execv(path, argv);
+    return (int)syscall(SYS_execve, (long)path, (long)argv, (long)envp);
 }
 
 int execl(const char *path, const char *arg0, ...) {

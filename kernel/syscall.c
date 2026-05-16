@@ -947,11 +947,12 @@ static int64_t sys_getpid(void) {
 // ---------------------------------------------------------------------------
 static int64_t setup_user_stack(void *kstack,
                                  const char *const *kprefix, int nprefix,
-                                 char *const *argv_user, int skip_user) {
+                                 char *const *argv_user, int skip_user,
+                                 char *const *envp_user) {
     char *base = (char *)kstack;
     char *top  = base + 4096;
 
-    if (!argv_user && nprefix == 0) {
+    if (!argv_user && nprefix == 0 && !envp_user) {
         uint64_t *frame = (uint64_t *)(top - 24);
         frame[0] = 0;  // argc
         frame[1] = 0;  // argv[0] = NULL
@@ -960,8 +961,10 @@ static int64_t setup_user_stack(void *kstack,
     }
 
     int argc = 0;
+    int envc = 0;
     char *strp = base;
     unsigned long uaddrs[ARGV_MAX_LOCAL];
+    unsigned long eaddrs[ARGV_MAX_LOCAL];
 
     // Place kernel-side prefix strings first.
     for (int i = 0; i < nprefix; i++) {
@@ -1009,9 +1012,42 @@ static int64_t setup_user_stack(void *kstack,
         }
     }
 
+    // Copy user-space envp strings. Same shape as argv: pointer-array
+    // walked until NULL, each string copyin'd into the staging page.
+    if (envp_user) {
+        for (int i = 0;; i++) {
+            uint64_t uarg = 0;
+            if (copyin(&uarg,
+                       (const char *)envp_user + i * sizeof(uint64_t),
+                       sizeof(uint64_t)) < 0)
+                return -EFAULT;
+            if (uarg == 0) break;
+            if (envc >= ARGV_MAX_LOCAL) return -E2BIG;
+
+            int len = 0;
+            char c = 0;
+            do {
+                if (copyin(&c, (const char *)(uintptr_t)(uarg + (uint64_t)len), 1) < 0)
+                    return -EFAULT;
+                len++;
+            } while (c && len < 256);
+            if (c != 0) return -E2BIG;
+
+            /* Worst-case frame size = argc + envc pointers + 3 NULL/argc
+             * slots; check against the remaining staging-page room. */
+            if (strp + len > top - (long)sizeof(uint64_t) * (argc + envc + 4))
+                return -E2BIG;
+            if (copyin(strp, (const void *)(uintptr_t)uarg, (unsigned long)len) < 0)
+                return -EFAULT;
+            eaddrs[envc] = (USER_STACK_TOP - 4096) + (unsigned long)(strp - base);
+            strp += len;
+            envc++;
+        }
+    }
+
     // Build frame at top of page (growing down):
-    // [argc] [argv[0]] ... [argv[argc-1]] [NULL] [NULL(envp)]
-    int nslots = 1 + argc + 1 + 1;  // argc + pointers + NULL + envp NULL
+    // [argc] [argv[0]] ... [argv[argc-1]] [NULL] [envp[0]] ... [envp[envc-1]] [NULL]
+    int nslots = 1 + argc + 1 + envc + 1;
     uint64_t *frame = (uint64_t *)(top - nslots * 8);
     // Alignment
     frame = (uint64_t *)((unsigned long)frame & ~7UL);
@@ -1020,7 +1056,9 @@ static int64_t setup_user_stack(void *kstack,
     for (int i = 0; i < argc; i++)
         frame[1 + i] = uaddrs[i];
     frame[1 + argc] = 0;  // argv[argc] = NULL
-    frame[2 + argc] = 0;  // envp[0] = NULL
+    for (int i = 0; i < envc; i++)
+        frame[2 + argc + i] = eaddrs[i];
+    frame[2 + argc + envc] = 0;  // envp[envc] = NULL
 
     unsigned long frame_off = (unsigned long)((char *)frame - base);
     return (int64_t)((USER_STACK_TOP - 4096) + frame_off);
@@ -1030,7 +1068,7 @@ static int64_t setup_user_stack(void *kstack,
 // do_exec — shared exec logic for both SYS_exec and SYS_execv
 // ---------------------------------------------------------------------------
 static int64_t do_exec(const char *path, char *const *argv_user,
-                       uint64_t *trapframe) {
+                       char *const *envp_user, uint64_t *trapframe) {
     struct pcb *p = current_proc();
     if (!p || !p->is_user) return -EINVAL;
     char kpath[PATH_MAX_LOCAL];
@@ -1196,7 +1234,7 @@ static int64_t do_exec(const char *path, char *const *argv_user,
         skip_user = argv_user ? 1 : 0;
     }
     int64_t sp_or_err = setup_user_stack(kstack, kprefix, nprefix,
-                                          argv_user, skip_user);
+                                          argv_user, skip_user, envp_user);
     if (sp_or_err < 0) {
         vma_list_free(&vlist);
         free_user_pgtable(new_pt);
@@ -2038,11 +2076,16 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
             return sys_getpid();
 
         case SYS_exec:
-            return do_exec((const char *)trapframe[TF_A0], 0, trapframe);
+            return do_exec((const char *)trapframe[TF_A0], 0, 0, trapframe);
 
         case SYS_execv:
             return do_exec((const char *)trapframe[TF_A0],
-                           (char *const *)trapframe[TF_A1], trapframe);
+                           (char *const *)trapframe[TF_A1], 0, trapframe);
+
+        case SYS_execve:
+            return do_exec((const char *)trapframe[TF_A0],
+                           (char *const *)trapframe[TF_A1],
+                           (char *const *)trapframe[TF_A2], trapframe);
 
         case SYS_fork:
             return sys_fork();
