@@ -371,7 +371,7 @@ static int64_t sys_openat(int dirfd, const char *path, int flags) {
     if (rc < 0) return rc;
 
     /* Absolute path or AT_FDCWD: same machinery as open(2). */
-    if (kpath[0] == '/' || dirfd == -100 /* AT_FDCWD */) {
+    if (kpath[0] == '/' || dirfd == KERN_AT_FDCWD) {
         return do_open(0, 0, kpath, flags);
     }
 
@@ -544,9 +544,10 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
     if (rc < 0) return rc;
     rc = copyin_cstr(newpath, knew, sizeof(knew));
     if (rc < 0) return rc;
-    /* Historic POSIX link(2) follows the oldpath symlink. Preserve that
-     * shape so existing callers keep their current semantics. */
-    return do_link(0, kold, 0, knew, /*follow_old=*/1);
+    /* POSIX-2008 / Linux ≥ 2.0: link(2) does NOT follow a trailing
+     * symlink in oldpath — the new name refers to the symlink itself.
+     * linkat(2) opts back in to follow-symlink with AT_SYMLINK_FOLLOW. */
+    return do_link(0, kold, 0, knew, /*follow_old=*/0);
 }
 
 // ---------------------------------------------------------------------------
@@ -891,7 +892,7 @@ static int64_t sys_stat(const char *path, struct stat *st) {
 // the error. AT_FDCWD short-circuits to NULL (meaning "use cwd").
 // ---------------------------------------------------------------------------
 static struct inode *dirfd_to_inode(int dirfd, int *errp) {
-    if (dirfd == -100 /* AT_FDCWD */) { *errp = 0; return 0; }
+    if (dirfd == KERN_AT_FDCWD) { *errp = 0; return 0; }
     struct pcb *p = current_proc();
     if (!p || dirfd < 0 || dirfd >= NOFILE || !p->ofile[dirfd]) {
         *errp = -EBADF; return 0;
@@ -939,6 +940,20 @@ static int64_t sys_unlinkat(int dirfd, const char *path, int flags) {
     char kpath[PATH_MAX_LOCAL];
     int rc = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc < 0) return rc;
+
+    /* Reject "." / ".." leaf — Linux returns EINVAL for unlinkat on these
+     * (POSIX: EINVAL for "." with AT_REMOVEDIR; we apply uniformly because
+     * neither file nor dir removal of "." or ".." is sensible). Walk to
+     * the last path component without mutating kpath. */
+    int klen = 0; while (kpath[klen]) klen++;
+    int leaf_start = 0;
+    while (klen > 1 && kpath[klen - 1] == '/') klen--;
+    for (int i = klen - 1; i >= 0; i--) {
+        if (kpath[i] == '/') { leaf_start = i + 1; break; }
+    }
+    const char *leaf = &kpath[leaf_start];
+    if (leaf[0] == '.' && (leaf[1] == '\0' ||
+        (leaf[1] == '.' && leaf[2] == '\0'))) return -EINVAL;
 
     int err = 0;
     struct inode *start = dirfd_to_inode(dirfd, &err);
@@ -1077,11 +1092,10 @@ static int64_t sys_readlinkat(int dirfd, const char *path,
 // ---------------------------------------------------------------------------
 #define UTIME_NOW    ((1L << 30) - 1L)
 #define UTIME_OMIT   ((1L << 30) - 2L)
-#define K_AT_FDCWD   (-100)
 
 static int64_t sys_utimensat(int dirfd, const char *path,
                               const void *times_user, int flags) {
-    (void)flags;
+    if (flags & ~AT_SYMLINK_NOFOLLOW_K) return -EINVAL;
 
     char kpath[PATH_MAX_LOCAL];
     int rc = copyin_cstr(path, kpath, sizeof(kpath));
@@ -1100,8 +1114,10 @@ static int64_t sys_utimensat(int dirfd, const char *path,
         kts[1].tv_sec = (int64_t)now; kts[1].tv_nsec = 0;
     }
 
+    /* AT_SYMLINK_NOFOLLOW: change the symlink's own mtime, not the target's. */
     struct inode *ip;
-    rc = namei_at(start, kpath, &ip);
+    rc = (flags & AT_SYMLINK_NOFOLLOW_K) ? lnamei_at(start, kpath, &ip)
+                                         : namei_at(start, kpath, &ip);
     if (rc < 0) return rc;
 
     /* Read-only fs detection: no mutating directory ops means we can't
@@ -1259,20 +1275,22 @@ static int64_t sys_fchdir(int fd) {
     if (f->type != FD_INODE || !f->ip) return -EBADF;
     if (f->ip->type != I_DIR) return -ENOTDIR;
 
+    /* The file must carry a recorded path — otherwise getcwd() after
+     * fchdir would report the previous directory while `.` resolves to
+     * the new one. Refuse rather than silently desync. Every directory
+     * opened via do_open / openat records a path; stdio slots and other
+     * non-do_open file slots leave path[0]==0. */
+    if (!f->path[0]) return -EINVAL;
+
     /* Bump refcount on the dir inode before dropping cwd to keep the
      * inode pinned across the swap. */
     struct inode *new_cwd = inode_get(f->ip);
     if (p->cwd) inode_put(p->cwd);
     p->cwd = new_cwd;
 
-    /* Copy the file's recorded path into cwd_path. Empty means the
-     * open path was never recorded (shouldn't happen for dirs but be
-     * defensive — leave cwd_path stale rather than crash). */
-    if (f->path[0]) {
-        int k = 0;
-        while (k < 255 && f->path[k]) { p->cwd_path[k] = f->path[k]; k++; }
-        p->cwd_path[k] = '\0';
-    }
+    int k = 0;
+    while (k < 255 && f->path[k]) { p->cwd_path[k] = f->path[k]; k++; }
+    p->cwd_path[k] = '\0';
     return 0;
 }
 

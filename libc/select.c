@@ -46,6 +46,17 @@ int select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds,
     if (rfds) in_r = *rfds; else FD_ZERO(&in_r);
     if (wfds) in_w = *wfds; else FD_ZERO(&in_w);
 
+    /* POSIX: select returns -1/EBADF immediately if any fd in any set
+     * refers to a closed/invalid file descriptor. Without this probe a
+     * bad fd would silently look "not ready" and callers could not tell
+     * an EBADF from a never-ready fd. */
+    for (int fd = 0; fd < nfds; fd++) {
+        int in_any = FD_ISSET(fd, &in_r) || FD_ISSET(fd, &in_w);
+        if (efds && FD_ISSET(fd, efds)) in_any = 1;
+        if (!in_any) continue;
+        if (fcntl(fd, F_GETFL) < 0) { errno = EBADF; return -1; }
+    }
+
     long deadline_ms = -1;
     int polling = 0;
     if (tv) {
@@ -90,6 +101,10 @@ int pselect(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds,
     struct timeval tv, *ptv = 0;
     if (ts) { tv.tv_sec = ts->tv_sec; tv.tv_usec = ts->tv_nsec / 1000; ptv = &tv; }
     int r = select(nfds, rfds, wfds, efds, ptv);
+    /* Preserve errno across the sigprocmask restore so a failing select
+     * (EBADF/EINVAL) doesn't get clobbered by a successful mask reset. */
+    int saved = errno;
     if (mask) sigprocmask(SIG_SETMASK, &prev, 0);
+    errno = saved;
     return r;
 }

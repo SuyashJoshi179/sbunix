@@ -113,8 +113,11 @@
 #define SYS_openat         124  // (dirfd, path, flags) — dirfd may be AT_FDCWD
 #define SYS_stat           125  // (path, struct stat *) — follows symlinks
 
-// *at family — dirfd-relative path resolution. dirfd == AT_FDCWD (-100)
-// means "use cwd"; otherwise dirfd must refer to a directory.
+// *at family — dirfd-relative path resolution. dirfd == AT_FDCWD
+// means "use cwd"; otherwise dirfd must refer to a directory. KERN_AT_FDCWD
+// is the single source of truth for the kernel-side value; libc declares the
+// matching AT_FDCWD in <fcntl.h>. The two must stay in lockstep.
+#define KERN_AT_FDCWD      (-100)
 #define SYS_fstatat        126  // (dirfd, path, struct stat *, flags)
 #define SYS_unlinkat       127  // (dirfd, path, flags) — flags ignored (no rmdir distinction)
 #define SYS_mkdirat        128  // (dirfd, path, mode) — mode ignored (fs assigns default)

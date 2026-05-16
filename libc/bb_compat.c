@@ -155,9 +155,12 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
         if (fd > maxfd) maxfd = fd;
     }
 
-    if (nval > 0) {
-        /* POSIX: if any fd is invalid, return immediately with the
-         * POLLNVAL count — don't block waiting on the others. */
+    /* POSIX: POLLNVAL is per-fd. Even when some fds are invalid, the
+     * remaining selectable fds must still be checked so the caller can
+     * see their revents. Old short-circuit "return nval" would mask
+     * ready fds and force callers into a tight repoll loop. */
+    if (nval > 0 && maxfd < 0) {
+        /* Only invalid fds — nothing to wait on. Return immediately. */
         return nval;
     }
     if (maxfd < 0) {
@@ -167,9 +170,19 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
          *   timeout <  0 → block forever per POSIX
          * Kernel sys_sleep is non-interruptible today, so the -1 case
          * truly never returns; a future EINTR-aware sleep_ms would let
-         * this break out on signal delivery without changing this code. */
+         * this break out on signal delivery without changing this code.
+         * Cast through uint64_t before multiplying by 1000 — unsigned-int
+         * arithmetic wraps for timeouts > ~4.3 seconds otherwise. */
         if (timeout == 0) return 0;
-        if (timeout > 0) { usleep((unsigned)timeout * 1000U); return 0; }
+        if (timeout > 0) {
+            uint64_t us = (uint64_t)timeout * 1000ULL;
+            while (us > 0) {
+                unsigned chunk = us > 1000000U ? 1000000U : (unsigned)us;
+                usleep(chunk);
+                us -= chunk;
+            }
+            return 0;
+        }
         for (;;) usleep(1000U * 1000U);
     }
 
@@ -182,10 +195,11 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     int r = select(maxfd + 1, &rset, &wset, 0, ptv);
     if (r < 0) return -1;
 
-    int n = 0;
+    int n = nval;
     for (nfds_t i = 0; i < nfds; i++) {
         int fd = fds[i].fd;
         if (fd < 0 || fd >= FD_SETSIZE) continue;
+        if (fds[i].revents == POLLNVAL) continue;
         short rev = 0;
         if (FD_ISSET(fd, &rset) && (fds[i].events & POLL_READ_MASK))
             rev |= (fds[i].events & POLL_READ_MASK);
@@ -287,9 +301,13 @@ int getentropy(void *buf, size_t buflen) {
 }
 
 ssize_t getrandom(void *buf, size_t buflen, unsigned int flags) {
-    (void)flags;  /* GRND_NONBLOCK/GRND_RANDOM/GRND_INSECURE: our PRNG
-                   * never blocks and has no /dev/random distinction,
-                   * so flags are silently ignored. */
+    /* Linux rejects any unknown flag bit with EINVAL. The three defined
+     * bits (NONBLOCK/RANDOM/INSECURE) are semantically no-ops here — our
+     * PRNG never blocks and has no /dev/random distinction — but we
+     * still validate them so probes that pass garbage flags see the
+     * same EINVAL real Linux would return. */
+    const unsigned int known = GRND_NONBLOCK | GRND_RANDOM | GRND_INSECURE;
+    if (flags & ~known) { errno = EINVAL; return -1; }
     if (buflen > 0 && !buf) { errno = EFAULT; return -1; }
     unsigned char *p = (unsigned char *)buf;
     size_t remaining = buflen;
