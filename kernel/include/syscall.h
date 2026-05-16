@@ -111,6 +111,7 @@
 #define SYS_execve         122  // (path, argv, envp) — envp propagates
 #define SYS_utimensat      123  // (dirfd, path, struct timespec[2], flags)
 #define SYS_openat         124  // (dirfd, path, flags) — dirfd may be AT_FDCWD
+#define SYS_stat           125  // (path, struct stat *) — follows symlinks
 
 // fcntl commands and flags the kernel honors. Values must match
 // libc/include/fcntl.h verbatim — they are part of the kernel ABI.

@@ -806,6 +806,35 @@ static int64_t sys_lstat(const char *path, struct stat *st) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_stat — POSIX stat(2). Mirrors sys_lstat but follows symlinks. Lives
+// here (not in libc as open+fstat+close) so a probe doesn't burn an fd
+// slot and isn't blocked by RLIMIT_NOFILE near the cap.
+// ---------------------------------------------------------------------------
+static int64_t sys_stat(const char *path, struct stat *st) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+
+    struct inode *ip;
+    rc = namei(kpath, &ip);   /* follow symlinks — differs from lstat */
+    if (rc < 0) return rc;
+
+    if (!ip->ops || !ip->ops->stat) {
+        inode_put(ip);
+        return -EINVAL;
+    }
+
+    struct stat kst;
+    memset(&kst, 0, sizeof(kst));
+    rc = ip->ops->stat(ip, &kst);
+    inode_put(ip);
+    if (rc < 0) return rc;
+
+    if (copyout(st, &kst, (unsigned long)sizeof(kst)) < 0) return -EFAULT;
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // sys_access — POSIX access(2): probe whether `path` is reachable, and
 // optionally whether the requested permission bits are satisfied. We follow
 // symlinks (POSIX semantics — use the target's mode, not the link's), so
@@ -2257,6 +2286,10 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
             return sys_openat((int)(int64_t)trapframe[TF_A0],
                               (const char *)trapframe[TF_A1],
                               (int)(int64_t)trapframe[TF_A2]);
+
+        case SYS_stat:
+            return sys_stat((const char *)trapframe[TF_A0],
+                            (struct stat *)trapframe[TF_A1]);
 
         case SYS_getdents64:
             return sys_getdents64((int)(int64_t)trapframe[TF_A0],

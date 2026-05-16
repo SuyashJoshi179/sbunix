@@ -58,12 +58,21 @@ int mknod(const char *p, mode_t m, dev_t d)     { (void)p; (void)m; (void)d; err
  *
  * NB: lstat() is a real syscall — see libc/syscall.c. Don't add a
  * duplicate definition here. */
+/* stat(2): direct syscall avoids burning an fd slot (a probe should not
+ * be blocked by RLIMIT_NOFILE near the cap) and lets symlink-following
+ * happen inside namei() where ELOOP / EACCES propagate naturally. The
+ * open(O_RDONLY) + fstat + close fallback is kept for kernels that
+ * don't yet ship SYS_stat — it returns ENOSYS in that case. */
 int stat(const char *path, struct stat *st) {
+    if (st) memset(st, 0, sizeof(*st));
+    long r = syscall(SYS_stat, (long)path, (long)st);
+    if (r >= 0) return 0;
+    if (errno != ENOSYS) return -1;
     int fd = open(path, O_RDONLY);
     if (fd < 0) return -1;
-    int r = fstat(fd, st);
+    int rc = fstat(fd, st);
     close(fd);
-    return r;
+    return rc;
 }
 
 int creat(const char *path, mode_t mode) {
