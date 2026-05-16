@@ -72,11 +72,10 @@ int creat(const char *path, mode_t mode) {
 }
 
 int openat(int dirfd, const char *path, int flags, ...) {
-    /* No real openat in the kernel. Accept only AT_FDCWD; reject any
-     * other dirfd rather than silently opening the wrong path. */
-    if (dirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
-    (void)flags;
-    return open(path, flags);
+    /* mode is consumed only by O_CREAT in real POSIX; the kernel side
+     * ignores mode (every fs sets a default), so we drop the va_list and
+     * forward the three real args. */
+    return (int)syscall(SYS_openat, (long)dirfd, (long)path, (long)flags);
 }
 
 /* Duplicate fd to the lowest free descriptor >= minfd. Loops dup() and

@@ -77,6 +77,7 @@
 #define SYS_pwrite       121
 #define SYS_execve       122
 #define SYS_utimensat    123
+#define SYS_openat       124
 
 /* Generic syscall dispatch. Implemented as an asm stub (libc/syscall.c)
  * that shuffles the LP64 variadic argument registers (a0 = num, a1..a6 =

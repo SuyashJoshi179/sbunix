@@ -261,19 +261,19 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
 }
 
 // ---------------------------------------------------------------------------
-// sys_open (Phase 5: handles O_CREAT on writable sbfs files)
+// do_open — shared core for sys_open and sys_openat. `start_dir` is the
+// directory inode against which a relative `kpath` resolves (NULL → fall
+// back to the process cwd, matching plain open(2)). Absolute paths ignore
+// start_dir entirely. `kpath` must already be a kernel-space NUL-terminated
+// copy of the caller's path.
 // ---------------------------------------------------------------------------
-static int64_t sys_open(const char *path, int flags) {
+static int64_t do_open(struct inode *start_dir, char *kpath, int flags) {
     struct pcb *p = current_proc();
     if (!p) return -EBADF;
     if (proc_open_fd_count(p) >= proc_fd_limit(p)) return -EMFILE;
 
-    char kpath[PATH_MAX_LOCAL];
-    int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
-    if (rc_path < 0) return rc_path;
-
     struct inode *ip = 0;
-    int rc = namei(kpath, &ip);
+    int rc = namei_at(start_dir, kpath, &ip);
 
     if (rc == -ENOENT && (flags & 0100 /* O_CREAT */)) {
         // Create the file.  Walk to the parent directory, then dispatch
@@ -287,7 +287,7 @@ static int64_t sys_open(const char *path, int flags) {
         /* Propagate namei's -errno verbatim — collapsing all walk
          * failures to -ENOENT would mask -ENOTDIR / -EACCES / -ELOOP /
          * -ENAMETOOLONG from userspace. */
-        int nrc = namei(parent_path, &parent);
+        int nrc = namei_at(start_dir, parent_path, &parent);
         if (nrc < 0) return nrc;
         if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
         if (!parent->ops || !parent->ops->create) {
@@ -330,6 +330,39 @@ static int64_t sys_open(const char *path, int flags) {
     if (flags & O_CLOEXEC)
         p->cloexec_mask |= (1ULL << fd);
     return fd;
+}
+
+// ---------------------------------------------------------------------------
+// sys_open (Phase 5: handles O_CREAT on writable sbfs files)
+// ---------------------------------------------------------------------------
+static int64_t sys_open(const char *path, int flags) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+    return do_open(0, kpath, flags);
+}
+
+// ---------------------------------------------------------------------------
+// sys_openat — POSIX openat(2). Relative paths resolve against the
+// directory referred to by `dirfd`; absolute paths and AT_FDCWD behave
+// exactly like open(2). Returns ENOTDIR if dirfd refers to a non-directory.
+// ---------------------------------------------------------------------------
+static int64_t sys_openat(int dirfd, const char *path, int flags) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+
+    /* Absolute path or AT_FDCWD: same machinery as open(2). */
+    if (kpath[0] == '/' || dirfd == -100 /* AT_FDCWD */) {
+        return do_open(0, kpath, flags);
+    }
+
+    struct pcb *p = current_proc();
+    if (!p || dirfd < 0 || dirfd >= NOFILE || !p->ofile[dirfd]) return -EBADF;
+    struct file *df = p->ofile[dirfd];
+    if (df->type != FD_INODE || !df->ip) return -EBADF;
+    if (df->ip->type != I_DIR) return -ENOTDIR;
+    return do_open(df->ip, kpath, flags);
 }
 
 // ---------------------------------------------------------------------------
@@ -2219,6 +2252,11 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
                                  (const char *)trapframe[TF_A1],
                                  (const void *)trapframe[TF_A2],
                                  (int)(int64_t)trapframe[TF_A3]);
+
+        case SYS_openat:
+            return sys_openat((int)(int64_t)trapframe[TF_A0],
+                              (const char *)trapframe[TF_A1],
+                              (int)(int64_t)trapframe[TF_A2]);
 
         case SYS_getdents64:
             return sys_getdents64((int)(int64_t)trapframe[TF_A0],

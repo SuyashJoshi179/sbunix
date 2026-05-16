@@ -135,6 +135,7 @@ int main(void) {
         "/bin/pread_pwrite_test",
         "/bin/execve_env_test",
         "/bin/utimes_test",
+        "/bin/openat_test",
         "/bin/sh_hardening_test",
         "/bin/usertests",
         "/bin/mmap_smoke_test",
