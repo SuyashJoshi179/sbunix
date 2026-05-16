@@ -98,6 +98,12 @@ int filestat(struct file *f, struct stat *st) {
     if (f->type == FD_PIPE) {
         memset(st, 0, sizeof(*st));
         st->st_mode = 0010000;  /* S_IFIFO */
+        /* Surface pending byte count via st_size so libc-side select(2)
+         * can probe pipe readiness without a kernel poll syscall. The
+         * read end reports unread bytes; the write end reports the same
+         * value (a non-empty pipe means data is in flight). */
+        if (f->pipe)
+            st->st_size = (uint64_t)(f->pipe->nwrite - f->pipe->nread);
         return 0;
     }
     if (f->type != FD_INODE || !f->ip || !f->ip->ops->stat) return -EBADF;
