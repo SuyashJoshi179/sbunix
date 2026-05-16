@@ -142,6 +142,7 @@ int main(void) {
         "/bin/poll_test",
         "/bin/execvp_path_test",
         "/bin/fchdir_test",
+        "/bin/getrandom_test",
         "/bin/sh_hardening_test",
         "/bin/usertests",
         "/bin/mmap_smoke_test",
