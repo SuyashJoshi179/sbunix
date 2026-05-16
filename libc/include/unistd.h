@@ -40,6 +40,7 @@ int   chdir(const char *path);
 char *getcwd(char *buf, size_t n);
 int   mkdir(const char *path, int mode);
 int   unlink(const char *path);
+int   unlinkat(int dirfd, const char *path, int flags);
 int   pipe(int fds[2]);
 int   execv(const char *path, char *const argv[]);
 int   execvp(const char *file, char *const argv[]);

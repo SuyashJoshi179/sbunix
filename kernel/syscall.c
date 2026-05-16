@@ -366,26 +366,24 @@ static int64_t sys_openat(int dirfd, const char *path, int flags) {
 }
 
 // ---------------------------------------------------------------------------
-// sys_mkdir — dispatch through parent fs's mkdir op
+// do_mkdir / do_unlink — shared cores for the path and `*at` variants.
+// `start_dir == NULL` falls back to cwd for relative paths (plain mkdir/unlink
+// behavior); a non-NULL start_dir resolves relatives from there (mkdirat/
+// unlinkat with a real dirfd). `kpath` must already be a kernel-space copy.
 // ---------------------------------------------------------------------------
-static int64_t sys_mkdir(const char *path) {
-    char kpath[PATH_MAX_LOCAL];
-    int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
-    if (rc_path < 0) return rc_path;
-
+static int64_t do_mkdir(struct inode *start_dir, char *kpath) {
     char parent_path[PATH_MAX_LOCAL];
     const char *leaf = 0;
     if (path_split(kpath, parent_path, &leaf) < 0) return -EINVAL;
     if (!leaf || !leaf[0]) return -EINVAL;
 
     struct inode *parent = 0;
-    /* Propagate namei's -errno verbatim (see sys_mknod for rationale). */
-    int nrc = namei(parent_path, &parent);
+    int nrc = namei_at(start_dir, parent_path, &parent);
     if (nrc < 0) return nrc;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
 
-    // Check existence first: EEXIST takes priority over EROFS so that
-    // mkdir -p style callers on a read-only fs get the right error.
+    // EEXIST priority over EROFS so mkdir -p on a read-only fs reports the
+    // right error.
     if (parent->ops && parent->ops->lookup) {
         struct inode *existing = 0;
         if (parent->ops->lookup(parent, leaf, &existing) == 0) {
@@ -394,7 +392,6 @@ static int64_t sys_mkdir(const char *path) {
             return -EEXIST;
         }
     }
-
     if (!parent->ops || !parent->ops->mkdir) { inode_put(parent); return -EROFS; }
 
     int rc = parent->ops->mkdir(parent, leaf);
@@ -402,22 +399,14 @@ static int64_t sys_mkdir(const char *path) {
     return rc;
 }
 
-// ---------------------------------------------------------------------------
-// sys_unlink — dispatch through parent fs's unlink op
-// ---------------------------------------------------------------------------
-static int64_t sys_unlink(const char *path) {
-    char kpath[PATH_MAX_LOCAL];
-    int rc_path = copyin_cstr(path, kpath, sizeof(kpath));
-    if (rc_path < 0) return rc_path;
-
+static int64_t do_unlink(struct inode *start_dir, char *kpath) {
     char parent_path[PATH_MAX_LOCAL];
     const char *leaf = 0;
     if (path_split(kpath, parent_path, &leaf) < 0) return -EINVAL;
     if (!leaf || !leaf[0]) return -EINVAL;
 
     struct inode *parent = 0;
-    /* Propagate namei's -errno verbatim. */
-    int nrc = namei(parent_path, &parent);
+    int nrc = namei_at(start_dir, parent_path, &parent);
     if (nrc < 0) return nrc;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
     if (!parent->ops || !parent->ops->unlink) { inode_put(parent); return -EROFS; }
@@ -425,6 +414,26 @@ static int64_t sys_unlink(const char *path) {
     int rc = parent->ops->unlink(parent, leaf);
     inode_put(parent);
     return rc;
+}
+
+// ---------------------------------------------------------------------------
+// sys_mkdir — dispatch through parent fs's mkdir op
+// ---------------------------------------------------------------------------
+static int64_t sys_mkdir(const char *path) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+    return do_mkdir(0, kpath);
+}
+
+// ---------------------------------------------------------------------------
+// sys_unlink — dispatch through parent fs's unlink op
+// ---------------------------------------------------------------------------
+static int64_t sys_unlink(const char *path) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+    return do_unlink(0, kpath);
 }
 
 // ---------------------------------------------------------------------------
@@ -806,17 +815,19 @@ static int64_t sys_lstat(const char *path, struct stat *st) {
 }
 
 // ---------------------------------------------------------------------------
-// sys_stat — POSIX stat(2). Mirrors sys_lstat but follows symlinks. Lives
-// here (not in libc as open+fstat+close) so a probe doesn't burn an fd
-// slot and isn't blocked by RLIMIT_NOFILE near the cap.
+// do_stat — shared core for sys_stat / sys_fstatat. `start_dir` is the
+// directory inode against which a relative `kpath` resolves (NULL → cwd).
+// `follow` selects between namei (stat semantics) and lnamei (lstat).
 // ---------------------------------------------------------------------------
-static int64_t sys_stat(const char *path, struct stat *st) {
-    char kpath[PATH_MAX_LOCAL];
-    int rc = copyin_cstr(path, kpath, sizeof(kpath));
-    if (rc < 0) return rc;
-
+static int64_t do_stat(struct inode *start_dir, const char *kpath,
+                       int follow, struct stat *st) {
     struct inode *ip;
-    rc = namei(kpath, &ip);   /* follow symlinks — differs from lstat */
+    int rc = follow ? namei_at(start_dir, kpath, &ip)
+                    : lnamei(kpath, &ip);
+    /* lnamei doesn't yet take a start_dir — sbunix's lstat ABI only ever
+     * sees absolute paths in practice. AT_SYMLINK_NOFOLLOW + relative
+     * path against a non-AT_FDCWD dirfd is the one combo we can't
+     * resolve without extending lnamei; reject it explicitly below. */
     if (rc < 0) return rc;
 
     if (!ip->ops || !ip->ops->stat) {
@@ -832,6 +843,98 @@ static int64_t sys_stat(const char *path, struct stat *st) {
 
     if (copyout(st, &kst, (unsigned long)sizeof(kst)) < 0) return -EFAULT;
     return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sys_stat — POSIX stat(2). Mirrors sys_lstat but follows symlinks. Lives
+// here (not in libc as open+fstat+close) so a probe doesn't burn an fd
+// slot and isn't blocked by RLIMIT_NOFILE near the cap.
+// ---------------------------------------------------------------------------
+static int64_t sys_stat(const char *path, struct stat *st) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+    return do_stat(0, kpath, /*follow=*/1, st);
+}
+
+// ---------------------------------------------------------------------------
+// Resolve a dirfd to its directory inode (borrowed pointer — no refcount
+// change). Returns NULL with `*errp` set on failure; the caller surfaces
+// the error. AT_FDCWD short-circuits to NULL (meaning "use cwd").
+// ---------------------------------------------------------------------------
+static struct inode *dirfd_to_inode(int dirfd, int *errp) {
+    if (dirfd == -100 /* AT_FDCWD */) { *errp = 0; return 0; }
+    struct pcb *p = current_proc();
+    if (!p || dirfd < 0 || dirfd >= NOFILE || !p->ofile[dirfd]) {
+        *errp = -EBADF; return 0;
+    }
+    struct file *df = p->ofile[dirfd];
+    if (df->type != FD_INODE || !df->ip) { *errp = -EBADF; return 0; }
+    if (df->ip->type != I_DIR) { *errp = -ENOTDIR; return 0; }
+    *errp = 0;
+    return df->ip;
+}
+
+#define AT_SYMLINK_NOFOLLOW_K 0x100
+#define AT_REMOVEDIR_K        0x200
+
+// ---------------------------------------------------------------------------
+// sys_fstatat — POSIX fstatat(2). Relative paths resolve from dirfd;
+// AT_SYMLINK_NOFOLLOW selects lstat-style behavior. Empty path is not
+// supported (AT_EMPTY_PATH is non-standard); pass "/proc/self/fd/N" or
+// fstat(2) instead.
+// ---------------------------------------------------------------------------
+static int64_t sys_fstatat(int dirfd, const char *path,
+                           struct stat *st, int flags) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+
+    int err = 0;
+    struct inode *start = dirfd_to_inode(dirfd, &err);
+    if (err) return err;
+
+    int follow = !(flags & AT_SYMLINK_NOFOLLOW_K);
+    /* lnamei currently lacks an `_at` variant; reject the combination
+     * "relative path + non-AT_FDCWD dirfd + AT_SYMLINK_NOFOLLOW" rather
+     * than silently following the symlink. Absolute paths and AT_FDCWD
+     * paths still work for both follow modes. */
+    if (!follow && start && kpath[0] != '/') return -ENOSYS;
+
+    return do_stat(start, kpath, follow, st);
+}
+
+// ---------------------------------------------------------------------------
+// sys_unlinkat — POSIX unlinkat(2). The AT_REMOVEDIR flag is accepted
+// but ignored: SBUnix has no separate rmdir op (the per-fs unlink hook
+// removes both regular files and empty directories).
+// ---------------------------------------------------------------------------
+static int64_t sys_unlinkat(int dirfd, const char *path, int flags) {
+    (void)flags;
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+
+    int err = 0;
+    struct inode *start = dirfd_to_inode(dirfd, &err);
+    if (err) return err;
+    return do_unlink(start, kpath);
+}
+
+// ---------------------------------------------------------------------------
+// sys_mkdirat — POSIX mkdirat(2). `mode` is accepted but ignored (the
+// per-fs mkdir op assigns a default 0755).
+// ---------------------------------------------------------------------------
+static int64_t sys_mkdirat(int dirfd, const char *path, int mode) {
+    (void)mode;
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+
+    int err = 0;
+    struct inode *start = dirfd_to_inode(dirfd, &err);
+    if (err) return err;
+    return do_mkdir(start, kpath);
 }
 
 // ---------------------------------------------------------------------------
@@ -2290,6 +2393,22 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_stat:
             return sys_stat((const char *)trapframe[TF_A0],
                             (struct stat *)trapframe[TF_A1]);
+
+        case SYS_fstatat:
+            return sys_fstatat((int)(int64_t)trapframe[TF_A0],
+                               (const char *)trapframe[TF_A1],
+                               (struct stat *)trapframe[TF_A2],
+                               (int)(int64_t)trapframe[TF_A3]);
+
+        case SYS_unlinkat:
+            return sys_unlinkat((int)(int64_t)trapframe[TF_A0],
+                                (const char *)trapframe[TF_A1],
+                                (int)(int64_t)trapframe[TF_A2]);
+
+        case SYS_mkdirat:
+            return sys_mkdirat((int)(int64_t)trapframe[TF_A0],
+                               (const char *)trapframe[TF_A1],
+                               (int)(int64_t)trapframe[TF_A2]);
 
         case SYS_getdents64:
             return sys_getdents64((int)(int64_t)trapframe[TF_A0],

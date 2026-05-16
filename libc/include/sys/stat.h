@@ -75,3 +75,7 @@ int    mkfifo(const char *path, mode_t mode);
 int    mknod(const char *path, mode_t mode, dev_t dev);
 int    utimensat(int dirfd, const char *path,
                  const struct timespec times[2], int flags);
+
+/* POSIX *at family. dirfd may be AT_FDCWD or an open directory fd. */
+int    fstatat(int dirfd, const char *path, struct stat *st, int flags);
+int    mkdirat(int dirfd, const char *path, mode_t mode);

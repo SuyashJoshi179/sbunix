@@ -79,6 +79,9 @@
 #define SYS_utimensat    123
 #define SYS_openat       124
 #define SYS_stat         125
+#define SYS_fstatat      126
+#define SYS_unlinkat     127
+#define SYS_mkdirat      128
 
 /* Generic syscall dispatch. Implemented as an asm stub (libc/syscall.c)
  * that shuffles the LP64 variadic argument registers (a0 = num, a1..a6 =

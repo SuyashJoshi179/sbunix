@@ -87,6 +87,23 @@ int openat(int dirfd, const char *path, int flags, ...) {
     return (int)syscall(SYS_openat, (long)dirfd, (long)path, (long)flags);
 }
 
+/* *at family — dirfd-relative path lookup. dirfd == AT_FDCWD (-100)
+ * means "use cwd"; otherwise dirfd must refer to an open directory.
+ * Kernel handles all validation; libc is a thin syscall(2) shim. */
+int fstatat(int dirfd, const char *path, struct stat *st, int flags) {
+    if (st) memset(st, 0, sizeof(*st));
+    return (int)syscall(SYS_fstatat, (long)dirfd, (long)path,
+                        (long)st, (long)flags);
+}
+
+int mkdirat(int dirfd, const char *path, mode_t mode) {
+    return (int)syscall(SYS_mkdirat, (long)dirfd, (long)path, (long)mode);
+}
+
+int unlinkat(int dirfd, const char *path, int flags) {
+    return (int)syscall(SYS_unlinkat, (long)dirfd, (long)path, (long)flags);
+}
+
 /* Duplicate fd to the lowest free descriptor >= minfd. Loops dup() and
  * closes intermediates so we honor the F_DUPFD/F_DUPFD_CLOEXEC contract
  * even though the kernel has no fcntl-aware allocator. The held buffer
