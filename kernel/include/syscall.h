@@ -104,6 +104,11 @@
 // Filesystem: per-descriptor flags
 #define SYS_fcntl          119  // (fd, cmd, arg) — F_GETFD / F_SETFD only
 
+// POSIX positional I/O — read/write at an explicit offset without
+// touching the file cursor. Pipes return ESPIPE.
+#define SYS_pread          120  // (fd, buf, count, offset)
+#define SYS_pwrite         121  // (fd, buf, count, offset)
+
 // fcntl commands and flags the kernel honors. Values must match
 // libc/include/fcntl.h verbatim — they are part of the kernel ABI.
 #define F_GETFD            1

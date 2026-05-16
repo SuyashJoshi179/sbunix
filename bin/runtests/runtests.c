@@ -132,6 +132,7 @@ int main(void) {
         "/bin/env_test",
         "/bin/sh_c_test",
         "/bin/select_test",
+        "/bin/pread_pwrite_test",
         "/bin/sh_hardening_test",
         "/bin/usertests",
         "/bin/mmap_smoke_test",

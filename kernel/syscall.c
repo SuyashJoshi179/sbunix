@@ -163,6 +163,54 @@ static int64_t sys_read(int fd, void *buf, uint64_t len) {
 }
 
 // ---------------------------------------------------------------------------
+// sys_pread / sys_pwrite — POSIX positional I/O. Same chunked copyin/
+// copyout dance as sys_read / sys_write, but never touches f->off.
+// ---------------------------------------------------------------------------
+static int64_t sys_pread(int fd, void *buf, uint64_t len, uint64_t off) {
+    if (len > 0 && !buf) return -EFAULT;
+    struct pcb *p = current_proc();
+    if (!p) return -EBADF;
+    if (fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
+
+    char kbuf[UIO_CHUNK];
+    uint64_t done = 0;
+    while (done < len) {
+        uint64_t chunk = len - done;
+        if (chunk > sizeof(kbuf)) chunk = sizeof(kbuf);
+        int r = filepread(p->ofile[fd], kbuf, chunk, off + done);
+        if (r < 0) return done > 0 ? (int64_t)done : r;
+        if (r == 0) break;
+        if (copyout((char *)buf + done, kbuf, (unsigned long)r) < 0)
+            return done > 0 ? (int64_t)done : -EFAULT;
+        done += (uint64_t)r;
+        if ((uint64_t)r < chunk) break;
+    }
+    return (int64_t)done;
+}
+
+static int64_t sys_pwrite(int fd, const char *buf, uint64_t len, uint64_t off) {
+    if (len > 0 && !buf) return -EFAULT;
+    struct pcb *p = current_proc();
+    if (!p) return -EBADF;
+    if (fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
+
+    char kbuf[UIO_CHUNK];
+    uint64_t done = 0;
+    while (done < len) {
+        uint64_t chunk = len - done;
+        if (chunk > sizeof(kbuf)) chunk = sizeof(kbuf);
+        if (copyin(kbuf, buf + done, chunk) < 0)
+            return done > 0 ? (int64_t)done : -EFAULT;
+        int w = filepwrite(p->ofile[fd], kbuf, chunk, off + done);
+        if (w < 0) return done > 0 ? (int64_t)done : w;
+        if (w == 0) break;
+        done += (uint64_t)w;
+        if ((uint64_t)w < chunk) break;
+    }
+    return (int64_t)done;
+}
+
+// ---------------------------------------------------------------------------
 // path_split — split an absolute or relative path into parent dir path +
 // leaf name.  parent_buf must hold at least the length of path + 2 bytes.
 // Strips trailing '/' (POSIX: "/foo/" is equivalent to "/foo"), so `path`
@@ -2030,6 +2078,18 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
             return sys_fcntl((int)(int64_t)trapframe[TF_A0],
                              (int)(int64_t)trapframe[TF_A1],
                              trapframe[TF_A2]);
+
+        case SYS_pread:
+            return sys_pread((int)(int64_t)trapframe[TF_A0],
+                             (void *)trapframe[TF_A1],
+                             trapframe[TF_A2],
+                             trapframe[TF_A3]);
+
+        case SYS_pwrite:
+            return sys_pwrite((int)(int64_t)trapframe[TF_A0],
+                              (const char *)trapframe[TF_A1],
+                              trapframe[TF_A2],
+                              trapframe[TF_A3]);
 
         case SYS_lseek:
             return sys_lseek((int)(int64_t)trapframe[TF_A0],

@@ -94,6 +94,27 @@ int filewrite(struct file *f, const void *src, uint64_t n) {
     return w;
 }
 
+/* POSIX pread/pwrite: read/write at an explicit offset without touching
+ * f->off. Pipes are not seekable — ESPIPE. O_APPEND is ignored for
+ * pwrite (pwrite on an O_APPEND file is implementation-defined; we let
+ * the explicit offset win, matching Linux behavior pre-2.6.0 callers
+ * relied on). Reads/writes that don't advance f->off make these safe to
+ * call concurrently with read/write on the same fd at different
+ * offsets. */
+int filepread(struct file *f, void *dst, uint64_t n, uint64_t off) {
+    if (!f->readable) return -EBADF;
+    if (f->type == FD_PIPE) return -ESPIPE;
+    if (f->type != FD_INODE || !f->ip || !f->ip->ops->read) return -EBADF;
+    return f->ip->ops->read(f->ip, off, dst, n);
+}
+
+int filepwrite(struct file *f, const void *src, uint64_t n, uint64_t off) {
+    if (!f->writable) return -EBADF;
+    if (f->type == FD_PIPE) return -ESPIPE;
+    if (f->type != FD_INODE || !f->ip || !f->ip->ops->write) return -EBADF;
+    return f->ip->ops->write(f->ip, off, src, n);
+}
+
 int filestat(struct file *f, struct stat *st) {
     if (f->type == FD_PIPE) {
         memset(st, 0, sizeof(*st));

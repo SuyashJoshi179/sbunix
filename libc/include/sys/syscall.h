@@ -73,6 +73,8 @@
 #define SYS_getrlimit    117
 #define SYS_setrlimit    118
 #define SYS_fcntl        119
+#define SYS_pread        120
+#define SYS_pwrite       121
 
 /* Generic syscall dispatch. Implemented as an asm stub (libc/syscall.c)
  * that shuffles the LP64 variadic argument registers (a0 = num, a1..a6 =
