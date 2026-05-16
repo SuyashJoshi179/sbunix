@@ -95,6 +95,7 @@ int main(void) {
     }
 
     /* AT_FDCWD on mkdirat/unlinkat must work too. */
+    unlinkat(AT_FDCWD, "/tmp/atfam_d2", AT_REMOVEDIR);
     if (mkdirat(AT_FDCWD, "/tmp/atfam_d2", 0755) < 0) {
         printf("FAIL: mkdirat AT_FDCWD errno=%d\n", errno);
         return 1;

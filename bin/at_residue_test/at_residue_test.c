@@ -28,7 +28,11 @@ int main(void) {
     /* Create atr_a under /tmp via openat. */
     int afd = openat(tfd, "atr_a", O_CREAT | O_WRONLY);
     if (afd < 0) { printf("FAIL: openat atr_a errno=%d\n", errno); return 1; }
-    write(afd, "hi", 2);
+    if (write(afd, "hi", 2) != 2) {
+        printf("FAIL: write atr_a errno=%d\n", errno);
+        close(afd);
+        return 1;
+    }
     close(afd);
 
     /* linkat: create /tmp/atr_b as hard link to /tmp/atr_a. */
@@ -84,7 +88,10 @@ int main(void) {
     /* AT_FDCWD path: chdir into /tmp then exercise the same operations
      * with AT_FDCWD to verify the dirfd_to_inode(AT_FDCWD) branch. */
     char cwd_save[256];
-    getcwd(cwd_save, sizeof(cwd_save));
+    if (!getcwd(cwd_save, sizeof(cwd_save))) {
+        printf("FAIL: getcwd errno=%d\n", errno);
+        return 1;
+    }
     if (chdir("/tmp") < 0) {
         printf("FAIL: chdir /tmp errno=%d\n", errno);
         return 1;

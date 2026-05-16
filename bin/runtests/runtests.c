@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
+#include <signal.h>
 
 /* Boot-time regression suite. Invoked from /etc/rc before the
  * interactive shell so that adding a new test only requires editing
@@ -144,6 +145,11 @@ int main(void) {
         "/bin/fchdir_test",
         "/bin/getrandom_test",
         "/bin/at_residue_test",
+        "/bin/regression_fixes_test",
+        "/bin/access_test",
+        "/bin/posix_surface_test",
+        "/bin/sigmask_defer_test",
+        "/bin/sigmask_exec_test",
         "/bin/sh_hardening_test",
         "/bin/usertests",
         "/bin/mmap_smoke_test",
@@ -175,10 +181,15 @@ int main(void) {
             }
         }
         ioctl(0, 0x5410 /* TIOCSPGRP */, &parent_pgid);
-        if (status == 0) {
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
             pass++;
+        } else if (WIFSIGNALED(status)) {
+            printf("runtests: '%s' killed by signal %d\n",
+                   tests[i], WTERMSIG(status));
+            fail++;
         } else {
-            printf("runtests: '%s' exited with status %d\n", tests[i], status);
+            printf("runtests: '%s' exited with status %d\n",
+                   tests[i], WEXITSTATUS(status));
             fail++;
         }
     }
