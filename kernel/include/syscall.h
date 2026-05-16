@@ -95,6 +95,7 @@
 #define SYS_meminfo       111   // () -> free physical pages
 #define SYS_readlink      112
 #define SYS_lstat         113
+#define SYS_access        114   // (const char *path, int mode) — F_OK/R_OK/W_OK/X_OK
 #define SYS_msync         115
 #define SYS_times         116   // (struct tms *buf)
 #define SYS_getrlimit     117   // (resource, struct rlimit *)
@@ -103,10 +104,35 @@
 // Filesystem: per-descriptor flags
 #define SYS_fcntl          119  // (fd, cmd, arg) — F_GETFD / F_SETFD only
 
+// POSIX positional I/O — read/write at an explicit offset without
+// touching the file cursor. Pipes return ESPIPE.
+#define SYS_pread          120  // (fd, buf, count, offset)
+#define SYS_pwrite         121  // (fd, buf, count, offset)
+#define SYS_execve         122  // (path, argv, envp) — envp propagates
+#define SYS_utimensat      123  // (dirfd, path, struct timespec[2], flags)
+#define SYS_openat         124  // (dirfd, path, flags) — dirfd may be AT_FDCWD
+#define SYS_stat           125  // (path, struct stat *) — follows symlinks
+
+// *at family — dirfd-relative path resolution. dirfd == AT_FDCWD
+// means "use cwd"; otherwise dirfd must refer to a directory. KERN_AT_FDCWD
+// is the single source of truth for the kernel-side value; libc declares the
+// matching AT_FDCWD in <fcntl.h>. The two must stay in lockstep.
+#define KERN_AT_FDCWD      (-100)
+#define SYS_fstatat        126  // (dirfd, path, struct stat *, flags)
+#define SYS_unlinkat       127  // (dirfd, path, flags) — flags ignored (no rmdir distinction)
+#define SYS_mkdirat        128  // (dirfd, path, mode) — mode ignored (fs assigns default)
+#define SYS_fchdir         129  // (fd) — set cwd to open dir fd's inode
+#define SYS_linkat         130  // (olddirfd, oldpath, newdirfd, newpath, flags)
+#define SYS_renameat       131  // (olddirfd, oldpath, newdirfd, newpath)
+#define SYS_symlinkat      132  // (target, newdirfd, linkpath)
+#define SYS_readlinkat     133  // (dirfd, path, buf, bufsize)
+
 // fcntl commands and flags the kernel honors. Values must match
 // libc/include/fcntl.h verbatim — they are part of the kernel ABI.
 #define F_GETFD            1
 #define F_SETFD            2
+#define F_GETFL            3
+#define F_SETFL            4
 #define FD_CLOEXEC         1
 #define O_CLOEXEC          02000000
 

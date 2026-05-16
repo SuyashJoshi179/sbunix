@@ -226,6 +226,11 @@ struct proc_snap {
     /* Signal state for SigPnd/SigBlk. */
     uint64_t     sig_pending;
     uint64_t     sig_blocked;
+    /* POSIX identity — snapshotted so /proc/<pid>/status agrees with
+     * getuid(2)/getgid(2). Static "0" emission disagreed with setuid(N)
+     * round-trips. */
+    uint32_t     uid;
+    uint32_t     gid;
 };
 
 static int prod_status(char *out, int cap, const struct proc_snap *s) {
@@ -251,7 +256,11 @@ static int prod_status(char *out, int cap, const struct proc_snap *s) {
     n = append_u64(out, cap, n, (uint64_t)s->pgid);
     n = append_str(out, cap, n, "\nSid:\t");
     n = append_u64(out, cap, n, (uint64_t)s->sid);
-    n = append_str(out, cap, n, "\nUid:\t0\nGid:\t0\nVmSize:\t");
+    n = append_str(out, cap, n, "\nUid:\t");
+    n = append_u64(out, cap, n, (uint64_t)s->uid);
+    n = append_str(out, cap, n, "\nGid:\t");
+    n = append_u64(out, cap, n, (uint64_t)s->gid);
+    n = append_str(out, cap, n, "\nVmSize:\t");
     n = append_u64(out, cap, n, s->vm_size_kb);
     n = append_str(out, cap, n, " kB\nVmStk:\t");
     n = append_u64(out, cap, n, s->vm_stk_kb);
@@ -666,6 +675,8 @@ static int piddir_file_read(struct inode *ip, uint64_t off, void *buf,
     snap.vm_data_pages = data_bytes / PAGE_SIZE;
     snap.sig_pending   = pcb->sig_pending;
     snap.sig_blocked   = pcb->sig_blocked;
+    snap.uid           = pcb->uid;
+    snap.gid           = pcb->gid;
     procfs_irq_restore(sstatus);
 
     char tmp[512];

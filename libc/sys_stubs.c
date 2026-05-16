@@ -58,12 +58,21 @@ int mknod(const char *p, mode_t m, dev_t d)     { (void)p; (void)m; (void)d; err
  *
  * NB: lstat() is a real syscall — see libc/syscall.c. Don't add a
  * duplicate definition here. */
+/* stat(2): direct syscall avoids burning an fd slot (a probe should not
+ * be blocked by RLIMIT_NOFILE near the cap) and lets symlink-following
+ * happen inside namei() where ELOOP / EACCES propagate naturally. The
+ * open(O_RDONLY) + fstat + close fallback is kept for kernels that
+ * don't yet ship SYS_stat — it returns ENOSYS in that case. */
 int stat(const char *path, struct stat *st) {
+    if (st) memset(st, 0, sizeof(*st));
+    long r = syscall(SYS_stat, (long)path, (long)st);
+    if (r >= 0) return 0;
+    if (errno != ENOSYS) return -1;
     int fd = open(path, O_RDONLY);
     if (fd < 0) return -1;
-    int r = fstat(fd, st);
+    int rc = fstat(fd, st);
     close(fd);
-    return r;
+    return rc;
 }
 
 int creat(const char *path, mode_t mode) {
@@ -72,11 +81,60 @@ int creat(const char *path, mode_t mode) {
 }
 
 int openat(int dirfd, const char *path, int flags, ...) {
-    /* No real openat in the kernel. Accept only AT_FDCWD; reject any
-     * other dirfd rather than silently opening the wrong path. */
-    if (dirfd != AT_FDCWD) { errno = ENOSYS; return -1; }
-    (void)flags;
-    return open(path, flags);
+    /* mode is consumed only by O_CREAT in real POSIX; the kernel side
+     * ignores mode (every fs sets a default), so we drop the va_list and
+     * forward the three real args. */
+    return (int)syscall(SYS_openat, (long)dirfd, (long)path, (long)flags);
+}
+
+/* *at family — dirfd-relative path lookup. dirfd == AT_FDCWD (-100)
+ * means "use cwd"; otherwise dirfd must refer to an open directory.
+ * Kernel handles all validation; libc is a thin syscall(2) shim. */
+int fstatat(int dirfd, const char *path, struct stat *st, int flags) {
+    if (st) memset(st, 0, sizeof(*st));
+    return (int)syscall(SYS_fstatat, (long)dirfd, (long)path,
+                        (long)st, (long)flags);
+}
+
+int mkdirat(int dirfd, const char *path, mode_t mode) {
+    return (int)syscall(SYS_mkdirat, (long)dirfd, (long)path, (long)mode);
+}
+
+int unlinkat(int dirfd, const char *path, int flags) {
+    return (int)syscall(SYS_unlinkat, (long)dirfd, (long)path, (long)flags);
+}
+
+/* fchdir(fd): set cwd to the directory referenced by an open fd. The
+ * kernel side updates cwd_path from the path the dirfd was opened
+ * under (recorded on struct file at open time), so getcwd(2) returns
+ * the expected absolute path after this call. */
+int fchdir(int fd) {
+    return (int)syscall(SYS_fchdir, (long)fd);
+}
+
+/* linkat / renameat / symlinkat / readlinkat: dirfd-relative wrappers
+ * over their non-`at` siblings. AT_FDCWD (-100) for the dirfd arg means
+ * "use cwd"; any other fd value must refer to an open directory. */
+int linkat(int olddirfd, const char *oldpath,
+           int newdirfd, const char *newpath, int flags) {
+    return (int)syscall(SYS_linkat, (long)olddirfd, (long)oldpath,
+                        (long)newdirfd, (long)newpath, (long)flags);
+}
+
+int renameat(int olddirfd, const char *oldpath,
+             int newdirfd, const char *newpath) {
+    return (int)syscall(SYS_renameat, (long)olddirfd, (long)oldpath,
+                        (long)newdirfd, (long)newpath);
+}
+
+int symlinkat(const char *target, int newdirfd, const char *linkpath) {
+    return (int)syscall(SYS_symlinkat, (long)target,
+                        (long)newdirfd, (long)linkpath);
+}
+
+ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t bufsiz) {
+    return (ssize_t)syscall(SYS_readlinkat, (long)dirfd, (long)path,
+                            (long)buf, (long)bufsiz);
 }
 
 /* Duplicate fd to the lowest free descriptor >= minfd. Loops dup() and
@@ -104,13 +162,10 @@ static int dup_to_minfd(int fd, int minfd) {
     return out;
 }
 
-/* fcntl: F_GETFD/F_SETFD are kernel-backed (per-descriptor FD_CLOEXEC).
+/* fcntl: F_GETFD/F_SETFD, F_GETFL/F_SETFL are kernel-backed; the kernel
+ * reconstructs F_GETFL from the per-file readable/writable/append fields.
  * F_DUPFD is serviced via dup; F_DUPFD_CLOEXEC additionally sets the
- * cloexec flag on the new descriptor. The kernel does track a small
- * amount of open-file state (currently just O_APPEND on struct file),
- * but this stub does not reconstruct it for F_GETFL nor honor changes
- * via F_SETFL — both keep their permissive zero/success behavior.
- * Advisory locks report ENOSYS. */
+ * cloexec flag on the new descriptor. Advisory locks report ENOSYS. */
 int fcntl(int fd, int cmd, ...) {
     va_list ap; va_start(ap, cmd);
     int r = -1;
@@ -132,20 +187,15 @@ int fcntl(int fd, int cmd, ...) {
         break;
     }
     case F_GETFD:
-        r = (int)syscall(SYS_fcntl, fd, F_GETFD);
+    case F_GETFL:
+        r = (int)syscall(SYS_fcntl, fd, cmd);
         break;
-    case F_SETFD: {
+    case F_SETFD:
+    case F_SETFL: {
         int arg = va_arg(ap, int);
-        r = (int)syscall(SYS_fcntl, fd, F_SETFD, arg);
+        r = (int)syscall(SYS_fcntl, fd, cmd, arg);
         break;
     }
-    case F_GETFL:
-        r = 0;
-        break;
-    case F_SETFL:
-        (void)va_arg(ap, int);
-        r = 0;
-        break;
     case F_GETLK:
     case F_SETLK:
     case F_SETLKW:

@@ -68,10 +68,25 @@
 #define SYS_meminfo      111
 #define SYS_readlink     112
 #define SYS_lstat        113
+#define SYS_access       114
 #define SYS_msync        115
 #define SYS_getrlimit    117
 #define SYS_setrlimit    118
 #define SYS_fcntl        119
+#define SYS_pread        120
+#define SYS_pwrite       121
+#define SYS_execve       122
+#define SYS_utimensat    123
+#define SYS_openat       124
+#define SYS_stat         125
+#define SYS_fstatat      126
+#define SYS_unlinkat     127
+#define SYS_mkdirat      128
+#define SYS_fchdir       129
+#define SYS_linkat       130
+#define SYS_renameat     131
+#define SYS_symlinkat    132
+#define SYS_readlinkat   133
 
 /* Generic syscall dispatch. Implemented as an asm stub (libc/syscall.c)
  * that shuffles the LP64 variadic argument registers (a0 = num, a1..a6 =

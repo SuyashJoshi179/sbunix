@@ -189,6 +189,27 @@ void *sbrk(intptr_t incr) {
     return (void *)r;
 }
 
+static long ecall4(long num, long a0, long a1, long a2, long a3) {
+    register long _a7 asm("a7") = num;
+    register long _a0 asm("a0") = a0;
+    register long _a1 asm("a1") = a1;
+    register long _a2 asm("a2") = a2;
+    register long _a3 asm("a3") = a3;
+    asm volatile("ecall"
+        : "+r"(_a0)
+        : "r"(_a7), "r"(_a1), "r"(_a2), "r"(_a3)
+        : "memory");
+    return _a0;
+}
+
+ssize_t pread(int fd, void *buf, size_t len, off_t off) {
+    return syscall_ret(ecall4(SYS_pread, (long)fd, (long)buf, (long)len, (long)off));
+}
+
+ssize_t pwrite(int fd, const void *buf, size_t len, off_t off) {
+    return syscall_ret(ecall4(SYS_pwrite, (long)fd, (long)buf, (long)len, (long)off));
+}
+
 static long ecall6(long num, long a0, long a1, long a2, long a3, long a4, long a5) {
     register long _a7 asm("a7") = num;
     register long _a0 asm("a0") = a0;
@@ -243,9 +264,7 @@ int isatty(int fd) {
 }
 
 int access(const char *path, int mode) {
-    (void)path; (void)mode;
-    errno = ENOSYS;
-    return -1;
+    return (int)syscall_ret(ecall2(SYS_access, (long)path, (long)mode));
 }
 
 ssize_t readlink(const char *path, char *buf, size_t n) {

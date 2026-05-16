@@ -103,17 +103,27 @@ int mount_fs(const char *path, struct inode *root) {
  * On failure: returns negative errno, *out is unchanged.
  * Caller must call inode_put(*out) when done.
  * ---------------------------------------------------------------- */
-static int namei_flags(const char *path, struct inode **out, int nofollow);
+static int namei_flags(struct inode *start_dir, const char *path,
+                       struct inode **out, int nofollow);
 
 int namei(const char *path, struct inode **out) {
-    return namei_flags(path, out, 0);
+    return namei_flags(0, path, out, 0);
 }
 
 int lnamei(const char *path, struct inode **out) {
-    return namei_flags(path, out, 1);
+    return namei_flags(0, path, out, 1);
 }
 
-static int namei_flags(const char *path, struct inode **out, int nofollow) {
+int namei_at(struct inode *start_dir, const char *path, struct inode **out) {
+    return namei_flags(start_dir, path, out, 0);
+}
+
+int lnamei_at(struct inode *start_dir, const char *path, struct inode **out) {
+    return namei_flags(start_dir, path, out, 1);
+}
+
+static int namei_flags(struct inode *start_dir, const char *path,
+                       struct inode **out, int nofollow) {
     if (!path || !path[0]) return -ENOENT;
 
     int pathlen = 0;
@@ -130,6 +140,10 @@ static int namei_flags(const char *path, struct inode **out, int nofollow) {
         if (nmounts == 0) return -ENOENT;
         cur = mounts[0].root;
         p   = buf + 1;
+    } else if (start_dir) {
+        /* openat-style: relative path resolved from caller's dirfd. */
+        cur = start_dir;
+        p   = buf;
     } else {
         struct pcb *proc = current_proc();
         if (!proc || !proc->cwd) return -ENOENT;

@@ -33,6 +33,12 @@ struct file *filealloc(void) {
             ftable[i].type   = FD_INODE;  // placeholder; caller may adjust
             ftable[i].refcnt = 1;
             ftable[i].append = 0;
+            /* path[] is populated by do_open for directories so fchdir
+             * can update cwd_path; everything else (pipes, sockets, the
+             * stdio fds wired up by proc_spawn_setup_stdio) must start
+             * with an empty string so a stale buffer from a recycled
+             * slot cannot be read back as a valid path. */
+            ftable[i].path[0] = '\0';
             file_unlock();
             return &ftable[i];
         }
@@ -94,10 +100,42 @@ int filewrite(struct file *f, const void *src, uint64_t n) {
     return w;
 }
 
+/* POSIX pread/pwrite: read/write at an explicit offset without touching
+ * f->off. Pipes are not seekable — ESPIPE. O_APPEND is ignored for
+ * pwrite (pwrite on an O_APPEND file is implementation-defined; we let
+ * the explicit offset win, matching Linux behavior pre-2.6.0 callers
+ * relied on). Reads/writes that don't advance f->off make these safe to
+ * call concurrently with read/write on the same fd at different
+ * offsets. */
+int filepread(struct file *f, void *dst, uint64_t n, uint64_t off) {
+    if (!f->readable) return -EBADF;
+    if (f->type == FD_PIPE) return -ESPIPE;
+    if (f->type != FD_INODE || !f->ip || !f->ip->ops->read) return -EBADF;
+    /* Character devices (tty, /dev/zero, …) are not seekable: an explicit
+     * offset is meaningless, so POSIX requires ESPIPE rather than silently
+     * pretending the read happened at byte 0. */
+    if (f->ip->type == I_CHR) return -ESPIPE;
+    return f->ip->ops->read(f->ip, off, dst, n);
+}
+
+int filepwrite(struct file *f, const void *src, uint64_t n, uint64_t off) {
+    if (!f->writable) return -EBADF;
+    if (f->type == FD_PIPE) return -ESPIPE;
+    if (f->type != FD_INODE || !f->ip || !f->ip->ops->write) return -EBADF;
+    if (f->ip->type == I_CHR) return -ESPIPE;
+    return f->ip->ops->write(f->ip, off, src, n);
+}
+
 int filestat(struct file *f, struct stat *st) {
     if (f->type == FD_PIPE) {
         memset(st, 0, sizeof(*st));
         st->st_mode = 0010000;  /* S_IFIFO */
+        /* Surface pending byte count via st_size so libc-side select(2)
+         * can probe pipe readiness without a kernel poll syscall. The
+         * read end reports unread bytes; the write end reports the same
+         * value (a non-empty pipe means data is in flight). */
+        if (f->pipe)
+            st->st_size = (uint64_t)(f->pipe->nwrite - f->pipe->nread);
         return 0;
     }
     if (f->type != FD_INODE || !f->ip || !f->ip->ops->stat) return -EBADF;

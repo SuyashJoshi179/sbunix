@@ -19,6 +19,10 @@ struct file {
     uint64_t     off;
     struct inode *ip;
     struct pipe  *pipe;
+    /* Absolute, normalized path the file was opened under. Populated
+     * by do_open for directories so fchdir(2) can update cwd_path.
+     * Empty string for non-directories and pipes. */
+    char         path[256];
 };
 
 #define NFILE  256  /* global open-file table size */
@@ -36,6 +40,8 @@ struct file *filedup(struct file *f);
 void         fileclose(struct file *f);
 int          fileread(struct file *f, void *dst, uint64_t n);
 int          filewrite(struct file *f, const void *src, uint64_t n);
+int          filepread(struct file *f, void *dst, uint64_t n, uint64_t off);
+int          filepwrite(struct file *f, const void *src, uint64_t n, uint64_t off);
 int          filestat(struct file *f, struct stat *st);
 int64_t      fileseek(struct file *f, int64_t off, int whence);
 int          fileioctl(struct file *f, int cmd, unsigned long arg);

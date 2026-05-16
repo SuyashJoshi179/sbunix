@@ -1,8 +1,15 @@
 #include <time.h>
 #include <sys/times.h>
+#include <sys/time.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <fcntl.h>
+#include <utime.h>
 #include <stdint.h>
 #include <stddef.h>
 #include "syscall_priv.h"
+
+long syscall(long num, ...);
 
 static long ecall1(long num, long a0) {
     register long _a7 asm("a7") = num;
@@ -446,3 +453,30 @@ long  timezone  = 0;
 int   daylight  = 0;
 
 void tzset(void) { /* no-op */ }
+
+/* POSIX utimensat / utimes / utime — set a file's mtime (atime is dropped
+ * by the kernel; struct inode has no atime field). dirfd may be AT_FDCWD
+ * or any open directory fd; relative paths resolve from that directory. */
+int utimensat(int dirfd, const char *path,
+              const struct timespec times[2], int flags) {
+    return (int)syscall(SYS_utimensat, (long)dirfd, (long)path,
+                        (long)times, (long)flags);
+}
+
+int utimes(const char *path, const struct timeval tv[2]) {
+    if (!tv) return utimensat(AT_FDCWD, path, 0, 0);
+    struct timespec ts[2];
+    ts[0].tv_sec  = tv[0].tv_sec;
+    ts[0].tv_nsec = tv[0].tv_usec * 1000;
+    ts[1].tv_sec  = tv[1].tv_sec;
+    ts[1].tv_nsec = tv[1].tv_usec * 1000;
+    return utimensat(AT_FDCWD, path, ts, 0);
+}
+
+int utime(const char *path, const struct utimbuf *buf) {
+    if (!buf) return utimensat(AT_FDCWD, path, 0, 0);
+    struct timespec ts[2];
+    ts[0].tv_sec  = buf->actime;  ts[0].tv_nsec = 0;
+    ts[1].tv_sec  = buf->modtime; ts[1].tv_nsec = 0;
+    return utimensat(AT_FDCWD, path, ts, 0);
+}

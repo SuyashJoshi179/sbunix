@@ -10,6 +10,17 @@ int namei(const char *path, struct inode **out);
 /* Like namei, but does not follow a trailing symlink component. */
 int lnamei(const char *path, struct inode **out);
 
+/* Resolve `path` relative to `start_dir` when `path` is relative; absolute
+ * paths still walk from the root mount. Used by openat(2) with a real
+ * dirfd. `start_dir` must be a directory inode held by the caller (a ref
+ * is taken internally; the caller still owns its own ref). */
+int namei_at(struct inode *start_dir, const char *path, struct inode **out);
+
+/* Like lnamei (no-follow on trailing component), but resolves relative
+ * paths from `start_dir` instead of cwd. Used by readlinkat(2) /
+ * fstatat(2) with AT_SYMLINK_NOFOLLOW + non-AT_FDCWD dirfd. */
+int lnamei_at(struct inode *start_dir, const char *path, struct inode **out);
+
 /* Register a mounted filesystem root at the given path.
  * The path must already exist in the VFS tree (or be "/" for the root mount).
  * Returns 0 on success, -errno on failure. */

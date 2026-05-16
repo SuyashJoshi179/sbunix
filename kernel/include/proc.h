@@ -46,6 +46,12 @@ struct pcb {
     // Job control: process group, session, last-stop signal, wait4 latches.
     int            pgid;
     int            sid;
+
+    // POSIX identity. We have no /etc/passwd and no permission enforcement,
+    // but tracking the values lets setuid(N); getuid() round-trip per POSIX.
+    // Inherited verbatim across fork and preserved across exec.
+    uint32_t       uid;
+    uint32_t       gid;
     int            last_signal;            // last signal that stopped/terminated
     uint8_t        stopped_reported;       // wait4(WUNTRACED) already reported
     uint8_t        continued_pending;      // SIGCONT seen, wait4(WCONTINUED) pending
