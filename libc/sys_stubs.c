@@ -104,6 +104,14 @@ int unlinkat(int dirfd, const char *path, int flags) {
     return (int)syscall(SYS_unlinkat, (long)dirfd, (long)path, (long)flags);
 }
 
+/* fchdir(fd): set cwd to the directory referenced by an open fd. The
+ * kernel side updates cwd_path from the path the dirfd was opened
+ * under (recorded on struct file at open time), so getcwd(2) returns
+ * the expected absolute path after this call. */
+int fchdir(int fd) {
+    return (int)syscall(SYS_fchdir, (long)fd);
+}
+
 /* Duplicate fd to the lowest free descriptor >= minfd. Loops dup() and
  * closes intermediates so we honor the F_DUPFD/F_DUPFD_CLOEXEC contract
  * even though the kernel has no fcntl-aware allocator. The held buffer

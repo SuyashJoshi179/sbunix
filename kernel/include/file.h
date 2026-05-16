@@ -19,6 +19,10 @@ struct file {
     uint64_t     off;
     struct inode *ip;
     struct pipe  *pipe;
+    /* Absolute, normalized path the file was opened under. Populated
+     * by do_open for directories so fchdir(2) can update cwd_path.
+     * Empty string for non-directories and pipes. */
+    char         path[256];
 };
 
 #define NFILE  256  /* global open-file table size */

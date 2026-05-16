@@ -267,7 +267,10 @@ static int path_split(char *path, char *parent_buf, const char **leaf_out) {
 // start_dir entirely. `kpath` must already be a kernel-space NUL-terminated
 // copy of the caller's path.
 // ---------------------------------------------------------------------------
-static int64_t do_open(struct inode *start_dir, char *kpath, int flags) {
+static void normalize_path(const char *base, const char *rel, char out[256]);
+
+static int64_t do_open(struct inode *start_dir, const char *base_path,
+                       char *kpath, int flags) {
     struct pcb *p = current_proc();
     if (!p) return -EBADF;
     if (proc_open_fd_count(p) >= proc_fd_limit(p)) return -EMFILE;
@@ -325,6 +328,16 @@ static int64_t do_open(struct inode *start_dir, char *kpath, int flags) {
         ip->ops->truncate(ip);
     }
 
+    /* Record normalized absolute open path for directories so fchdir(2)
+     * can sync cwd_path. Non-dirs leave path empty (no consumer). */
+    if (ip->type == I_DIR) {
+        const char *base = base_path ? base_path :
+                           (p->cwd_path[0] ? p->cwd_path : "/");
+        normalize_path(base, kpath, f->path);
+    } else {
+        f->path[0] = '\0';
+    }
+
     int fd = alloc_fd(p, f);
     if (fd < 0) { fileclose(f); return fd; }
     if (flags & O_CLOEXEC)
@@ -339,7 +352,7 @@ static int64_t sys_open(const char *path, int flags) {
     char kpath[PATH_MAX_LOCAL];
     int rc = copyin_cstr(path, kpath, sizeof(kpath));
     if (rc < 0) return rc;
-    return do_open(0, kpath, flags);
+    return do_open(0, 0, kpath, flags);
 }
 
 // ---------------------------------------------------------------------------
@@ -354,7 +367,7 @@ static int64_t sys_openat(int dirfd, const char *path, int flags) {
 
     /* Absolute path or AT_FDCWD: same machinery as open(2). */
     if (kpath[0] == '/' || dirfd == -100 /* AT_FDCWD */) {
-        return do_open(0, kpath, flags);
+        return do_open(0, 0, kpath, flags);
     }
 
     struct pcb *p = current_proc();
@@ -362,7 +375,10 @@ static int64_t sys_openat(int dirfd, const char *path, int flags) {
     struct file *df = p->ofile[dirfd];
     if (df->type != FD_INODE || !df->ip) return -EBADF;
     if (df->ip->type != I_DIR) return -ENOTDIR;
-    return do_open(df->ip, kpath, flags);
+    /* Resolve relative path against dirfd's recorded open path so the
+     * resulting open's f->path is a real absolute name (relevant for
+     * directory opens that fchdir may later consume). */
+    return do_open(df->ip, df->path[0] ? df->path : 0, kpath, flags);
 }
 
 // ---------------------------------------------------------------------------
@@ -1052,6 +1068,54 @@ static int64_t sys_getdents64(int fd, void *buf, uint64_t n) {
 }
 
 // ---------------------------------------------------------------------------
+// normalize_path — resolve `rel` against `base` to produce a clean
+// absolute path in `out` (capacity 256). Drops "." components, pops on
+// "..", collapses repeated slashes, trims trailing slash. `base` must
+// be a NUL-terminated absolute path (or empty, treated as "/"). If
+// `rel` is absolute, `base` is ignored.
+// ---------------------------------------------------------------------------
+static void normalize_path(const char *base, const char *rel, char out[256]) {
+    int nl = 0;
+    if (rel[0] != '/') {
+        if (base && base[0]) {
+            while (base[nl] && nl < 255) { out[nl] = base[nl]; nl++; }
+        }
+    }
+    out[nl] = '\0';
+
+    int i = 0;
+    while (rel[i]) {
+        while (rel[i] == '/') i++;
+        if (!rel[i]) break;
+        int start = i;
+        while (rel[i] && rel[i] != '/') i++;
+        int complen = i - start;
+
+        if (complen == 1 && rel[start] == '.') continue;
+        if (complen == 2 && rel[start] == '.' && rel[start+1] == '.') {
+            if (nl > 1) {
+                nl--;
+                while (nl > 0 && out[nl] != '/') nl--;
+                if (nl == 0) nl = 1;
+            } else if (nl == 0) {
+                nl = 1;
+                out[0] = '/';
+            }
+            out[nl] = '\0';
+            continue;
+        }
+        if (nl == 0 || out[nl - 1] != '/') {
+            if (nl < 255) out[nl++] = '/';
+        }
+        for (int k = 0; k < complen && nl < 255; k++)
+            out[nl++] = rel[start + k];
+        out[nl] = '\0';
+    }
+
+    if (nl == 0) { out[0] = '/'; out[1] = '\0'; nl = 1; }
+    if (nl > 1 && out[nl - 1] == '/') { out[--nl] = '\0'; }
+}
+
 // sys_chdir
 // ---------------------------------------------------------------------------
 static int64_t sys_chdir(const char *path) {
@@ -1070,60 +1134,43 @@ static int64_t sys_chdir(const char *path) {
     if (p->cwd) inode_put(p->cwd);
     p->cwd = ip;
 
-    // Update cwd_path string with proper normalization. Walk each
-    // component of the combined path and handle "." / "..":
-    //   "."   — no-op
-    //   ".."  — pop trailing component (but never past "/")
-    //   other — append "/component"
     char norm[256];
-    int nl = 0;
-    if (kpath[0] != '/') {
-        // Seed with current cwd_path.
-        while (p->cwd_path[nl] && nl < 255) { norm[nl] = p->cwd_path[nl]; nl++; }
+    normalize_path(p->cwd_path, kpath, norm);
+    for (int k = 0; k < 255 && norm[k]; k++) p->cwd_path[k] = norm[k];
+    {
+        int nl = 0; while (norm[nl]) nl++;
+        if (nl > 255) nl = 255;
+        p->cwd_path[nl] = '\0';
     }
-    norm[nl] = '\0';
+    return 0;
+}
 
-    int i = 0;
-    while (kpath[i]) {
-        while (kpath[i] == '/') i++;
-        if (!kpath[i]) break;
-        int start = i;
-        while (kpath[i] && kpath[i] != '/') i++;
-        int complen = i - start;
+// sys_fchdir — set cwd to the directory referenced by an open fd. The
+// fd must be FD_INODE with type I_DIR. cwd_path is updated from the
+// file's stored normalized open path (set in do_open below).
+// ---------------------------------------------------------------------------
+static int64_t sys_fchdir(int fd) {
+    struct pcb *p = current_proc();
+    if (!p) return -EBADF;
+    if (fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
+    struct file *f = p->ofile[fd];
+    if (f->type != FD_INODE || !f->ip) return -EBADF;
+    if (f->ip->type != I_DIR) return -ENOTDIR;
 
-        if (complen == 1 && kpath[start] == '.') {
-            continue;   // "."
-        }
-        if (complen == 2 && kpath[start] == '.' && kpath[start+1] == '.') {
-            // Pop last component of norm.
-            if (nl > 1) {
-                nl--;
-                while (nl > 0 && norm[nl] != '/') nl--;
-                if (nl == 0) nl = 1;   // keep leading "/"
-            } else if (nl == 0) {
-                // no leading slash yet — drop nothing (at root already)
-                nl = 1;
-                norm[0] = '/';
-            }
-            norm[nl] = '\0';
-            continue;
-        }
-        // Normal component — append "/comp".
-        if (nl == 0 || norm[nl - 1] != '/') {
-            if (nl < 255) norm[nl++] = '/';
-        }
-        for (int k = 0; k < complen && nl < 255; k++)
-            norm[nl++] = kpath[start + k];
-        norm[nl] = '\0';
+    /* Bump refcount on the dir inode before dropping cwd to keep the
+     * inode pinned across the swap. */
+    struct inode *new_cwd = inode_get(f->ip);
+    if (p->cwd) inode_put(p->cwd);
+    p->cwd = new_cwd;
+
+    /* Copy the file's recorded path into cwd_path. Empty means the
+     * open path was never recorded (shouldn't happen for dirs but be
+     * defensive — leave cwd_path stale rather than crash). */
+    if (f->path[0]) {
+        int k = 0;
+        while (k < 255 && f->path[k]) { p->cwd_path[k] = f->path[k]; k++; }
+        p->cwd_path[k] = '\0';
     }
-
-    if (nl == 0) { norm[0] = '/'; norm[1] = '\0'; nl = 1; }
-
-    // Trim trailing slash except for root.
-    if (nl > 1 && norm[nl - 1] == '/') { norm[--nl] = '\0'; }
-
-    for (int k = 0; k <= nl && k < 255; k++) p->cwd_path[k] = norm[k];
-    p->cwd_path[255] = '\0';
     return 0;
 }
 
@@ -2409,6 +2456,9 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
             return sys_mkdirat((int)(int64_t)trapframe[TF_A0],
                                (const char *)trapframe[TF_A1],
                                (int)(int64_t)trapframe[TF_A2]);
+
+        case SYS_fchdir:
+            return sys_fchdir((int)(int64_t)trapframe[TF_A0]);
 
         case SYS_getdents64:
             return sys_getdents64((int)(int64_t)trapframe[TF_A0],
