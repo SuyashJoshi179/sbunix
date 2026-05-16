@@ -112,6 +112,31 @@ int fchdir(int fd) {
     return (int)syscall(SYS_fchdir, (long)fd);
 }
 
+/* linkat / renameat / symlinkat / readlinkat: dirfd-relative wrappers
+ * over their non-`at` siblings. AT_FDCWD (-100) for the dirfd arg means
+ * "use cwd"; any other fd value must refer to an open directory. */
+int linkat(int olddirfd, const char *oldpath,
+           int newdirfd, const char *newpath, int flags) {
+    return (int)syscall(SYS_linkat, (long)olddirfd, (long)oldpath,
+                        (long)newdirfd, (long)newpath, (long)flags);
+}
+
+int renameat(int olddirfd, const char *oldpath,
+             int newdirfd, const char *newpath) {
+    return (int)syscall(SYS_renameat, (long)olddirfd, (long)oldpath,
+                        (long)newdirfd, (long)newpath);
+}
+
+int symlinkat(const char *target, int newdirfd, const char *linkpath) {
+    return (int)syscall(SYS_symlinkat, (long)target,
+                        (long)newdirfd, (long)linkpath);
+}
+
+ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t bufsiz) {
+    return (ssize_t)syscall(SYS_readlinkat, (long)dirfd, (long)path,
+                            (long)buf, (long)bufsiz);
+}
+
 /* Duplicate fd to the lowest free descriptor >= minfd. Loops dup() and
  * closes intermediates so we honor the F_DUPFD/F_DUPFD_CLOEXEC contract
  * even though the kernel has no fcntl-aware allocator. The held buffer

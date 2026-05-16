@@ -119,6 +119,10 @@
 #define SYS_unlinkat       127  // (dirfd, path, flags) — flags ignored (no rmdir distinction)
 #define SYS_mkdirat        128  // (dirfd, path, mode) — mode ignored (fs assigns default)
 #define SYS_fchdir         129  // (fd) — set cwd to open dir fd's inode
+#define SYS_linkat         130  // (olddirfd, oldpath, newdirfd, newpath, flags)
+#define SYS_renameat       131  // (olddirfd, oldpath, newdirfd, newpath)
+#define SYS_symlinkat      132  // (target, newdirfd, linkpath)
+#define SYS_readlinkat     133  // (dirfd, path, buf, bufsize)
 
 // fcntl commands and flags the kernel honors. Values must match
 // libc/include/fcntl.h verbatim — they are part of the kernel ABI.

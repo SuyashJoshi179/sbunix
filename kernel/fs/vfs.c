@@ -118,6 +118,10 @@ int namei_at(struct inode *start_dir, const char *path, struct inode **out) {
     return namei_flags(start_dir, path, out, 0);
 }
 
+int lnamei_at(struct inode *start_dir, const char *path, struct inode **out) {
+    return namei_flags(start_dir, path, out, 1);
+}
+
 static int namei_flags(struct inode *start_dir, const char *path,
                        struct inode **out, int nofollow) {
     if (!path || !path[0]) return -ENOENT;

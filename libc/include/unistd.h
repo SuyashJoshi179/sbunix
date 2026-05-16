@@ -90,7 +90,13 @@ int   chown(const char *path, uid_t uid, gid_t gid);
 int   fchown(int fd, uid_t uid, gid_t gid);
 int   lchown(const char *path, uid_t uid, gid_t gid);
 int   link(const char *oldp, const char *newp);
+int   linkat(int olddirfd, const char *oldpath,
+             int newdirfd, const char *newpath, int flags);
+int   renameat(int olddirfd, const char *oldpath,
+               int newdirfd, const char *newpath);
 int   symlink(const char *target, const char *linkp);
+int   symlinkat(const char *target, int newdirfd, const char *linkpath);
+ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t bufsiz);
 int   rmdir(const char *path);
 char *ttyname(int fd);
 int   ttyname_r(int fd, char *buf, size_t len);

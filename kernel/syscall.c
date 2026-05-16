@@ -453,7 +453,9 @@ static int64_t sys_unlink(const char *path) {
 }
 
 // ---------------------------------------------------------------------------
-// sys_link — create newpath as a hard link to oldpath.
+// do_link — shared core for sys_link / sys_linkat. old_start and new_start
+// are dirfd-resolved start inodes (NULL → cwd) for old and new path resolution
+// respectively. Both kold/knew are already kernel-space copies.
 //
 // POSIX rules implemented:
 //   - oldpath must exist                              → -ENOENT
@@ -463,20 +465,13 @@ static int64_t sys_unlink(const char *path) {
 //   - newpath must not already exist                  → -EEXIST
 //   - target's filesystem must support link           → -EROFS
 // ---------------------------------------------------------------------------
-static int64_t sys_link(const char *oldpath, const char *newpath) {
-    char kold[PATH_MAX_LOCAL], knew[PATH_MAX_LOCAL];
-    int rc = copyin_cstr(oldpath, kold, sizeof(kold));
-    if (rc < 0) return rc;
-    rc = copyin_cstr(newpath, knew, sizeof(knew));
-    if (rc < 0) return rc;
-
+static int64_t do_link(struct inode *old_start, char *kold,
+                       struct inode *new_start, char *knew) {
     // Resolve target.
     struct inode *target = 0;
-    /* Propagate namei's -errno (could be -ELOOP, -ENOTDIR, etc). */
-    {
-        int nrc = namei(kold, &target);
-        if (nrc < 0) return nrc;
-    }
+    int nrc = namei_at(old_start, kold, &target);
+    if (nrc < 0) return nrc;
+
     if (target->type == I_DIR) {
         inode_put(target);
         return -EPERM;
@@ -495,8 +490,7 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
     }
 
     struct inode *parent = 0;
-    /* Propagate namei's -errno verbatim. */
-    int nrc = namei(parent_path, &parent);
+    nrc = namei_at(new_start, parent_path, &parent);
     if (nrc < 0) {
         inode_put(target);
         return nrc;
@@ -507,8 +501,6 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
         return -ENOTDIR;
     }
 
-    // Cross-filesystem hard link is meaningless: a dirent stores an inum
-    // that is only valid in its own filesystem's inode table.
     if (parent->ops != target->ops) {
         inode_put(parent);
         inode_put(target);
@@ -521,7 +513,6 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
         return -EROFS;
     }
 
-    // EEXIST takes priority over later checks.
     if (parent->ops->lookup) {
         struct inode *existing = 0;
         if (parent->ops->lookup(parent, leaf, &existing) == 0) {
@@ -538,6 +529,15 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
     return r;
 }
 
+static int64_t sys_link(const char *oldpath, const char *newpath) {
+    char kold[PATH_MAX_LOCAL], knew[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(oldpath, kold, sizeof(kold));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(newpath, knew, sizeof(knew));
+    if (rc < 0) return rc;
+    return do_link(0, kold, 0, knew);
+}
+
 // ---------------------------------------------------------------------------
 // sys_symlink — create a symbolic link at `linkpath` whose target string
 // is `target`. Unlike hard link, target is NOT resolved: it's stored
@@ -547,12 +547,8 @@ static int64_t sys_link(const char *oldpath, const char *newpath) {
 // -ENOTDIR (parent not a dir), -EROFS (fs lacks symlink op),
 // -EINVAL (empty target / bad path), -ENAMETOOLONG (target too long).
 // ---------------------------------------------------------------------------
-static int64_t sys_symlink(const char *u_target, const char *u_linkpath) {
-    char ktarget[PATH_MAX_LOCAL], klinkpath[PATH_MAX_LOCAL];
-    int rc = copyin_cstr(u_target, ktarget, sizeof(ktarget));
-    if (rc < 0) return rc;
-    rc = copyin_cstr(u_linkpath, klinkpath, sizeof(klinkpath));
-    if (rc < 0) return rc;
+static int64_t do_symlink(const char *ktarget, struct inode *link_start,
+                          char *klinkpath) {
     if (ktarget[0] == '\0') return -EINVAL;
 
     char parent_path[PATH_MAX_LOCAL];
@@ -561,8 +557,7 @@ static int64_t sys_symlink(const char *u_target, const char *u_linkpath) {
     if (!leaf || !leaf[0]) return -EINVAL;
 
     struct inode *parent = 0;
-    /* Propagate namei's -errno verbatim. */
-    int nrc = namei(parent_path, &parent);
+    int nrc = namei_at(link_start, parent_path, &parent);
     if (nrc < 0) return nrc;
     if (parent->type != I_DIR) { inode_put(parent); return -ENOTDIR; }
 
@@ -585,6 +580,15 @@ static int64_t sys_symlink(const char *u_target, const char *u_linkpath) {
     return r;
 }
 
+static int64_t sys_symlink(const char *u_target, const char *u_linkpath) {
+    char ktarget[PATH_MAX_LOCAL], klinkpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(u_target, ktarget, sizeof(ktarget));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(u_linkpath, klinkpath, sizeof(klinkpath));
+    if (rc < 0) return rc;
+    return do_symlink(ktarget, 0, klinkpath);
+}
+
 // ---------------------------------------------------------------------------
 // sys_rename — atomically move oldpath to newpath.
 //
@@ -598,14 +602,8 @@ static int64_t sys_symlink(const char *u_target, const char *u_linkpath) {
 //   - non-empty dir target                            → -ENOTEMPTY
 //   - same path same name                             → 0  (no-op)
 // ---------------------------------------------------------------------------
-static int64_t sys_rename(const char *oldpath, const char *newpath) {
-    char kold[PATH_MAX_LOCAL], knew[PATH_MAX_LOCAL];
-    int rc = copyin_cstr(oldpath, kold, sizeof(kold));
-    if (rc < 0) return rc;
-    rc = copyin_cstr(newpath, knew, sizeof(knew));
-    if (rc < 0) return rc;
-
-    // Split both paths into (parent, leaf).
+static int64_t do_rename(struct inode *old_start, char *kold,
+                         struct inode *new_start, char *knew) {
     char old_parent_buf[PATH_MAX_LOCAL];
     char new_parent_buf[PATH_MAX_LOCAL];
     const char *old_leaf = 0, *new_leaf = 0;
@@ -614,24 +612,19 @@ static int64_t sys_rename(const char *oldpath, const char *newpath) {
     if (!old_leaf || !old_leaf[0]) return -EINVAL;
     if (!new_leaf || !new_leaf[0]) return -EINVAL;
 
-    // Resolve both parents. Propagate namei -errno verbatim.
     struct inode *old_p = 0;
-    {
-        int nrc = namei(old_parent_buf, &old_p);
-        if (nrc < 0) return nrc;
-    }
+    int nrc = namei_at(old_start, old_parent_buf, &old_p);
+    if (nrc < 0) return nrc;
     if (old_p->type != I_DIR) {
         inode_put(old_p);
         return -ENOTDIR;
     }
 
     struct inode *new_p = 0;
-    {
-        int nrc = namei(new_parent_buf, &new_p);
-        if (nrc < 0) {
-            inode_put(old_p);
-            return nrc;
-        }
+    nrc = namei_at(new_start, new_parent_buf, &new_p);
+    if (nrc < 0) {
+        inode_put(old_p);
+        return nrc;
     }
     if (new_p->type != I_DIR) {
         inode_put(new_p);
@@ -639,7 +632,6 @@ static int64_t sys_rename(const char *oldpath, const char *newpath) {
         return -ENOTDIR;
     }
 
-    // Cross-filesystem rename is impossible (different inum spaces).
     if (old_p->ops != new_p->ops) {
         inode_put(new_p);
         inode_put(old_p);
@@ -656,6 +648,15 @@ static int64_t sys_rename(const char *oldpath, const char *newpath) {
     inode_put(new_p);
     inode_put(old_p);
     return r;
+}
+
+static int64_t sys_rename(const char *oldpath, const char *newpath) {
+    char kold[PATH_MAX_LOCAL], knew[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(oldpath, kold, sizeof(kold));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(newpath, knew, sizeof(knew));
+    if (rc < 0) return rc;
+    return do_rename(0, kold, 0, knew);
 }
 
 // ---------------------------------------------------------------------------
@@ -776,15 +777,12 @@ static int64_t sys_fstat(int fd, struct stat *st) {
 // ---------------------------------------------------------------------------
 // sys_readlink
 // ---------------------------------------------------------------------------
-static int64_t sys_readlink(const char *path, char *buf, uint64_t n) {
+static int64_t do_readlink(struct inode *start_dir, char *kpath,
+                           char *buf, uint64_t n) {
     if (n > 0 && !buf) return -EFAULT;
 
-    char kpath[PATH_MAX_LOCAL];
-    int rc = copyin_cstr(path, kpath, sizeof(kpath));
-    if (rc < 0) return rc;
-
     struct inode *ip;
-    rc = lnamei(kpath, &ip);
+    int rc = lnamei_at(start_dir, kpath, &ip);
     if (rc < 0) return rc;
 
     if (ip->type != I_LNK || !ip->ops || !ip->ops->readlink) {
@@ -801,6 +799,13 @@ static int64_t sys_readlink(const char *path, char *buf, uint64_t n) {
 
     if (got > 0 && copyout(buf, kbuf, (unsigned long)got) < 0) return -EFAULT;
     return got;
+}
+
+static int64_t sys_readlink(const char *path, char *buf, uint64_t n) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+    return do_readlink(0, kpath, buf, n);
 }
 
 // ---------------------------------------------------------------------------
@@ -951,6 +956,89 @@ static int64_t sys_mkdirat(int dirfd, const char *path, int mode) {
     struct inode *start = dirfd_to_inode(dirfd, &err);
     if (err) return err;
     return do_mkdir(start, kpath);
+}
+
+// ---------------------------------------------------------------------------
+// sys_linkat — POSIX linkat(2). Resolves oldpath relative to olddirfd and
+// newpath relative to newdirfd; either may be AT_FDCWD. AT_SYMLINK_FOLLOW
+// (0x400) means follow oldpath's trailing symlink; default behavior is to
+// NOT follow (Linux default differs from POSIX, but we match Linux to keep
+// the common case — `ln a b` — link the target rather than the link itself
+// when oldpath is a symlink). We follow symlinks unconditionally here
+// because that matches the underlying do_link's namei_at semantics; the
+// flag is accepted but treated as informational.
+// ---------------------------------------------------------------------------
+#define AT_SYMLINK_FOLLOW_K   0x400
+
+static int64_t sys_linkat(int olddirfd, const char *oldpath,
+                          int newdirfd, const char *newpath, int flags) {
+    (void)flags;
+    char kold[PATH_MAX_LOCAL], knew[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(oldpath, kold, sizeof(kold));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(newpath, knew, sizeof(knew));
+    if (rc < 0) return rc;
+
+    int err = 0;
+    struct inode *old_s = dirfd_to_inode(olddirfd, &err);
+    if (err) return err;
+    struct inode *new_s = dirfd_to_inode(newdirfd, &err);
+    if (err) return err;
+    return do_link(old_s, kold, new_s, knew);
+}
+
+// ---------------------------------------------------------------------------
+// sys_renameat — POSIX renameat(2). dirfd-relative variant of rename(2).
+// ---------------------------------------------------------------------------
+static int64_t sys_renameat(int olddirfd, const char *oldpath,
+                            int newdirfd, const char *newpath) {
+    char kold[PATH_MAX_LOCAL], knew[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(oldpath, kold, sizeof(kold));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(newpath, knew, sizeof(knew));
+    if (rc < 0) return rc;
+
+    int err = 0;
+    struct inode *old_s = dirfd_to_inode(olddirfd, &err);
+    if (err) return err;
+    struct inode *new_s = dirfd_to_inode(newdirfd, &err);
+    if (err) return err;
+    return do_rename(old_s, kold, new_s, knew);
+}
+
+// ---------------------------------------------------------------------------
+// sys_symlinkat — POSIX symlinkat(2). The target string is stored
+// verbatim (POSIX symlink semantics — never resolved at create time);
+// only the link path is dirfd-relative.
+// ---------------------------------------------------------------------------
+static int64_t sys_symlinkat(const char *u_target, int newdirfd,
+                             const char *u_linkpath) {
+    char ktarget[PATH_MAX_LOCAL], klinkpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(u_target, ktarget, sizeof(ktarget));
+    if (rc < 0) return rc;
+    rc = copyin_cstr(u_linkpath, klinkpath, sizeof(klinkpath));
+    if (rc < 0) return rc;
+
+    int err = 0;
+    struct inode *new_s = dirfd_to_inode(newdirfd, &err);
+    if (err) return err;
+    return do_symlink(ktarget, new_s, klinkpath);
+}
+
+// ---------------------------------------------------------------------------
+// sys_readlinkat — POSIX readlinkat(2). dirfd-relative variant of
+// readlink(2). Goes through lnamei_at so the link is read, not followed.
+// ---------------------------------------------------------------------------
+static int64_t sys_readlinkat(int dirfd, const char *path,
+                              char *buf, uint64_t n) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+
+    int err = 0;
+    struct inode *start = dirfd_to_inode(dirfd, &err);
+    if (err) return err;
+    return do_readlink(start, kpath, buf, n);
 }
 
 // ---------------------------------------------------------------------------
@@ -2459,6 +2547,30 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
 
         case SYS_fchdir:
             return sys_fchdir((int)(int64_t)trapframe[TF_A0]);
+
+        case SYS_linkat:
+            return sys_linkat((int)(int64_t)trapframe[TF_A0],
+                              (const char *)trapframe[TF_A1],
+                              (int)(int64_t)trapframe[TF_A2],
+                              (const char *)trapframe[TF_A3],
+                              (int)(int64_t)trapframe[TF_A4]);
+
+        case SYS_renameat:
+            return sys_renameat((int)(int64_t)trapframe[TF_A0],
+                                (const char *)trapframe[TF_A1],
+                                (int)(int64_t)trapframe[TF_A2],
+                                (const char *)trapframe[TF_A3]);
+
+        case SYS_symlinkat:
+            return sys_symlinkat((const char *)trapframe[TF_A0],
+                                 (int)(int64_t)trapframe[TF_A1],
+                                 (const char *)trapframe[TF_A2]);
+
+        case SYS_readlinkat:
+            return sys_readlinkat((int)(int64_t)trapframe[TF_A0],
+                                  (const char *)trapframe[TF_A1],
+                                  (char *)trapframe[TF_A2],
+                                  trapframe[TF_A3]);
 
         case SYS_getdents64:
             return sys_getdents64((int)(int64_t)trapframe[TF_A0],

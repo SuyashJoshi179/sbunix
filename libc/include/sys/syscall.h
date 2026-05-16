@@ -83,6 +83,10 @@
 #define SYS_unlinkat     127
 #define SYS_mkdirat      128
 #define SYS_fchdir       129
+#define SYS_linkat       130
+#define SYS_renameat     131
+#define SYS_symlinkat    132
+#define SYS_readlinkat   133
 
 /* Generic syscall dispatch. Implemented as an asm stub (libc/syscall.c)
  * that shuffles the LP64 variadic argument registers (a0 = num, a1..a6 =
