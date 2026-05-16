@@ -59,6 +59,18 @@ int main(void) {
     CHECK(run("kill %99") == 1, "kill on unknown %job exits 1");
     CHECK(run("kill notanumber") == 1, "kill on non-numeric pid exits 1");
 
+    /* `ln -s` regression. The coreutil used to reject -s with "not
+     * supported", even though SYS_symlink + libc symlink(3) have been
+     * wired for a while. /bin/stat uses lstat(2), so it succeeds on
+     * a dangling link and confirms creation independently of whether
+     * the target exists. */
+    unlink("/tmp/lns_l");
+    CHECK(run("/bin/ln -s /tmp/lns_target /tmp/lns_l") == 0,
+          "ln -s creates a symbolic link");
+    CHECK(run("/bin/stat /tmp/lns_l") == 0,
+          "ln -s output is visible via lstat");
+    unlink("/tmp/lns_l");
+
     unlink("/tmp/sh_hard_out");
 
     if (fails == 0) printf("sh_hardening_test: PASS\n");
