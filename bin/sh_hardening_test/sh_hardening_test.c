@@ -2,6 +2,7 @@
  * features — single-quote tokens, `;` separator, `/bin/true`, `/bin/false`,
  * and POSIX exec-failure exit codes (127 for ENOENT, 126 otherwise). */
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -70,6 +71,33 @@ int main(void) {
     CHECK(run("/bin/stat /tmp/lns_l") == 0,
           "ln -s output is visible via lstat");
     unlink("/tmp/lns_l");
+
+    /* `wc -l` regression. The coreutil used to ignore all flags and
+     * always print "lines words chars". Write a known-line-count fixture
+     * and verify (1) the flag is accepted (exit 0) and (2) output is the
+     * line count only — not the three-number default. */
+    {
+        const char *fixture = "/tmp/wc_fixture";
+        const char *out     = "/tmp/wc_out";
+        int fd = open(fixture, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            const char *body = "a\nb\nc\n";
+            write(fd, body, 6);
+            close(fd);
+        }
+        CHECK(run("/bin/wc -l /tmp/wc_fixture > /tmp/wc_out") == 0,
+              "wc -l accepts the flag and exits 0");
+
+        fd = open(out, 0);
+        char obuf[32] = {0};
+        long got = fd >= 0 ? read(fd, obuf, sizeof(obuf) - 1) : -1;
+        if (fd >= 0) close(fd);
+        CHECK(got >= 0 && strcmp(obuf, "3\n") == 0,
+              "wc -l prints only the line count");
+
+        unlink(fixture);
+        unlink(out);
+    }
 
     unlink("/tmp/sh_hard_out");
 
