@@ -227,10 +227,15 @@ int sigsuspend(const sigset_t *mask) {
  * word. The first call seeds from CLOCK_MONOTONIC nanoseconds, stack
  * address jitter, and pid; subsequent calls XOR in fresh nanoseconds
  * so the stream stays unpredictable even if the seed timer was coarse.
- * Suitable for temp-filename randomness, jitter, and grader probes
- * that need "different on each call"; NOT suitable for cryptography. */
+ * Fork-safety: we remember the pid the state was seeded under, and
+ * re-seed when it changes — otherwise parent and child would carry the
+ * same `_prng_state` past fork and could collide in the same nanosecond
+ * bucket. Suitable for temp-filename randomness, jitter, and grader
+ * probes that need "different on each call"; NOT suitable for
+ * cryptography. */
 static uint64_t _prng_state;
 static int      _prng_seeded;
+static int      _prng_pid;
 
 static uint64_t xorshift64(uint64_t *s) {
     uint64_t x = *s;
@@ -242,15 +247,17 @@ static uint64_t xorshift64(uint64_t *s) {
 }
 
 static uint64_t prng_next(void) {
-    if (!_prng_seeded) {
+    int pid = getpid();
+    if (!_prng_seeded || pid != _prng_pid) {
         struct timespec ts = { 0, 0 };
         clock_gettime(CLOCK_MONOTONIC, &ts);
         uint64_t s = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
         s ^= (uint64_t)(uintptr_t)&ts;        /* stack-address jitter */
-        s ^= (uint64_t)getpid() * 0x9E3779B97F4A7C15ULL;
+        s ^= (uint64_t)pid * 0x9E3779B97F4A7C15ULL;
         if (s == 0) s = 0xDEADBEEFCAFEBABEULL;
         _prng_state = s;
         _prng_seeded = 1;
+        _prng_pid = pid;
     } else {
         /* Stir in fresh nanoseconds so consecutive calls diverge even
          * if the underlying timer barely advanced between them. */

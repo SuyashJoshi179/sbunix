@@ -455,8 +455,8 @@ int   daylight  = 0;
 void tzset(void) { /* no-op */ }
 
 /* POSIX utimensat / utimes / utime — set a file's mtime (atime is dropped
- * by the kernel; struct inode has no atime field). dirfd must be AT_FDCWD
- * until Task 5 lands real openat support. */
+ * by the kernel; struct inode has no atime field). dirfd may be AT_FDCWD
+ * or any open directory fd; relative paths resolve from that directory. */
 int utimensat(int dirfd, const char *path,
               const struct timespec times[2], int flags) {
     return (int)syscall(SYS_utimensat, (long)dirfd, (long)path,
