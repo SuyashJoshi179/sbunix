@@ -17,6 +17,11 @@ static int run(const char *script) {
     int pid = fork();
     if (pid < 0) return -1;
     if (pid == 0) {
+        /* Isolate the child sh in its own process group so that a
+         * regression of the `kill %N` parsing bug — where the builtin
+         * fell through to kill(0, sig) and broadcast to its own
+         * pgroup — cannot reach this test process. */
+        setpgid(0, 0);
         char *argv[] = { "sh", "-c", (char *)script, 0 };
         execv("/bin/sh", argv);
         _exit(127);
@@ -42,6 +47,17 @@ int main(void) {
 
     /* Exec failure: POSIX says ENOENT → 127. */
     CHECK(run("/bin/no_such_binary_xyz_") == 127, "exec ENOENT exits 127");
+
+    /* `kill %N` regression. parse_int("%1") returns 0, and
+     * kill(0, sig) broadcasts to the caller's process group — which
+     * silently kills the shell itself. The builtin must resolve %N
+     * to the job's pgid and signal -pgid instead. WIFEXITED==false
+     * is mapped to -1 by run(), so a buggy sh that gets SIGTERM'd
+     * here returns -1 and trips the CHECK. */
+    CHECK(run("/bin/sleep 1 & kill %1") == 0,
+          "kill %N signals job pgroup; shell survives");
+    CHECK(run("kill %99") == 1, "kill on unknown %job exits 1");
+    CHECK(run("kill notanumber") == 1, "kill on non-numeric pid exits 1");
 
     unlink("/tmp/sh_hard_out");
 
