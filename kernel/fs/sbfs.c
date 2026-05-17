@@ -79,6 +79,7 @@ static void sbfs_itrunc(struct sbfs_inode *si);
 
 static int  sbfs_op_symlink (struct inode *, const char *, const char *);
 static int  sbfs_op_readlink(struct inode *, char *, uint64_t);
+static int  sbfs_op_setmtime(struct inode *);
 
 static const struct inode_ops sbfs_iops = {
     .read     = sbfs_op_read,
@@ -98,6 +99,7 @@ static const struct inode_ops sbfs_iops = {
     .readpage  = sbfs_readpage,
     .writepage = sbfs_writepage,
     .writepage_locked = sbfs_writepage_locked,
+    .setmtime = sbfs_op_setmtime,
 };
 
 /* -----------------------------------------------------------------------
@@ -169,14 +171,32 @@ static void sbfs_ilock(struct sbfs_inode *si) {
 void sbfs_iupdate(struct sbfs_inode *si) {
     uint32_t block  = sb.inodestart + si->inum / 8;
     uint32_t offset = (si->inum % 8) * sizeof(struct sb_dinode);
-    /* Keep dinode size/nlink in sync from the generic vnode. */
+    /* Keep dinode size/nlink/mtime in sync from the generic vnode. The
+     * mtime sync covers sys_utimensat callers (and any other path that
+     * bumps vnode.mtime without going through writei). */
     si->d.size  = (uint32_t)si->vnode.size;
     si->d.nlink = (uint16_t)si->vnode.nlink;
+    si->d.mtime = si->vnode.mtime;
     struct buf *bp = bread(block);
     memcpy(bp->data + offset, &si->d, sizeof(struct sb_dinode));
     log_write(bp);
     brelse(bp);
     si->dirty = 0;
+}
+
+/* sys_utimensat hook: vnode.mtime has already been set by the caller.
+ * Mirror it into the dinode and persist immediately so a subsequent
+ * stat sees the new value even if the inode is evicted from the cache
+ * before any other dirty op forces a writeback. */
+static int sbfs_op_setmtime(struct inode *ip) {
+    struct sbfs_inode *si = (struct sbfs_inode *)ip;
+    sbfs_ilock(si);
+    si->d.mtime = ip->mtime;
+    si->dirty = 1;
+    begin_op();
+    sbfs_iupdate(si);
+    end_op();
+    return 0;
 }
 
 /* Get (or create) an in-memory cache entry for inum.  Bumps refcnt. */

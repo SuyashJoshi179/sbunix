@@ -1129,16 +1129,29 @@ static int64_t sys_utimensat(int dirfd, const char *path,
         return -EROFS;
     }
 
+    int changed = 0;
     if (kts[1].tv_nsec == UTIME_OMIT) {
         /* leave mtime alone */
     } else if (kts[1].tv_nsec == UTIME_NOW) {
         ip->mtime = (uint64_t)(realtime_ns() / 1000000000UL);
+        changed = 1;
     } else {
         if (kts[1].tv_sec < 0) { inode_put(ip); return -EINVAL; }
         ip->mtime = (uint64_t)kts[1].tv_sec;
+        changed = 1;
     }
     /* atime is dropped silently — struct inode has no atime field, and
      * stat synthesises atime from mtime anyway. */
+
+    /* Filesystems that persist mtime in an on-disk struct (sbfs)
+     * implement ->setmtime to mirror vnode.mtime into the dinode and
+     * mark the inode dirty. Without this hook, a stat-after-utimensat
+     * round-trip through inode eviction returns the stale on-disk
+     * value (or stale ->stat output, when ->stat reads the dinode). */
+    if (changed && ip->ops && ip->ops->setmtime) {
+        int sm = ip->ops->setmtime(ip);
+        if (sm < 0) { inode_put(ip); return sm; }
+    }
 
     inode_put(ip);
     return 0;

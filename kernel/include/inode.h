@@ -61,6 +61,16 @@ struct inode_ops {
      * does not require transaction wrapping (writepage is sufficient). */
     int (*writepage_locked)(struct inode *, uint64_t pgidx,
                             const void *page);
+
+    /* Persist a freshly-updated ip->mtime to the filesystem's own
+     * on-disk representation. sys_utimensat sets the generic
+     * vnode.mtime then calls this hook; tmpfs/tarfs/devfs/procfs leave
+     * it NULL (their stat reads vnode.mtime directly, or they are
+     * read-only). sbfs uses it to mirror mtime into its dinode struct
+     * and mark the inode dirty so the log captures the change. Caller
+     * holds a ref on ip; implementation wraps begin_op/end_op as
+     * needed. Returns 0 on success or -errno. */
+    int (*setmtime)(struct inode *);
 };
 
 #define I_REG  1
