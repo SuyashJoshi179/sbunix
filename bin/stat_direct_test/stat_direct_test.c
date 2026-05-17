@@ -77,6 +77,24 @@ int main(void) {
                errno, ENOENT); return 1;
     }
 
+    /* sbfs v2: stat must surface mode/uid/gid from the dinode, not the
+     * hardcoded literals returned by pre-v2 sbfs_op_stat. */
+    {
+        const char *p = "/mnt/v2stat.tmp";
+        (void)unlink(p);
+        int fd2 = open(p, O_WRONLY | O_CREAT | O_TRUNC);
+        if (fd2 < 0) { printf("FAIL: v2 stat create errno=%d\n", errno); return 1; }
+        close(fd2);
+
+        struct stat sst;
+        if (stat(p, &sst) < 0) { printf("FAIL: v2 stat errno=%d\n", errno); return 1; }
+        if (!S_ISREG(sst.st_mode)) { printf("FAIL: v2 not regular file: mode=%o\n", sst.st_mode); return 1; }
+        if (sst.st_uid != 0)       { printf("FAIL: v2 uid=%u want 0\n", sst.st_uid); return 1; }
+        if (sst.st_gid != 0)       { printf("FAIL: v2 gid=%u want 0\n", sst.st_gid); return 1; }
+        if (sst.st_dev == 0)       { printf("FAIL: v2 dev=0 (uninitialised)\n"); return 1; }
+        (void)unlink(p);
+    }
+
     printf("PASS\n");
     return 0;
 }

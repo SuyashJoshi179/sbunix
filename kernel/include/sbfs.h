@@ -3,7 +3,7 @@
 #include <inode.h>
 
 /* -----------------------------------------------------------------------
- * sbfs v1 on-disk constants  (must match tools/mkfs.c exactly)
+ * sbfs v2 on-disk constants  (must match tools/mkfs.c exactly)
  * ----------------------------------------------------------------------- */
 #define SBFS_MAGIC       0x53425632u   /* "SBV2" — v2 added mode/uid/gid */
 #define SBFS_BSIZE       512           /* bytes per block                 */

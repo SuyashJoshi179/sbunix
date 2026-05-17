@@ -1,5 +1,5 @@
 /*
- * sbfs.c — Simple Block Filesystem v1
+ * sbfs.c — Simple Block Filesystem v2
  *
  * Provides read-write POSIX-like filesystem semantics on top of the buffer
  * cache and write-ahead log.  All mutating operations (write, create, unlink,
@@ -46,7 +46,7 @@ static inline void fs_unlock(void) {
 }
 
 /* Wall-clock seconds since the Unix epoch, sourced from Goldfish RTC.
- * sbfs v1's on-disk inode has only one timestamp (mtime); we report
+ * sbfs's on-disk inode has only one timestamp (mtime); we report
  * it as st_atime/st_mtime/st_ctime alike. Read access does not bump
  * mtime — equivalent to mounting Linux with "noatime", which is the
  * right tradeoff for a teaching kernel without writeback batching. */
@@ -191,15 +191,12 @@ void sbfs_iupdate(struct sbfs_inode *si) {
     si->dirty = 0;
 }
 
-/* sys_utimensat hook: vnode.mtime has already been set by the caller.
- * Mirror it into the dinode and persist immediately so a subsequent
- * stat sees the new value even if the inode is evicted from the cache
- * before any other dirty op forces a writeback. */
+/* sys_utimensat hook: vnode.mtime has already been set by the caller
+ * and path lookup guarantees si->valid == 1 by the time we get here.
+ * The generic iupdate copies vnode.mtime into d.mtime, so the body
+ * collapses to a transaction-wrapped iupdate. */
 static int sbfs_op_setmtime(struct inode *ip) {
     struct sbfs_inode *si = (struct sbfs_inode *)ip;
-    sbfs_ilock(si);
-    si->d.mtime = ip->mtime;
-    si->dirty = 1;
     begin_op();
     sbfs_iupdate(si);
     end_op();

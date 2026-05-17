@@ -1,5 +1,5 @@
 /*
- * mkfs.c — creates an sbfs v1 disk image
+ * mkfs.c — creates an sbfs v2 disk image
  *
  * On-disk layout (all blocks are BSIZE=512 bytes):
  *   block 0        : boot block (reserved, zeroed)
@@ -144,7 +144,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     /* size_mb (argv[2]) is accepted for compatibility with the master
-     * Makefile but ignored: sbfs v1 has a fixed on-disk layout. */
+     * Makefile but ignored: sbfs v2 has a fixed on-disk layout. */
 
     img = fopen(argv[1], "w+b");
     if (!img) {
