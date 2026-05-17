@@ -1,5 +1,5 @@
 /*
- * mkfs.c — creates an sbfs v2 disk image
+ * mkfs.c — creates an sbfs v3 disk image
  *
  * On-disk layout (all blocks are BSIZE=512 bytes):
  *   block 0        : boot block (reserved, zeroed)
@@ -7,7 +7,7 @@
  *   block 2..17    : write-ahead log (LOGSIZE=16 blocks)
  *   block 18..49   : inode table (NINODES=256, 8 per block → 32 blocks)
  *   block 50       : block bitmap (1 block covers up to 4096 data blocks)
- *   block 51..1050 : data blocks (NDATABLOCKS=1000)
+ *   block 51..4050 : data blocks (NDATABLOCKS=4000)
  *
  * The root directory (inode 1) is created with two entries: "." and "..".
  */
@@ -22,11 +22,11 @@
  * On-disk constants — must match kernel/include/sbfs.h exactly
  * ----------------------------------------------------------------------- */
 #define BSIZE         512
-#define MAGIC         0x53425632u   /* "SBV2" — v2 added mode/uid/gid */
+#define MAGIC         0x53425633u   /* "SBV3" — v3 added double-indirect */
 #define NINODES       256
 #define LOGSIZE       16
-#define NDATABLOCKS   1000
-#define NDIRECT       10
+#define NDATABLOCKS   4000
+#define NDIRECT       10            /* 7 direct + 2 single-indirect + 1 double-indirect */
 #define DIRSIZ        14
 #define ROOTINUM      1             /* inode number of the root directory */
 
@@ -144,7 +144,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     /* size_mb (argv[2]) is accepted for compatibility with the master
-     * Makefile but ignored: sbfs v2 has a fixed on-disk layout. */
+     * Makefile but ignored: sbfs v3 has a fixed on-disk layout. */
 
     img = fopen(argv[1], "w+b");
     if (!img) {

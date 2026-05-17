@@ -3,21 +3,27 @@
 #include <inode.h>
 
 /* -----------------------------------------------------------------------
- * sbfs v2 on-disk constants  (must match tools/mkfs.c exactly)
+ * sbfs v3 on-disk constants  (must match tools/mkfs.c exactly)
  * ----------------------------------------------------------------------- */
-#define SBFS_MAGIC       0x53425632u   /* "SBV2" — v2 added mode/uid/gid */
+#define SBFS_MAGIC       0x53425633u   /* "SBV3" — v3 added double-indirect */
 #define SBFS_BSIZE       512           /* bytes per block                 */
 #define SBFS_NDIRECT     10            /* total addr slots per inode (disk format) */
-#define SBFS_NDIR        8             /* direct block slots (addrs[0..7])  */
-#define SBFS_NINDIR      2             /* indirect block slots (addrs[8..9]) */
+#define SBFS_NDIR        7             /* direct block slots (addrs[0..6])  */
+#define SBFS_NINDIR      2             /* single-indirect slots (addrs[7..8]) */
+#define SBFS_NDINDIR     1             /* double-indirect slots (addrs[9]) */
 #define SBFS_NBLK_PER_INDIR  (SBFS_BSIZE / 4)  /* 128 block addrs per indirect block */
 #define SBFS_NINODES     256
 #define SBFS_LOGSIZE     16
 #define SBFS_DIRSIZ      14            /* max name length in a dirent     */
 #define SBFS_ROOTINUM    1             /* inode number of the root dir    */
 
-/* Max file size: 8 direct + 2*128 indirect = 264 blocks = 132 KiB */
-#define SBFS_MAX_FILE_SIZE  ((SBFS_NDIR + SBFS_NINDIR * SBFS_NBLK_PER_INDIR) * SBFS_BSIZE)
+/* Max file size: 7 direct + 2*128 indirect + 1*128*128 double-indirect
+ * = 7 + 256 + 16384 = 16647 blocks = 8.13 MiB ceiling.
+ * Effective ceiling is fs-capped by NDATABLOCKS (~2 MiB). */
+#define SBFS_MAX_FILE_SIZE  ((SBFS_NDIR \
+        + SBFS_NINDIR  * SBFS_NBLK_PER_INDIR \
+        + SBFS_NDINDIR * SBFS_NBLK_PER_INDIR * SBFS_NBLK_PER_INDIR) \
+        * SBFS_BSIZE)
 
 /* -----------------------------------------------------------------------
  * On-disk superblock (stored in block 1)
@@ -37,9 +43,13 @@ struct sb_superblock {
  * On-disk inode (exactly 64 bytes → 8 per 512-byte block)
  *   type(2)+nlink(2)+size(4)+mtime(8)+mode(4)+uid(2)+gid(2)+addrs[10](40) = 64
  *
- * mode/uid/gid were added in v2. v1 images (magic SBV1) had addrs[12]
- * occupying the bytes now taken by mode/uid/gid plus addrs[0..1]; the
- * magic bump in sbfs_init rejects them so the layout cannot be misread.
+ * v3 addrs[] semantics:
+ *   addrs[0..6]  — direct data blocks
+ *   addrs[7..8]  — single-indirect (each → 128 data block addrs)
+ *   addrs[9]     — double-indirect (→ 128 indirect blocks → 128 data each)
+ *
+ * Magic bump (SBV2→SBV3) forces reject on stale images so the addrs[]
+ * slot reinterpretation cannot be misread.
  * ----------------------------------------------------------------------- */
 struct sb_dinode {
     uint16_t type;                    /* 0=free, 1=file, 2=dir, 3=symlink */

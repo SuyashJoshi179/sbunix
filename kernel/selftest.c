@@ -555,13 +555,13 @@ static void test_bio_basic(void) {
     st_check(b != 0, "bio: bread block 1 returns non-null");
     st_check(b->valid == 1, "bio: buffer is valid after bread");
     uint32_t magic = *(uint32_t *)b->data;
-    st_check(magic == 0x53425632u, "bio: block 1 has sbfs magic 'SBV2'");
+    st_check(magic == 0x53425633u, "bio: block 1 has sbfs magic 'SBV3'");
     brelse(b);
 
     // Re-bread same block — should hit the cache (same pointer from LRU)
     struct buf *b2 = bread(1);
     st_check(b2 != 0, "bio: second bread block 1 non-null");
-    st_check(*(uint32_t *)b2->data == 0x53425632u, "bio: cache hit returns same data");
+    st_check(*(uint32_t *)b2->data == 0x53425633u, "bio: cache hit returns same data");
     brelse(b2);
 
     // bread 32 distinct blocks — cache should handle without panic

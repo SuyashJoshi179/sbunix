@@ -55,6 +55,8 @@ int main(void) {
         "/bin/path_test",
         "/bin/utimes_test",
         "/bin/sbfs_basic_test",
+        "/bin/sbfs_bigfile_test",
+        "/bin/bigfile_pcache_test",
         "/bin/mkdir_test",
         "/bin/link_test",
         "/bin/rename_test",

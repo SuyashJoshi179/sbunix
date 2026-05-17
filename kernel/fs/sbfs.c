@@ -332,18 +332,34 @@ int sbfs_readi(struct inode *ip, uint64_t off, void *dst, uint64_t n) {
         uint32_t bn   = (off + total) / SBFS_BSIZE;
         uint32_t boff = (off + total) % SBFS_BSIZE;
 
-        uint32_t data_block;
+        uint32_t data_block = 0;
         if (bn < SBFS_NDIR) {
             data_block = si->d.addrs[bn];
-        } else {
+        } else if (bn < SBFS_NDIR + SBFS_NINDIR * SBFS_NBLK_PER_INDIR) {
             uint32_t rel = bn - SBFS_NDIR;
             uint32_t ii  = rel / SBFS_NBLK_PER_INDIR;
             uint32_t io  = rel % SBFS_NBLK_PER_INDIR;
-            if (ii >= SBFS_NINDIR) break;
             uint32_t indir = si->d.addrs[SBFS_NDIR + ii];
             if (indir == 0) break;
             struct buf *ibp = bread(indir);
             data_block = ((uint32_t *)ibp->data)[io];
+            brelse(ibp);
+        } else {
+            /* Double-indirect range. Layout: si->d.addrs[SBFS_NDIR + SBFS_NINDIR]
+             * → outer block of 128 indirect-block addresses → each inner block
+             * holds 128 data-block addresses. */
+            uint32_t drel = bn - (SBFS_NDIR + SBFS_NINDIR * SBFS_NBLK_PER_INDIR);
+            uint32_t oi   = drel / SBFS_NBLK_PER_INDIR;
+            uint32_t ii   = drel % SBFS_NBLK_PER_INDIR;
+            if (oi >= SBFS_NBLK_PER_INDIR) break;
+            uint32_t outer = si->d.addrs[SBFS_NDIR + SBFS_NINDIR];
+            if (outer == 0) break;
+            struct buf *obp = bread(outer);
+            uint32_t inner = ((uint32_t *)obp->data)[oi];
+            brelse(obp);
+            if (inner == 0) break;
+            struct buf *ibp = bread(inner);
+            data_block = ((uint32_t *)ibp->data)[ii];
             brelse(ibp);
         }
 
@@ -382,7 +398,7 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
         uint32_t bn   = (off + total) / SBFS_BSIZE;
         uint32_t boff = (off + total) % SBFS_BSIZE;
 
-        uint32_t data_block;
+        uint32_t data_block = 0;
         if (bn < SBFS_NDIR) {
             if (si->d.addrs[bn] == 0) {
                 uint32_t nb = balloc();
@@ -391,11 +407,10 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
                 si->dirty = 1;
             }
             data_block = si->d.addrs[bn];
-        } else {
+        } else if (bn < SBFS_NDIR + SBFS_NINDIR * SBFS_NBLK_PER_INDIR) {
             uint32_t rel = bn - SBFS_NDIR;
             uint32_t ii  = rel / SBFS_NBLK_PER_INDIR;
             uint32_t io  = rel % SBFS_NBLK_PER_INDIR;
-            if (ii >= SBFS_NINDIR) break;
 
             if (si->d.addrs[SBFS_NDIR + ii] == 0) {
                 uint32_t ib = balloc();
@@ -403,7 +418,6 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
                 si->d.addrs[SBFS_NDIR + ii] = ib;
                 si->dirty = 1;
             }
-
             struct buf *ibp = bread(si->d.addrs[SBFS_NDIR + ii]);
             uint32_t *ia = (uint32_t *)ibp->data;
             if (ia[io] == 0) {
@@ -413,6 +427,42 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
                 log_write(ibp);
             }
             data_block = ia[io];
+            brelse(ibp);
+        } else {
+            /* Double-indirect allocation: outer block holds 128 indirect-block
+             * addresses; each inner block holds 128 data-block addresses.
+             * Three balloc points lazily allocate outer, inner, then data. */
+            uint32_t drel = bn - (SBFS_NDIR + SBFS_NINDIR * SBFS_NBLK_PER_INDIR);
+            uint32_t oi   = drel / SBFS_NBLK_PER_INDIR;
+            uint32_t ii   = drel % SBFS_NBLK_PER_INDIR;
+            if (oi >= SBFS_NBLK_PER_INDIR) break;
+
+            if (si->d.addrs[SBFS_NDIR + SBFS_NINDIR] == 0) {
+                uint32_t ob = balloc();
+                if (!ob) { enospc = 1; break; }
+                si->d.addrs[SBFS_NDIR + SBFS_NINDIR] = ob;
+                si->dirty = 1;
+            }
+            struct buf *obp = bread(si->d.addrs[SBFS_NDIR + SBFS_NINDIR]);
+            uint32_t *oa = (uint32_t *)obp->data;
+            if (oa[oi] == 0) {
+                uint32_t ib = balloc();
+                if (!ib) { brelse(obp); enospc = 1; break; }
+                oa[oi] = ib;
+                log_write(obp);
+            }
+            uint32_t inner_addr = oa[oi];
+            brelse(obp);
+
+            struct buf *ibp = bread(inner_addr);
+            uint32_t *ia = (uint32_t *)ibp->data;
+            if (ia[ii] == 0) {
+                uint32_t nb = balloc();
+                if (!nb) { brelse(ibp); enospc = 1; break; }
+                ia[ii] = nb;
+                log_write(ibp);
+            }
+            data_block = ia[ii];
             brelse(ibp);
         }
 
@@ -452,12 +502,14 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
  * (must be inside a transaction)
  * ----------------------------------------------------------------------- */
 static void sbfs_itrunc(struct sbfs_inode *si) {
+    /* Direct blocks. */
     for (int bn = 0; bn < SBFS_NDIR; bn++) {
         if (si->d.addrs[bn]) {
             bfree(si->d.addrs[bn]);
             si->d.addrs[bn] = 0;
         }
     }
+    /* Single-indirect blocks. */
     for (int ii = 0; ii < SBFS_NINDIR; ii++) {
         if (si->d.addrs[SBFS_NDIR + ii]) {
             struct buf *ibp = bread(si->d.addrs[SBFS_NDIR + ii]);
@@ -469,6 +521,25 @@ static void sbfs_itrunc(struct sbfs_inode *si) {
             bfree(si->d.addrs[SBFS_NDIR + ii]);
             si->d.addrs[SBFS_NDIR + ii] = 0;
         }
+    }
+    /* Double-indirect tree. */
+    if (si->d.addrs[SBFS_NDIR + SBFS_NINDIR]) {
+        struct buf *obp = bread(si->d.addrs[SBFS_NDIR + SBFS_NINDIR]);
+        uint32_t *oa = (uint32_t *)obp->data;
+        for (int oi = 0; oi < SBFS_NBLK_PER_INDIR; oi++) {
+            if (oa[oi]) {
+                struct buf *ibp = bread(oa[oi]);
+                uint32_t *ia = (uint32_t *)ibp->data;
+                for (int i = 0; i < SBFS_NBLK_PER_INDIR; i++) {
+                    if (ia[i]) bfree(ia[i]);
+                }
+                brelse(ibp);
+                bfree(oa[oi]);
+            }
+        }
+        brelse(obp);
+        bfree(si->d.addrs[SBFS_NDIR + SBFS_NINDIR]);
+        si->d.addrs[SBFS_NDIR + SBFS_NINDIR] = 0;
     }
     si->d.size  = 0;
     si->vnode.size = 0;
