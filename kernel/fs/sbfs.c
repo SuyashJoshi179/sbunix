@@ -800,14 +800,41 @@ static int sbfs_op_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
     return generic_file_read(ip, off, buf, n);
 }
 
-static int sbfs_op_write(struct inode *ip, uint64_t off, const void *buf, uint64_t n) {
-    int ret;
-    begin_op();
-    ret = sbfs_writei(ip, off, buf, n);
-    end_op();
-    if (ret > 0)
-        pcache_invalidate_range(ip, off, (uint64_t)ret);
-    return ret;
+/* Chunk size for the per-transaction slab in sbfs_op_write. Worst-case
+ * log_write footprint per BSIZE inside one txn is:
+ *   bitmap(1) + outer-DI(1) + inner-indir(1) + dinode(1) = 4 fixed slots
+ *   plus 1 data slot per BSIZE written.
+ * log_write dedups by blockno, so the fixed four collapse to one entry
+ * each per transaction. LOG_HDR_MAX=15; 4 KiB = 8 BSIZE → 8+4 = 12 slots,
+ * comfortable margin even when an outer DI boundary or NINDIR boundary
+ * forces two indir blocks instead of one. */
+#define SBFS_TXN_BYTES  (8u * SBFS_BSIZE)
+
+static int sbfs_op_write(struct inode *ip, uint64_t off,
+                         const void *buf, uint64_t n) {
+    const char *p = (const char *)buf;
+    uint64_t done = 0;
+    int last_err = 0;
+
+    while (done < n) {
+        uint64_t this_n = n - done;
+        if (this_n > SBFS_TXN_BYTES) this_n = SBFS_TXN_BYTES;
+
+        begin_op();
+        int r = sbfs_writei(ip, off + done, p + done, (uint64_t)this_n);
+        end_op();
+
+        if (r < 0) { last_err = r; break; }
+        if (r == 0) break;                       /* ENOSPC after some progress */
+        done += (uint64_t)r;
+        if ((uint64_t)r < this_n) break;         /* short write — propagate */
+    }
+
+    if (done > 0) {
+        pcache_invalidate_range(ip, off, done);
+        return (int)done;
+    }
+    return last_err ? last_err : 0;
 }
 
 static int sbfs_op_truncate(struct inode *ip) {

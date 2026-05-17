@@ -60,6 +60,45 @@ int main(void) {
         return 1;
     }
 
+    /* 5b. fchown round-trip on sbfs. The fd path through sys_fchown
+     * shares do_chown_ip with sys_chown, but the dispatch is distinct
+     * and worth covering explicitly. */
+    fd = open(p, O_RDWR);
+    if (fd < 0) { printf("FAIL: reopen for fchown errno=%d\n", errno); return 1; }
+    if (fchown(fd, 123, 234) < 0) {
+        printf("FAIL: fchown errno=%d\n", errno); close(fd); return 1;
+    }
+    if (fstat(fd, &st2) < 0) { printf("FAIL: fstat post-fchown errno=%d\n", errno); close(fd); return 1; }
+    close(fd);
+    if (st2.st_uid != 123 || st2.st_gid != 234) {
+        printf("FAIL: fchown not visible: uid=%u gid=%u want 123/234\n",
+               st2.st_uid, st2.st_gid);
+        return 1;
+    }
+
+    /* 5c. chown on a directory — exercises do_chown_ip against a dir
+     * inode (different sbfs type-bits path through ialloc/stat). */
+    const char *dp = "/mnt/cmod.d";
+    (void)unlink(dp);
+    if (mkdir(dp, 0755) < 0) { printf("FAIL: mkdir errno=%d\n", errno); return 1; }
+    if (chown(dp, 77, 88) < 0) { printf("FAIL: dir chown errno=%d\n", errno); return 1; }
+    if (stat(dp, &st) < 0)    { printf("FAIL: dir stat errno=%d\n", errno); return 1; }
+    if (!S_ISDIR(st.st_mode)) {
+        printf("FAIL: dir type bits lost: mode=%o\n", st.st_mode); return 1;
+    }
+    if (st.st_uid != 77 || st.st_gid != 88) {
+        printf("FAIL: dir chown not visible: uid=%u gid=%u\n", st.st_uid, st.st_gid);
+        return 1;
+    }
+    if (chmod(dp, 0700) < 0) { printf("FAIL: dir chmod errno=%d\n", errno); return 1; }
+    if (stat(dp, &st) < 0)   { printf("FAIL: dir stat2 errno=%d\n", errno); return 1; }
+    if ((st.st_mode & 07777) != 0700 || !S_ISDIR(st.st_mode)) {
+        printf("FAIL: dir chmod result %o (type=%o)\n",
+               st.st_mode & 07777, st.st_mode & S_IFMT);
+        return 1;
+    }
+    (void)rmdir(dp);
+
     /* 6. tarfs EROFS — chmod on /bin/sh must fail. */
     errno = 0;
     if (chmod("/bin/sh", 0644) == 0 || errno != EROFS) {

@@ -89,6 +89,38 @@ int main(void) {
     close(fd);
     (void)unlink(path);
 
+    /* Phase 3: single-buffer write that straddles direct → single-indir →
+     * double-indir in ONE syscall. Stresses the per-transaction chunking
+     * inside sbfs_op_write: if the txn slab were the whole user buffer the
+     * log header would overflow (worst case ~5 unique blocks per BSIZE
+     * before dedup → BIG > LOG_HDR_MAX=15). 160 KiB lands ~30 KiB into the
+     * DI region; static buffer to keep stack small. */
+    static char big[160 * 1024];
+    for (unsigned i = 0; i < sizeof(big); i++) big[i] = (char)((i * 31u) ^ 0x5a);
+
+    fd = open(path, O_RDWR | O_CREAT | O_TRUNC);
+    if (fd < 0) { printf("FAIL: phase3 open errno=%d\n", errno); return 1; }
+    int wn = write(fd, big, sizeof(big));
+    if (wn != (int)sizeof(big)) {
+        printf("FAIL: phase3 single-write returned %d errno=%d\n", wn, errno);
+        return 1;
+    }
+    if (lseek(fd, 0, SEEK_SET) != 0) {
+        printf("FAIL: phase3 lseek errno=%d\n", errno); return 1;
+    }
+    static char vbuf[160 * 1024];
+    int rn = read(fd, vbuf, sizeof(vbuf));
+    if (rn != (int)sizeof(vbuf)) {
+        printf("FAIL: phase3 read returned %d errno=%d\n", rn, errno); return 1;
+    }
+    for (unsigned i = 0; i < sizeof(big); i++) {
+        if (vbuf[i] != big[i]) {
+            printf("FAIL: phase3 mismatch at %u\n", i); return 1;
+        }
+    }
+    close(fd);
+    (void)unlink(path);
+
     printf("PASS\n");
     return 0;
 }
