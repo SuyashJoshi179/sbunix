@@ -77,8 +77,51 @@ int main(void) {
     if ((st.st_mode & 07777) != 0700) {
         printf("FAIL: tmpfs fchmod result %o want 0700\n", st.st_mode & 07777); return 1;
     }
+    /* 7b. tmpfs chown — exercises do_chown_ip on a vnode whose stat reads
+     * vnode.uid/gid (no setowner hook). Regression: previously
+     * tmpfs_op_stat returned hardcoded zeros, silently masking the write. */
+    if (chown(tp, 11, 13) < 0) { printf("FAIL: tmpfs chown errno=%d\n", errno); return 1; }
+    if (stat(tp, &st) < 0)     { printf("FAIL: tmpfs stat errno=%d\n", errno); return 1; }
+    if (st.st_uid != 11 || st.st_gid != 13) {
+        printf("FAIL: tmpfs chown not visible: uid=%u gid=%u\n", st.st_uid, st.st_gid);
+        return 1;
+    }
     close(fd);
     (void)unlink(tp);
+
+    /* 8. lchown on a symlink — sys_lchown uses lnamei_at (no follow), so this
+     * must update the LINK's owner, not the target's. Run on sbfs which
+     * supports symlinks and persists uid/gid in the dinode. */
+    const char *target = "/mnt/lchown.target";
+    const char *link   = "/mnt/lchown.lnk";
+    (void)unlink(link);
+    (void)unlink(target);
+    fd = open(target, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0) { printf("FAIL: lchown target create errno=%d\n", errno); return 1; }
+    close(fd);
+    if (chown(target, 100, 100) < 0) {
+        printf("FAIL: lchown target chown errno=%d\n", errno); return 1;
+    }
+    if (symlink(target, link) < 0) {
+        printf("FAIL: symlink errno=%d\n", errno); return 1;
+    }
+    if (lchown(link, 55, 66) < 0) {
+        printf("FAIL: lchown errno=%d\n", errno); return 1;
+    }
+    struct stat lst;
+    if (lstat(link, &lst) < 0) { printf("FAIL: lstat errno=%d\n", errno); return 1; }
+    if (lst.st_uid != 55 || lst.st_gid != 66) {
+        printf("FAIL: lchown link uid=%u gid=%u want 55/66\n", lst.st_uid, lst.st_gid);
+        return 1;
+    }
+    /* Target must be untouched. */
+    if (stat(target, &st) < 0) { printf("FAIL: lchown target stat errno=%d\n", errno); return 1; }
+    if (st.st_uid != 100 || st.st_gid != 100) {
+        printf("FAIL: lchown leaked to target: uid=%u gid=%u\n", st.st_uid, st.st_gid);
+        return 1;
+    }
+    (void)unlink(link);
+    (void)unlink(target);
 
     (void)unlink(p);
     printf("PASS\n");
