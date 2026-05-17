@@ -139,7 +139,16 @@ void uart_rx_isr(void) {
             c = '\n';
 
         if (tio.c_lflag & ICANON) {
-            if ((tio.c_lflag & ISIG) && c == (char)tio.c_cc[VEOF] && edit_len == 0) {
+            if (c == (char)tio.c_cc[VEOF]) {
+                /* POSIX VEOF: discard the EOF byte and deliver any buffered
+                 * bytes without waiting for a newline. We always push the
+                 * EOF sentinel after the buffered bytes; the reader returns
+                 * the byte count on mid-line VEOF (i > 0) or zero on
+                 * empty-line VEOF, which is what POSIX read() requires. */
+                if (edit_len > 0) {
+                    line_push(edit_buf, edit_len);
+                    edit_len = 0;
+                }
                 line_commit_eof();
             } else if (c == '\n') {
                 if (tio.c_lflag & ECHO) {
