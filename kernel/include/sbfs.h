@@ -5,18 +5,18 @@
 /* -----------------------------------------------------------------------
  * sbfs v1 on-disk constants  (must match tools/mkfs.c exactly)
  * ----------------------------------------------------------------------- */
-#define SBFS_MAGIC       0x53425631u   /* "SBV1"                         */
+#define SBFS_MAGIC       0x53425632u   /* "SBV2" — v2 added mode/uid/gid */
 #define SBFS_BSIZE       512           /* bytes per block                 */
-#define SBFS_NDIRECT     12            /* total addr slots per inode (disk format) */
-#define SBFS_NDIR        10            /* direct block slots (addrs[0..9])  */
-#define SBFS_NINDIR      2             /* indirect block slots (addrs[10..11]) */
+#define SBFS_NDIRECT     10            /* total addr slots per inode (disk format) */
+#define SBFS_NDIR        8             /* direct block slots (addrs[0..7])  */
+#define SBFS_NINDIR      2             /* indirect block slots (addrs[8..9]) */
 #define SBFS_NBLK_PER_INDIR  (SBFS_BSIZE / 4)  /* 128 block addrs per indirect block */
 #define SBFS_NINODES     256
 #define SBFS_LOGSIZE     16
 #define SBFS_DIRSIZ      14            /* max name length in a dirent     */
 #define SBFS_ROOTINUM    1             /* inode number of the root dir    */
 
-/* Max file size: 10 direct + 2*128 indirect = 266 blocks = 136 KiB */
+/* Max file size: 8 direct + 2*128 indirect = 264 blocks = 132 KiB */
 #define SBFS_MAX_FILE_SIZE  ((SBFS_NDIR + SBFS_NINDIR * SBFS_NBLK_PER_INDIR) * SBFS_BSIZE)
 
 /* -----------------------------------------------------------------------
@@ -35,14 +35,21 @@ struct sb_superblock {
 
 /* -----------------------------------------------------------------------
  * On-disk inode (exactly 64 bytes → 8 per 512-byte block)
- *   type(2)+nlink(2)+size(4)+mtime(8)+addrs[12](48) = 64
+ *   type(2)+nlink(2)+size(4)+mtime(8)+mode(4)+uid(2)+gid(2)+addrs[10](40) = 64
+ *
+ * mode/uid/gid were added in v2. v1 images (magic SBV1) had addrs[12]
+ * occupying the bytes now taken by mode/uid/gid plus addrs[0..1]; the
+ * magic bump in sbfs_init rejects them so the layout cannot be misread.
  * ----------------------------------------------------------------------- */
 struct sb_dinode {
-    uint16_t type;                    /* 0=free, 1=file, 2=dir         */
+    uint16_t type;                    /* 0=free, 1=file, 2=dir, 3=symlink */
     uint16_t nlink;
     uint32_t size;                    /* file size in bytes            */
-    uint64_t mtime;                   /* modification time (unused v1) */
-    uint32_t addrs[SBFS_NDIRECT];    /* direct block addresses        */
+    uint64_t mtime;                   /* modification time (seconds)   */
+    uint32_t mode;                    /* POSIX mode bits (S_IF* | perms) */
+    uint16_t uid;
+    uint16_t gid;
+    uint32_t addrs[SBFS_NDIRECT];    /* direct + indirect block addresses */
 };
 
 /* -----------------------------------------------------------------------

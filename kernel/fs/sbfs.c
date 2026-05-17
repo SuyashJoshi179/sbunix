@@ -165,18 +165,25 @@ static void sbfs_ilock(struct sbfs_inode *si) {
     si->vnode.size   = si->d.size;
     si->vnode.nlink  = si->d.nlink;
     si->vnode.mtime  = si->d.mtime;
+    si->vnode.mode   = si->d.mode;
+    si->vnode.uid    = si->d.uid;
+    si->vnode.gid    = si->d.gid;
 }
 
 /* Write si->d back to the inode block (must be inside a transaction). */
 void sbfs_iupdate(struct sbfs_inode *si) {
     uint32_t block  = sb.inodestart + si->inum / 8;
     uint32_t offset = (si->inum % 8) * sizeof(struct sb_dinode);
-    /* Keep dinode size/nlink/mtime in sync from the generic vnode. The
-     * mtime sync covers sys_utimensat callers (and any other path that
-     * bumps vnode.mtime without going through writei). */
+    /* Keep dinode size/nlink/mtime/mode/uid/gid in sync from the generic
+     * vnode. The mtime sync covers sys_utimensat callers (and any other
+     * path that bumps vnode.mtime without going through writei). The
+     * mode/uid/gid sync covers future chmod/chown callers. */
     si->d.size  = (uint32_t)si->vnode.size;
     si->d.nlink = (uint16_t)si->vnode.nlink;
     si->d.mtime = si->vnode.mtime;
+    si->d.mode  = si->vnode.mode;
+    si->d.uid   = (uint16_t)si->vnode.uid;
+    si->d.gid   = (uint16_t)si->vnode.gid;
     struct buf *bp = bread(block);
     memcpy(bp->data + offset, &si->d, sizeof(struct sb_dinode));
     log_write(bp);
@@ -278,6 +285,17 @@ struct inode *sbfs_ialloc(uint16_t type) {
             memset(d, 0, sizeof(*d));
             d->type = type;
             d->mtime = sbfs_now();
+            /* Seed POSIX mode from type. Permission bits chosen to match
+             * tmpfs/tarfs defaults so userspace sees consistent stat()
+             * output across mount points. uid/gid stay 0 — sbfs has no
+             * chown syscall yet, but the dinode now persists them so
+             * adding one is a localized change. */
+            d->mode  = (type == 1) ? (S_IFREG | 0644)
+                     : (type == 2) ? (S_IFDIR | 0755)
+                     : (type == 3) ? (S_IFLNK | 0777)
+                     : 0;
+            d->uid   = 0;
+            d->gid   = 0;
             log_write(bp);
             brelse(bp);
             struct inode *ip = sbfs_iget(inum);
@@ -713,19 +731,14 @@ static int sbfs_op_truncate(struct inode *ip) {
 static int sbfs_op_stat(struct inode *ip, struct stat *st) {
     struct sbfs_inode *si = (struct sbfs_inode *)ip;
     sbfs_ilock(si);
+    st->st_dev   = 6;            /* arbitrary distinct id, see tarfs/tmpfs/devfs */
     st->st_ino   = si->inum;
     st->st_nlink = si->d.nlink;
     st->st_size  = si->d.size;
-    if (si->d.type == 1) {
-        st->st_mode = 0100644;   /* regular file */
-    } else if (si->d.type == 2) {
-        st->st_mode = 040755;    /* directory    */
-    } else if (si->d.type == 3) {
-        st->st_mode = 0120777;   /* S_IFLNK | 0777 */
-    } else {
-        st->st_mode = 0;
-    }
-    /* sbfs v1 has a single on-disk timestamp; report it as all three
+    st->st_mode  = ip->mode;
+    st->st_uid   = ip->uid;
+    st->st_gid   = ip->gid;
+    /* sbfs v2 has a single on-disk timestamp; report it as all three
      * stat fields. Documented deviation from POSIX. */
     STAT_SET_TIMES(st, si->d.mtime);
     st->st_blksize = SBFS_BSIZE;
