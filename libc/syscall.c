@@ -155,7 +155,7 @@ char *getcwd(char *buf, size_t n) {
     return buf;
 }
 
-int mkdir(const char *path, int mode) {
+int mkdir(const char *path, mode_t mode) {
     (void)mode;
     return (int)syscall_ret(ecall1(21, (long)path));
 }

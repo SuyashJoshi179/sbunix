@@ -39,7 +39,7 @@ long  getdents64(int fd, void *buf, long n);
 int   chdir(const char *path);
 int   fchdir(int fd);
 char *getcwd(char *buf, size_t n);
-int   mkdir(const char *path, int mode);
+int   mkdir(const char *path, mode_t mode);
 int   unlink(const char *path);
 int   unlinkat(int dirfd, const char *path, int flags);
 int   pipe(int fds[2]);
@@ -62,6 +62,8 @@ int   setpgrp(void);
 pid_t setsid(void);
 pid_t getsid(pid_t pid);
 pid_t tcgetsid(int fd);
+pid_t tcgetpgrp(int fd);
+int   tcsetpgrp(int fd, pid_t pgrp);
 
 /* uid/gid stubs */
 uid_t getuid(void);
@@ -84,6 +86,7 @@ int   fsync(int fd);
 int   fdatasync(int fd);
 unsigned alarm(unsigned secs);
 unsigned sleep(unsigned secs);
+int   pause(void);
 int   ftruncate(int fd, off_t len);
 int   truncate(const char *path, off_t len);
 int   chown(const char *path, uid_t uid, gid_t gid);
