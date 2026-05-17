@@ -1,6 +1,0 @@
-# Vendored external suites — sources fetched on demand, build artifacts
-# are throwaway. Both directories must never be committed.
-open-posix/upstream/
-open-posix/build/
-sortix-regress/upstream/
-sortix-regress/build/

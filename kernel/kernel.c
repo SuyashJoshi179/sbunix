@@ -7,7 +7,6 @@
 #include <trap.h>
 #include <timer.h>
 #include <proc.h>
-#include <selftest.h>
 #include <tarfs.h>
 #include <procfs.h>
 #include <vfs.h>
@@ -64,8 +63,6 @@ void boot(unsigned long hartid, unsigned long dtb_addr) {
 
     trap_init();
     timer_init();
-
-    selftest_run();
 
     printk("Starting scheduler\n");
     sched_init();   // never returns
