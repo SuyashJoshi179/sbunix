@@ -127,6 +127,14 @@
 #define SYS_symlinkat      132  // (target, newdirfd, linkpath)
 #define SYS_readlinkat     133  // (dirfd, path, buf, bufsize)
 
+// POSIX chmod/chown family. No permission enforcement (matches the
+// existing root-equivalent sys_access model). EROFS on read-only fs.
+#define SYS_chmod         134  // (path, mode)
+#define SYS_fchmod        135  // (fd, mode)
+#define SYS_chown         136  // (path, uid, gid)
+#define SYS_lchown        137  // (path, uid, gid) — no symlink follow
+#define SYS_fchown        138  // (fd, uid, gid)
+
 // fcntl commands and flags the kernel honors. Values must match
 // libc/include/fcntl.h verbatim — they are part of the kernel ABI.
 #define F_GETFD            1

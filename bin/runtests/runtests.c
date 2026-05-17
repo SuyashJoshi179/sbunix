@@ -149,6 +149,7 @@ int main(void) {
         "/bin/at_residue_test",
         "/bin/regression_fixes_test",
         "/bin/access_test",
+        "/bin/chmod_chown_test",
         "/bin/posix_surface_test",
         "/bin/sigmask_defer_test",
         "/bin/sigmask_exec_test",

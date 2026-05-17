@@ -80,6 +80,8 @@ static void sbfs_itrunc(struct sbfs_inode *si);
 static int  sbfs_op_symlink (struct inode *, const char *, const char *);
 static int  sbfs_op_readlink(struct inode *, char *, uint64_t);
 static int  sbfs_op_setmtime(struct inode *);
+static int  sbfs_op_setmode (struct inode *);
+static int  sbfs_op_setowner(struct inode *);
 
 static const struct inode_ops sbfs_iops = {
     .read     = sbfs_op_read,
@@ -100,6 +102,8 @@ static const struct inode_ops sbfs_iops = {
     .writepage = sbfs_writepage,
     .writepage_locked = sbfs_writepage_locked,
     .setmtime = sbfs_op_setmtime,
+    .setmode  = sbfs_op_setmode,
+    .setowner = sbfs_op_setowner,
 };
 
 /* -----------------------------------------------------------------------
@@ -196,6 +200,27 @@ void sbfs_iupdate(struct sbfs_inode *si) {
  * The generic iupdate copies vnode.mtime into d.mtime, so the body
  * collapses to a transaction-wrapped iupdate. */
 static int sbfs_op_setmtime(struct inode *ip) {
+    struct sbfs_inode *si = (struct sbfs_inode *)ip;
+    begin_op();
+    sbfs_iupdate(si);
+    end_op();
+    return 0;
+}
+
+/* sys_chmod / sys_fchmod hook: vnode.mode already updated by caller
+ * with type bits preserved. iupdate copies vnode.mode into d.mode. */
+static int sbfs_op_setmode(struct inode *ip) {
+    struct sbfs_inode *si = (struct sbfs_inode *)ip;
+    begin_op();
+    sbfs_iupdate(si);
+    end_op();
+    return 0;
+}
+
+/* sys_chown / sys_lchown / sys_fchown hook. iupdate copies
+ * vnode.uid/gid (uint32) into d.uid/gid (uint16 — silent truncation
+ * matches the existing v2 layout choice; teaching kernel uses uid=0). */
+static int sbfs_op_setowner(struct inode *ip) {
     struct sbfs_inode *si = (struct sbfs_inode *)ip;
     begin_op();
     sbfs_iupdate(si);

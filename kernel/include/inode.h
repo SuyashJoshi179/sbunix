@@ -71,6 +71,18 @@ struct inode_ops {
      * holds a ref on ip; implementation wraps begin_op/end_op as
      * needed. Returns 0 on success or -errno. */
     int (*setmtime)(struct inode *);
+
+    /* Persist a freshly-updated ip->mode to the filesystem's on-disk
+     * representation. sys_chmod / sys_fchmod set ip->mode (preserving
+     * type bits) then call this hook. tmpfs leaves it NULL (stat reads
+     * the vnode mode directly). sbfs reuses sbfs_iupdate's
+     * vnode->dinode mirror — body is begin_op/iupdate/end_op. Caller
+     * holds a ref on ip. Returns 0 / -errno. */
+    int (*setmode)(struct inode *);
+
+    /* Persist a freshly-updated ip->uid / ip->gid. Mirror of setmode
+     * for chown(2) / lchown(2) / fchown(2). */
+    int (*setowner)(struct inode *);
 };
 
 #define I_REG  1
