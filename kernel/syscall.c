@@ -1204,6 +1204,13 @@ static int64_t sys_fchmod(int fd, uint32_t mode) {
 // ---------------------------------------------------------------------------
 static int do_chown_ip(struct inode *ip, uint32_t uid, uint32_t gid) {
     if (!ip->ops || (!ip->ops->create && !ip->ops->unlink)) return -EROFS;
+    /* sbfs dinode stores uid/gid as uint16_t (v2 layout). Reject values
+     * that would silently truncate after inode eviction reloads d.uid/gid
+     * from disk — better to fail loudly than to corrupt the dinode. The
+     * (uint32_t)-1 sentinel ("leave unchanged") is checked before the
+     * range test so it stays valid. */
+    if (uid != (uint32_t)-1 && uid > 0xFFFFu) return -EINVAL;
+    if (gid != (uint32_t)-1 && gid > 0xFFFFu) return -EINVAL;
     if (uid != (uint32_t)-1) ip->uid = uid;
     if (gid != (uint32_t)-1) ip->gid = gid;
     if (ip->ops->setowner) {

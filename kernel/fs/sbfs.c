@@ -801,14 +801,14 @@ static int sbfs_op_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
 }
 
 /* Chunk size for the per-transaction slab in sbfs_op_write. Worst-case
- * log_write footprint per BSIZE inside one txn is:
- *   bitmap(1) + outer-DI(1) + inner-indir(1) + dinode(1) = 4 fixed slots
- *   plus 1 data slot per BSIZE written.
- * log_write dedups by blockno, so the fixed four collapse to one entry
- * each per transaction. LOG_HDR_MAX=15; 4 KiB = 8 BSIZE → 8+4 = 12 slots,
- * comfortable margin even when an outer DI boundary or NINDIR boundary
- * forces two indir blocks instead of one. */
-#define SBFS_TXN_BYTES  (8u * SBFS_BSIZE)
+ * log_write footprint per chunk:
+ *   bitmap(1) + dinode(1) + single-indir(1) + outer-DI(1) + inner-DI(1)
+ *   + 1 extra inner block at NINDIR or DI-inner-page crossings = 6 fixed
+ *   plus 1 data slot per BSIZE-touched data block. An unaligned write
+ *   (boff > 0) can touch ceil(n / BSIZE) + 1 distinct data blocks; for
+ *   a 6-BSIZE chunk that's at most 7 data blocks → 6 + 7 = 13 slots,
+ *   under LOG_HDR_MAX=15 with two-slot headroom for future drift. */
+#define SBFS_TXN_BYTES  (6u * SBFS_BSIZE)
 
 static int sbfs_op_write(struct inode *ip, uint64_t off,
                          const void *buf, uint64_t n) {
@@ -881,6 +881,25 @@ static int sbfs_op_stat(struct inode *ip, struct stat *st) {
             if (slots[k]) nblocks++;
         }
         brelse(ibp);
+    }
+    /* Double-indirect tree: outer + each non-zero inner + every data
+     * slot in those inners. Symmetric to itrunc's free walk. */
+    uint32_t outer = si->d.addrs[SBFS_NDIR + SBFS_NINDIR];
+    if (outer) {
+        nblocks++;                  /* outer DI block itself */
+        struct buf *obp = bread(outer);
+        uint32_t *oa = (uint32_t *)obp->data;
+        for (uint32_t oi = 0; oi < SBFS_NBLK_PER_INDIR; oi++) {
+            if (!oa[oi]) continue;
+            nblocks++;              /* inner indir block */
+            struct buf *ibp = bread(oa[oi]);
+            uint32_t *ia = (uint32_t *)ibp->data;
+            for (uint32_t k = 0; k < SBFS_NBLK_PER_INDIR; k++) {
+                if (ia[k]) nblocks++;
+            }
+            brelse(ibp);
+        }
+        brelse(obp);
     }
     st->st_blocks = nblocks;
     return 0;
