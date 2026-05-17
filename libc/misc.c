@@ -1,6 +1,7 @@
 #include <unistd.h>
 #include <sys/utsname.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
@@ -59,26 +60,21 @@ unsigned sleep(unsigned secs) {
 }
 
 /* truncate() / ftruncate() implementations live in libc/syscall.c. */
-/* Ownership stubs: SBUnix doesn't track per-file owners, so we accept
- * the call but verify the target exists so a typo (or a chown on a
- * deleted file) still fails. */
+/* Ownership syscalls: real kernel calls now persist mode/uid/gid in
+ * the sbfs dinode (post-v2). No permission enforcement — matches the
+ * existing root-equivalent sys_access model. (uid_t)-1 / (gid_t)-1
+ * mean "leave the field alone" per POSIX. */
 int chown(const char *p, uid_t u, gid_t g) {
-    (void)u; (void)g;
-    struct stat st;
-    if (stat(p, &st) < 0) return -1;
-    return 0;
+    long r = syscall(SYS_chown, (long)p, (long)u, (long)g);
+    return r < 0 ? -1 : 0;
 }
 int fchown(int fd, uid_t u, gid_t g) {
-    (void)u; (void)g;
-    struct stat st;
-    if (fstat(fd, &st) < 0) return -1;
-    return 0;
+    long r = syscall(SYS_fchown, (long)fd, (long)u, (long)g);
+    return r < 0 ? -1 : 0;
 }
 int lchown(const char *p, uid_t u, gid_t g) {
-    (void)u; (void)g;
-    struct stat st;
-    if (lstat(p, &st) < 0) return -1;
-    return 0;
+    long r = syscall(SYS_lchown, (long)p, (long)u, (long)g);
+    return r < 0 ? -1 : 0;
 }
 /* link() / symlink() are real syscalls — see libc/syscall.c. */
 int rmdir(const char *p)                      { return unlink(p); }

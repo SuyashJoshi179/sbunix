@@ -371,8 +371,8 @@ static int tmpfs_op_stat(struct inode *ip, struct stat *st) {
     st->st_ino   = (uint64_t)(uintptr_t)ti;
     st->st_mode  = ti->vnode.mode;
     st->st_nlink = ti->vnode.nlink;
-    st->st_uid   = 0;
-    st->st_gid   = 0;
+    st->st_uid   = ti->vnode.uid;
+    st->st_gid   = ti->vnode.gid;
     st->st_size  = ti->vnode.size;
     STAT_SET_TIMES(st, ti->vnode.mtime);
     /* tmpfs storage is page-based: report the page size as the preferred

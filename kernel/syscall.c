@@ -1129,19 +1129,127 @@ static int64_t sys_utimensat(int dirfd, const char *path,
         return -EROFS;
     }
 
+    int changed = 0;
     if (kts[1].tv_nsec == UTIME_OMIT) {
         /* leave mtime alone */
     } else if (kts[1].tv_nsec == UTIME_NOW) {
         ip->mtime = (uint64_t)(realtime_ns() / 1000000000UL);
+        changed = 1;
     } else {
         if (kts[1].tv_sec < 0) { inode_put(ip); return -EINVAL; }
         ip->mtime = (uint64_t)kts[1].tv_sec;
+        changed = 1;
     }
     /* atime is dropped silently — struct inode has no atime field, and
      * stat synthesises atime from mtime anyway. */
 
+    /* Filesystems that persist mtime in an on-disk struct (sbfs)
+     * implement ->setmtime to mirror vnode.mtime into the dinode and
+     * mark the inode dirty. Without this hook, a stat-after-utimensat
+     * round-trip through inode eviction returns the stale on-disk
+     * value (or stale ->stat output, when ->stat reads the dinode). */
+    if (changed && ip->ops && ip->ops->setmtime) {
+        int sm = ip->ops->setmtime(ip);
+        if (sm < 0) { inode_put(ip); return sm; }
+    }
+
     inode_put(ip);
     return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sys_chmod / sys_fchmod — POSIX chmod(2)/fchmod(2). Replaces the permission
+// bits (low 12 bits) of the inode mode while preserving the S_IF* type
+// bits. No permission enforcement: matches the existing root-equivalent
+// access model in sys_access. Read-only filesystems (tarfs/devfs/procfs)
+// return EROFS using the same "no create and no unlink" detection rule as
+// sys_utimensat.
+// ---------------------------------------------------------------------------
+static int do_chmod_ip(struct inode *ip, uint32_t mode) {
+    if (!ip->ops || (!ip->ops->create && !ip->ops->unlink)) return -EROFS;
+    /* Preserve type bits; only permission bits change. */
+    ip->mode = (ip->mode & ~07777u) | (mode & 07777u);
+    if (ip->ops->setmode) {
+        int sm = ip->ops->setmode(ip);
+        if (sm < 0) return sm;
+    }
+    return 0;
+}
+
+static int64_t sys_chmod(const char *path, uint32_t mode) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+    struct inode *ip;
+    rc = namei(kpath, &ip);
+    if (rc < 0) return rc;
+    rc = do_chmod_ip(ip, mode);
+    inode_put(ip);
+    return rc;
+}
+
+static int64_t sys_fchmod(int fd, uint32_t mode) {
+    struct pcb *p = current_proc();
+    if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
+    struct file *f = p->ofile[fd];
+    if (f->type != FD_INODE || !f->ip) return -EBADF;
+    return do_chmod_ip(f->ip, mode);
+}
+
+// ---------------------------------------------------------------------------
+// sys_chown / sys_lchown / sys_fchown — POSIX chown(2)/lchown(2)/fchown(2).
+// (uid_t)-1 / (gid_t)-1 mean "leave this field alone" per POSIX. No
+// permission enforcement; EROFS on read-only filesystems via the same
+// rule as chmod.
+// ---------------------------------------------------------------------------
+static int do_chown_ip(struct inode *ip, uint32_t uid, uint32_t gid) {
+    if (!ip->ops || (!ip->ops->create && !ip->ops->unlink)) return -EROFS;
+    /* sbfs dinode stores uid/gid as uint16_t (v2 layout). Reject values
+     * that would silently truncate after inode eviction reloads d.uid/gid
+     * from disk — better to fail loudly than to corrupt the dinode. The
+     * (uint32_t)-1 sentinel ("leave unchanged") is checked before the
+     * range test so it stays valid. */
+    if (uid != (uint32_t)-1 && uid > 0xFFFFu) return -EINVAL;
+    if (gid != (uint32_t)-1 && gid > 0xFFFFu) return -EINVAL;
+    if (uid != (uint32_t)-1) ip->uid = uid;
+    if (gid != (uint32_t)-1) ip->gid = gid;
+    if (ip->ops->setowner) {
+        int rc = ip->ops->setowner(ip);
+        if (rc < 0) return rc;
+    }
+    return 0;
+}
+
+static int64_t sys_chown(const char *path, uint32_t uid, uint32_t gid) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+    struct inode *ip;
+    rc = namei(kpath, &ip);
+    if (rc < 0) return rc;
+    rc = do_chown_ip(ip, uid, gid);
+    inode_put(ip);
+    return rc;
+}
+
+static int64_t sys_lchown(const char *path, uint32_t uid, uint32_t gid) {
+    char kpath[PATH_MAX_LOCAL];
+    int rc = copyin_cstr(path, kpath, sizeof(kpath));
+    if (rc < 0) return rc;
+    struct inode *ip;
+    rc = lnamei_at(0, kpath, &ip);
+    if (rc < 0) return rc;
+    rc = do_chown_ip(ip, uid, gid);
+    inode_put(ip);
+    return rc;
+}
+
+static int64_t sys_fchown(int fd, uint32_t uid, uint32_t gid) {
+    struct pcb *p = current_proc();
+    if (!p || fd < 0 || fd >= NOFILE || !p->ofile[fd]) return -EBADF;
+    struct file *f = p->ofile[fd];
+    if (f->type != FD_INODE || !f->ip) return -EBADF;
+    return do_chown_ip(f->ip, uid, gid);
 }
 
 static int64_t sys_access(const char *path, int mode) {
@@ -2720,6 +2828,25 @@ int64_t syscall_dispatch(uint64_t sysnum, uint64_t *trapframe) {
         case SYS_getegid: return sys_getegid();
         case SYS_setuid:  return sys_setuid((int)(int64_t)trapframe[TF_A0]);
         case SYS_setgid:  return sys_setgid((int)(int64_t)trapframe[TF_A0]);
+
+        case SYS_chmod:
+            return sys_chmod((const char *)trapframe[TF_A0],
+                             (uint32_t)trapframe[TF_A1]);
+        case SYS_fchmod:
+            return sys_fchmod((int)(int64_t)trapframe[TF_A0],
+                              (uint32_t)trapframe[TF_A1]);
+        case SYS_chown:
+            return sys_chown((const char *)trapframe[TF_A0],
+                             (uint32_t)trapframe[TF_A1],
+                             (uint32_t)trapframe[TF_A2]);
+        case SYS_lchown:
+            return sys_lchown((const char *)trapframe[TF_A0],
+                              (uint32_t)trapframe[TF_A1],
+                              (uint32_t)trapframe[TF_A2]);
+        case SYS_fchown:
+            return sys_fchown((int)(int64_t)trapframe[TF_A0],
+                              (uint32_t)trapframe[TF_A1],
+                              (uint32_t)trapframe[TF_A2]);
 
         case SYS_ioctl:
             return sys_ioctl((int)(int64_t)trapframe[TF_A0],

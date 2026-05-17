@@ -1,5 +1,5 @@
 /*
- * sbfs.c — Simple Block Filesystem v1
+ * sbfs.c — Simple Block Filesystem v2
  *
  * Provides read-write POSIX-like filesystem semantics on top of the buffer
  * cache and write-ahead log.  All mutating operations (write, create, unlink,
@@ -46,7 +46,7 @@ static inline void fs_unlock(void) {
 }
 
 /* Wall-clock seconds since the Unix epoch, sourced from Goldfish RTC.
- * sbfs v1's on-disk inode has only one timestamp (mtime); we report
+ * sbfs's on-disk inode has only one timestamp (mtime); we report
  * it as st_atime/st_mtime/st_ctime alike. Read access does not bump
  * mtime — equivalent to mounting Linux with "noatime", which is the
  * right tradeoff for a teaching kernel without writeback batching. */
@@ -79,6 +79,9 @@ static void sbfs_itrunc(struct sbfs_inode *si);
 
 static int  sbfs_op_symlink (struct inode *, const char *, const char *);
 static int  sbfs_op_readlink(struct inode *, char *, uint64_t);
+static int  sbfs_op_setmtime(struct inode *);
+static int  sbfs_op_setmode (struct inode *);
+static int  sbfs_op_setowner(struct inode *);
 
 static const struct inode_ops sbfs_iops = {
     .read     = sbfs_op_read,
@@ -98,6 +101,9 @@ static const struct inode_ops sbfs_iops = {
     .readpage  = sbfs_readpage,
     .writepage = sbfs_writepage,
     .writepage_locked = sbfs_writepage_locked,
+    .setmtime = sbfs_op_setmtime,
+    .setmode  = sbfs_op_setmode,
+    .setowner = sbfs_op_setowner,
 };
 
 /* -----------------------------------------------------------------------
@@ -163,20 +169,63 @@ static void sbfs_ilock(struct sbfs_inode *si) {
     si->vnode.size   = si->d.size;
     si->vnode.nlink  = si->d.nlink;
     si->vnode.mtime  = si->d.mtime;
+    si->vnode.mode   = si->d.mode;
+    si->vnode.uid    = si->d.uid;
+    si->vnode.gid    = si->d.gid;
 }
 
 /* Write si->d back to the inode block (must be inside a transaction). */
 void sbfs_iupdate(struct sbfs_inode *si) {
     uint32_t block  = sb.inodestart + si->inum / 8;
     uint32_t offset = (si->inum % 8) * sizeof(struct sb_dinode);
-    /* Keep dinode size/nlink in sync from the generic vnode. */
+    /* Keep dinode size/nlink/mtime/mode/uid/gid in sync from the generic
+     * vnode. The mtime sync covers sys_utimensat callers (and any other
+     * path that bumps vnode.mtime without going through writei). The
+     * mode/uid/gid sync covers future chmod/chown callers. */
     si->d.size  = (uint32_t)si->vnode.size;
     si->d.nlink = (uint16_t)si->vnode.nlink;
+    si->d.mtime = si->vnode.mtime;
+    si->d.mode  = si->vnode.mode;
+    si->d.uid   = (uint16_t)si->vnode.uid;
+    si->d.gid   = (uint16_t)si->vnode.gid;
     struct buf *bp = bread(block);
     memcpy(bp->data + offset, &si->d, sizeof(struct sb_dinode));
     log_write(bp);
     brelse(bp);
     si->dirty = 0;
+}
+
+/* sys_utimensat hook: vnode.mtime has already been set by the caller
+ * and path lookup guarantees si->valid == 1 by the time we get here.
+ * The generic iupdate copies vnode.mtime into d.mtime, so the body
+ * collapses to a transaction-wrapped iupdate. */
+static int sbfs_op_setmtime(struct inode *ip) {
+    struct sbfs_inode *si = (struct sbfs_inode *)ip;
+    begin_op();
+    sbfs_iupdate(si);
+    end_op();
+    return 0;
+}
+
+/* sys_chmod / sys_fchmod hook: vnode.mode already updated by caller
+ * with type bits preserved. iupdate copies vnode.mode into d.mode. */
+static int sbfs_op_setmode(struct inode *ip) {
+    struct sbfs_inode *si = (struct sbfs_inode *)ip;
+    begin_op();
+    sbfs_iupdate(si);
+    end_op();
+    return 0;
+}
+
+/* sys_chown / sys_lchown / sys_fchown hook. iupdate copies
+ * vnode.uid/gid (uint32) into d.uid/gid (uint16 — silent truncation
+ * matches the existing v2 layout choice; teaching kernel uses uid=0). */
+static int sbfs_op_setowner(struct inode *ip) {
+    struct sbfs_inode *si = (struct sbfs_inode *)ip;
+    begin_op();
+    sbfs_iupdate(si);
+    end_op();
+    return 0;
 }
 
 /* Get (or create) an in-memory cache entry for inum.  Bumps refcnt. */
@@ -258,6 +307,17 @@ struct inode *sbfs_ialloc(uint16_t type) {
             memset(d, 0, sizeof(*d));
             d->type = type;
             d->mtime = sbfs_now();
+            /* Seed POSIX mode from type. Permission bits chosen to match
+             * tmpfs/tarfs defaults so userspace sees consistent stat()
+             * output across mount points. uid/gid stay 0 — sbfs has no
+             * chown syscall yet, but the dinode now persists them so
+             * adding one is a localized change. */
+            d->mode  = (type == 1) ? (S_IFREG | 0644)
+                     : (type == 2) ? (S_IFDIR | 0755)
+                     : (type == 3) ? (S_IFLNK | 0777)
+                     : 0;
+            d->uid   = 0;
+            d->gid   = 0;
             log_write(bp);
             brelse(bp);
             struct inode *ip = sbfs_iget(inum);
@@ -297,18 +357,34 @@ int sbfs_readi(struct inode *ip, uint64_t off, void *dst, uint64_t n) {
         uint32_t bn   = (off + total) / SBFS_BSIZE;
         uint32_t boff = (off + total) % SBFS_BSIZE;
 
-        uint32_t data_block;
+        uint32_t data_block = 0;
         if (bn < SBFS_NDIR) {
             data_block = si->d.addrs[bn];
-        } else {
+        } else if (bn < SBFS_NDIR + SBFS_NINDIR * SBFS_NBLK_PER_INDIR) {
             uint32_t rel = bn - SBFS_NDIR;
             uint32_t ii  = rel / SBFS_NBLK_PER_INDIR;
             uint32_t io  = rel % SBFS_NBLK_PER_INDIR;
-            if (ii >= SBFS_NINDIR) break;
             uint32_t indir = si->d.addrs[SBFS_NDIR + ii];
             if (indir == 0) break;
             struct buf *ibp = bread(indir);
             data_block = ((uint32_t *)ibp->data)[io];
+            brelse(ibp);
+        } else {
+            /* Double-indirect range. Layout: si->d.addrs[SBFS_NDIR + SBFS_NINDIR]
+             * → outer block of 128 indirect-block addresses → each inner block
+             * holds 128 data-block addresses. */
+            uint32_t drel = bn - (SBFS_NDIR + SBFS_NINDIR * SBFS_NBLK_PER_INDIR);
+            uint32_t oi   = drel / SBFS_NBLK_PER_INDIR;
+            uint32_t ii   = drel % SBFS_NBLK_PER_INDIR;
+            if (oi >= SBFS_NBLK_PER_INDIR) break;
+            uint32_t outer = si->d.addrs[SBFS_NDIR + SBFS_NINDIR];
+            if (outer == 0) break;
+            struct buf *obp = bread(outer);
+            uint32_t inner = ((uint32_t *)obp->data)[oi];
+            brelse(obp);
+            if (inner == 0) break;
+            struct buf *ibp = bread(inner);
+            data_block = ((uint32_t *)ibp->data)[ii];
             brelse(ibp);
         }
 
@@ -347,7 +423,7 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
         uint32_t bn   = (off + total) / SBFS_BSIZE;
         uint32_t boff = (off + total) % SBFS_BSIZE;
 
-        uint32_t data_block;
+        uint32_t data_block = 0;
         if (bn < SBFS_NDIR) {
             if (si->d.addrs[bn] == 0) {
                 uint32_t nb = balloc();
@@ -356,11 +432,10 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
                 si->dirty = 1;
             }
             data_block = si->d.addrs[bn];
-        } else {
+        } else if (bn < SBFS_NDIR + SBFS_NINDIR * SBFS_NBLK_PER_INDIR) {
             uint32_t rel = bn - SBFS_NDIR;
             uint32_t ii  = rel / SBFS_NBLK_PER_INDIR;
             uint32_t io  = rel % SBFS_NBLK_PER_INDIR;
-            if (ii >= SBFS_NINDIR) break;
 
             if (si->d.addrs[SBFS_NDIR + ii] == 0) {
                 uint32_t ib = balloc();
@@ -368,7 +443,6 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
                 si->d.addrs[SBFS_NDIR + ii] = ib;
                 si->dirty = 1;
             }
-
             struct buf *ibp = bread(si->d.addrs[SBFS_NDIR + ii]);
             uint32_t *ia = (uint32_t *)ibp->data;
             if (ia[io] == 0) {
@@ -378,6 +452,42 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
                 log_write(ibp);
             }
             data_block = ia[io];
+            brelse(ibp);
+        } else {
+            /* Double-indirect allocation: outer block holds 128 indirect-block
+             * addresses; each inner block holds 128 data-block addresses.
+             * Three balloc points lazily allocate outer, inner, then data. */
+            uint32_t drel = bn - (SBFS_NDIR + SBFS_NINDIR * SBFS_NBLK_PER_INDIR);
+            uint32_t oi   = drel / SBFS_NBLK_PER_INDIR;
+            uint32_t ii   = drel % SBFS_NBLK_PER_INDIR;
+            if (oi >= SBFS_NBLK_PER_INDIR) break;
+
+            if (si->d.addrs[SBFS_NDIR + SBFS_NINDIR] == 0) {
+                uint32_t ob = balloc();
+                if (!ob) { enospc = 1; break; }
+                si->d.addrs[SBFS_NDIR + SBFS_NINDIR] = ob;
+                si->dirty = 1;
+            }
+            struct buf *obp = bread(si->d.addrs[SBFS_NDIR + SBFS_NINDIR]);
+            uint32_t *oa = (uint32_t *)obp->data;
+            if (oa[oi] == 0) {
+                uint32_t ib = balloc();
+                if (!ib) { brelse(obp); enospc = 1; break; }
+                oa[oi] = ib;
+                log_write(obp);
+            }
+            uint32_t inner_addr = oa[oi];
+            brelse(obp);
+
+            struct buf *ibp = bread(inner_addr);
+            uint32_t *ia = (uint32_t *)ibp->data;
+            if (ia[ii] == 0) {
+                uint32_t nb = balloc();
+                if (!nb) { brelse(ibp); enospc = 1; break; }
+                ia[ii] = nb;
+                log_write(ibp);
+            }
+            data_block = ia[ii];
             brelse(ibp);
         }
 
@@ -417,12 +527,14 @@ int sbfs_writei(struct inode *ip, uint64_t off, const void *src, uint64_t n) {
  * (must be inside a transaction)
  * ----------------------------------------------------------------------- */
 static void sbfs_itrunc(struct sbfs_inode *si) {
+    /* Direct blocks. */
     for (int bn = 0; bn < SBFS_NDIR; bn++) {
         if (si->d.addrs[bn]) {
             bfree(si->d.addrs[bn]);
             si->d.addrs[bn] = 0;
         }
     }
+    /* Single-indirect blocks. */
     for (int ii = 0; ii < SBFS_NINDIR; ii++) {
         if (si->d.addrs[SBFS_NDIR + ii]) {
             struct buf *ibp = bread(si->d.addrs[SBFS_NDIR + ii]);
@@ -434,6 +546,25 @@ static void sbfs_itrunc(struct sbfs_inode *si) {
             bfree(si->d.addrs[SBFS_NDIR + ii]);
             si->d.addrs[SBFS_NDIR + ii] = 0;
         }
+    }
+    /* Double-indirect tree. */
+    if (si->d.addrs[SBFS_NDIR + SBFS_NINDIR]) {
+        struct buf *obp = bread(si->d.addrs[SBFS_NDIR + SBFS_NINDIR]);
+        uint32_t *oa = (uint32_t *)obp->data;
+        for (int oi = 0; oi < SBFS_NBLK_PER_INDIR; oi++) {
+            if (oa[oi]) {
+                struct buf *ibp = bread(oa[oi]);
+                uint32_t *ia = (uint32_t *)ibp->data;
+                for (int i = 0; i < SBFS_NBLK_PER_INDIR; i++) {
+                    if (ia[i]) bfree(ia[i]);
+                }
+                brelse(ibp);
+                bfree(oa[oi]);
+            }
+        }
+        brelse(obp);
+        bfree(si->d.addrs[SBFS_NDIR + SBFS_NINDIR]);
+        si->d.addrs[SBFS_NDIR + SBFS_NINDIR] = 0;
     }
     si->d.size  = 0;
     si->vnode.size = 0;
@@ -669,14 +800,41 @@ static int sbfs_op_read(struct inode *ip, uint64_t off, void *buf, uint64_t n) {
     return generic_file_read(ip, off, buf, n);
 }
 
-static int sbfs_op_write(struct inode *ip, uint64_t off, const void *buf, uint64_t n) {
-    int ret;
-    begin_op();
-    ret = sbfs_writei(ip, off, buf, n);
-    end_op();
-    if (ret > 0)
-        pcache_invalidate_range(ip, off, (uint64_t)ret);
-    return ret;
+/* Chunk size for the per-transaction slab in sbfs_op_write. Worst-case
+ * log_write footprint per chunk:
+ *   bitmap(1) + dinode(1) + single-indir(1) + outer-DI(1) + inner-DI(1)
+ *   + 1 extra inner block at NINDIR or DI-inner-page crossings = 6 fixed
+ *   plus 1 data slot per BSIZE-touched data block. An unaligned write
+ *   (boff > 0) can touch ceil(n / BSIZE) + 1 distinct data blocks; for
+ *   a 6-BSIZE chunk that's at most 7 data blocks → 6 + 7 = 13 slots,
+ *   under LOG_HDR_MAX=15 with two-slot headroom for future drift. */
+#define SBFS_TXN_BYTES  (6u * SBFS_BSIZE)
+
+static int sbfs_op_write(struct inode *ip, uint64_t off,
+                         const void *buf, uint64_t n) {
+    const char *p = (const char *)buf;
+    uint64_t done = 0;
+    int last_err = 0;
+
+    while (done < n) {
+        uint64_t this_n = n - done;
+        if (this_n > SBFS_TXN_BYTES) this_n = SBFS_TXN_BYTES;
+
+        begin_op();
+        int r = sbfs_writei(ip, off + done, p + done, (uint64_t)this_n);
+        end_op();
+
+        if (r < 0) { last_err = r; break; }
+        if (r == 0) break;                       /* ENOSPC after some progress */
+        done += (uint64_t)r;
+        if ((uint64_t)r < this_n) break;         /* short write — propagate */
+    }
+
+    if (done > 0) {
+        pcache_invalidate_range(ip, off, done);
+        return (int)done;
+    }
+    return last_err ? last_err : 0;
 }
 
 static int sbfs_op_truncate(struct inode *ip) {
@@ -693,19 +851,14 @@ static int sbfs_op_truncate(struct inode *ip) {
 static int sbfs_op_stat(struct inode *ip, struct stat *st) {
     struct sbfs_inode *si = (struct sbfs_inode *)ip;
     sbfs_ilock(si);
+    st->st_dev   = 6;            /* arbitrary distinct id, see tarfs/tmpfs/devfs */
     st->st_ino   = si->inum;
     st->st_nlink = si->d.nlink;
     st->st_size  = si->d.size;
-    if (si->d.type == 1) {
-        st->st_mode = 0100644;   /* regular file */
-    } else if (si->d.type == 2) {
-        st->st_mode = 040755;    /* directory    */
-    } else if (si->d.type == 3) {
-        st->st_mode = 0120777;   /* S_IFLNK | 0777 */
-    } else {
-        st->st_mode = 0;
-    }
-    /* sbfs v1 has a single on-disk timestamp; report it as all three
+    st->st_mode  = ip->mode;
+    st->st_uid   = ip->uid;
+    st->st_gid   = ip->gid;
+    /* sbfs v2 has a single on-disk timestamp; report it as all three
      * stat fields. Documented deviation from POSIX. */
     STAT_SET_TIMES(st, si->d.mtime);
     st->st_blksize = SBFS_BSIZE;
@@ -728,6 +881,25 @@ static int sbfs_op_stat(struct inode *ip, struct stat *st) {
             if (slots[k]) nblocks++;
         }
         brelse(ibp);
+    }
+    /* Double-indirect tree: outer + each non-zero inner + every data
+     * slot in those inners. Symmetric to itrunc's free walk. */
+    uint32_t outer = si->d.addrs[SBFS_NDIR + SBFS_NINDIR];
+    if (outer) {
+        nblocks++;                  /* outer DI block itself */
+        struct buf *obp = bread(outer);
+        uint32_t *oa = (uint32_t *)obp->data;
+        for (uint32_t oi = 0; oi < SBFS_NBLK_PER_INDIR; oi++) {
+            if (!oa[oi]) continue;
+            nblocks++;              /* inner indir block */
+            struct buf *ibp = bread(oa[oi]);
+            uint32_t *ia = (uint32_t *)ibp->data;
+            for (uint32_t k = 0; k < SBFS_NBLK_PER_INDIR; k++) {
+                if (ia[k]) nblocks++;
+            }
+            brelse(ibp);
+        }
+        brelse(obp);
     }
     st->st_blocks = nblocks;
     return 0;

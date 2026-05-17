@@ -1,5 +1,5 @@
 /*
- * mkfs.c — creates an sbfs v1 disk image
+ * mkfs.c — creates an sbfs v3 disk image
  *
  * On-disk layout (all blocks are BSIZE=512 bytes):
  *   block 0        : boot block (reserved, zeroed)
@@ -7,7 +7,7 @@
  *   block 2..17    : write-ahead log (LOGSIZE=16 blocks)
  *   block 18..49   : inode table (NINODES=256, 8 per block → 32 blocks)
  *   block 50       : block bitmap (1 block covers up to 4096 data blocks)
- *   block 51..1050 : data blocks (NDATABLOCKS=1000)
+ *   block 51..4050 : data blocks (NDATABLOCKS=4000)
  *
  * The root directory (inode 1) is created with two entries: "." and "..".
  */
@@ -22,13 +22,18 @@
  * On-disk constants — must match kernel/include/sbfs.h exactly
  * ----------------------------------------------------------------------- */
 #define BSIZE         512
-#define MAGIC         0x53425631u   /* "SBV1" */
+#define MAGIC         0x53425633u   /* "SBV3" — v3 added double-indirect */
 #define NINODES       256
 #define LOGSIZE       16
-#define NDATABLOCKS   1000
-#define NDIRECT       12
+#define NDATABLOCKS   4000
+#define NDIRECT       10            /* 7 direct + 2 single-indirect + 1 double-indirect */
 #define DIRSIZ        14
 #define ROOTINUM      1             /* inode number of the root directory */
+
+/* POSIX mode bits (must match kernel/include/stat.h). */
+#define S_IFDIR  0040000
+#define S_IFREG  0100000
+#define S_IFLNK  0120000
 
 /* Block layout */
 #define BOOT_BLOCK    0
@@ -56,13 +61,17 @@ struct sb_superblock {
 
 /* -----------------------------------------------------------------------
  * On-disk inode (exactly 64 bytes → 8 per 512-byte block)
- *   type(2) + nlink(2) + size(4) + mtime(8) + addrs[12](48) = 64
+ *   type(2) + nlink(2) + size(4) + mtime(8) +
+ *   mode(4) + uid(2) + gid(2) + addrs[10](40) = 64
  * ----------------------------------------------------------------------- */
 struct sb_dinode {
-    uint16_t type;         /* 0=free, 1=file, 2=dir */
+    uint16_t type;         /* 0=free, 1=file, 2=dir, 3=symlink */
     uint16_t nlink;
     uint32_t size;
-    uint64_t mtime;        /* last-modification time (unused in v1) */
+    uint64_t mtime;        /* last-modification time (seconds since epoch) */
+    uint32_t mode;
+    uint16_t uid;
+    uint16_t gid;
     uint32_t addrs[NDIRECT];
 };
 
@@ -135,7 +144,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     /* size_mb (argv[2]) is accepted for compatibility with the master
-     * Makefile but ignored: sbfs v1 has a fixed on-disk layout. */
+     * Makefile but ignored: sbfs v3 has a fixed on-disk layout. */
 
     img = fopen(argv[1], "w+b");
     if (!img) {
@@ -187,6 +196,9 @@ int main(int argc, char **argv) {
     root_ino.type   = 2;               /* directory */
     root_ino.nlink  = 2;               /* "." and parent reference */
     root_ino.size   = 2 * sizeof(struct sb_dirent);
+    root_ino.mode   = S_IFDIR | 0755;
+    root_ino.uid    = 0;
+    root_ino.gid    = 0;
     root_ino.addrs[0] = root_data;
     write_inode(ROOTINUM, &root_ino);
 

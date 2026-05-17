@@ -13,21 +13,14 @@
  * success so installers/build systems don't bail out, while query ops
  * return the most permissive plausible answer. */
 
-/* SBUnix has no on-disk permission bits, so chmod/fchmod cannot actually
- * change anything. Validate the target exists (path lookup / fd
- * validity) before returning success so callers can still distinguish
- * "chmod a missing file" from "chmod a real file we don't enforce on". */
+/* chmod / fchmod — real syscalls; see kernel/syscall.c sys_chmod. */
 int chmod(const char *path, mode_t mode) {
-    (void)mode;
-    struct stat st;
-    if (stat(path, &st) < 0) return -1;
-    return 0;
+    long r = syscall(SYS_chmod, (long)path, (long)mode);
+    return r < 0 ? -1 : 0;
 }
 int fchmod(int fd, mode_t mode) {
-    (void)mode;
-    struct stat st;
-    if (fstat(fd, &st) < 0) return -1;
-    return 0;
+    long r = syscall(SYS_fchmod, (long)fd, (long)mode);
+    return r < 0 ? -1 : 0;
 }
 
 /* Track umask in libc so install-style code that saves/restores via
