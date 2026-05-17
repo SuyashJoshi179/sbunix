@@ -141,6 +141,7 @@ int     tcflow(int fd, int action);
 int     tcsendbreak(int fd, int duration);
 pid_t   tcgetpgrp(int fd);
 int     tcsetpgrp(int fd, pid_t pgrp);
+pid_t   tcgetsid(int fd);
 void    cfmakeraw(struct termios *t);
 speed_t cfgetispeed(const struct termios *t);
 speed_t cfgetospeed(const struct termios *t);
