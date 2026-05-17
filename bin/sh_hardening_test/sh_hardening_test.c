@@ -2,6 +2,7 @@
  * features — single-quote tokens, `;` separator, `/bin/true`, `/bin/false`,
  * and POSIX exec-failure exit codes (127 for ENOENT, 126 otherwise). */
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,11 @@ static int run(const char *script) {
     int pid = fork();
     if (pid < 0) return -1;
     if (pid == 0) {
+        /* Isolate the child sh in its own process group so that a
+         * regression of the `kill %N` parsing bug — where the builtin
+         * fell through to kill(0, sig) and broadcast to its own
+         * pgroup — cannot reach this test process. */
+        setpgid(0, 0);
         char *argv[] = { "sh", "-c", (char *)script, 0 };
         execv("/bin/sh", argv);
         _exit(127);
@@ -42,6 +48,56 @@ int main(void) {
 
     /* Exec failure: POSIX says ENOENT → 127. */
     CHECK(run("/bin/no_such_binary_xyz_") == 127, "exec ENOENT exits 127");
+
+    /* `kill %N` regression. parse_int("%1") returns 0, and
+     * kill(0, sig) broadcasts to the caller's process group — which
+     * silently kills the shell itself. The builtin must resolve %N
+     * to the job's pgid and signal -pgid instead. WIFEXITED==false
+     * is mapped to -1 by run(), so a buggy sh that gets SIGTERM'd
+     * here returns -1 and trips the CHECK. */
+    CHECK(run("/bin/sleep 1 & kill %1") == 0,
+          "kill %N signals job pgroup; shell survives");
+    CHECK(run("kill %99") == 1, "kill on unknown %job exits 1");
+    CHECK(run("kill notanumber") == 1, "kill on non-numeric pid exits 1");
+
+    /* `ln -s` regression. The coreutil used to reject -s with "not
+     * supported", even though SYS_symlink + libc symlink(3) have been
+     * wired for a while. /bin/stat uses lstat(2), so it succeeds on
+     * a dangling link and confirms creation independently of whether
+     * the target exists. */
+    unlink("/tmp/lns_l");
+    CHECK(run("/bin/ln -s /tmp/lns_target /tmp/lns_l") == 0,
+          "ln -s creates a symbolic link");
+    CHECK(run("/bin/stat /tmp/lns_l") == 0,
+          "ln -s output is visible via lstat");
+    unlink("/tmp/lns_l");
+
+    /* `wc -l` regression. The coreutil used to ignore all flags and
+     * always print "lines words chars". Write a known-line-count fixture
+     * and verify (1) the flag is accepted (exit 0) and (2) output is the
+     * line count only — not the three-number default. */
+    {
+        const char *fixture = "/tmp/wc_fixture";
+        const char *out     = "/tmp/wc_out";
+        int fd = open(fixture, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            const char *body = "a\nb\nc\n";
+            write(fd, body, 6);
+            close(fd);
+        }
+        CHECK(run("/bin/wc -l /tmp/wc_fixture > /tmp/wc_out") == 0,
+              "wc -l accepts the flag and exits 0");
+
+        fd = open(out, 0);
+        char obuf[32] = {0};
+        long got = fd >= 0 ? read(fd, obuf, sizeof(obuf) - 1) : -1;
+        if (fd >= 0) close(fd);
+        CHECK(got >= 0 && strcmp(obuf, "3\n") == 0,
+              "wc -l prints only the line count");
+
+        unlink(fixture);
+        unlink(out);
+    }
 
     unlink("/tmp/sh_hard_out");
 

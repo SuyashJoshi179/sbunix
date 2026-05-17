@@ -1,16 +1,17 @@
 /*
- * touch — create empty file if missing; no-op if it exists.
+ * touch — create empty file if missing, then stamp atime/mtime to now.
  *
- * Linux touch also updates atime/mtime to "now", but we don't expose
- * utimensat(2) and the grader patterns that use touch are "make sure
- * this file exists for the next step" rather than "bump its mtime".
- * If utime semantics are ever needed, this is where to add them.
+ * Two-step per POSIX: ensure the file exists (open with O_CREAT), then
+ * bump timestamps via utimensat(AT_FDCWD, path, NULL, 0). The kernel
+ * treats a NULL timespec as "set both to current realtime" and a NULL
+ * timespec is also what utime(NULL) / utimes(NULL) shorthand maps to.
  */
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/stat.h>
 
 int main(int argc, char **argv) {
     if (argc < 2) {
@@ -26,6 +27,10 @@ int main(int argc, char **argv) {
             continue;
         }
         close(fd);
+        if (utimensat(AT_FDCWD, argv[i], 0, 0) < 0) {
+            fprintf(stderr, "touch: %s: %s\n", argv[i], strerror(errno));
+            status = 1;
+        }
     }
     return status;
 }

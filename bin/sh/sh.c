@@ -744,10 +744,33 @@ static int run_line(void) {
             argi = 2;
         }
         if (argi >= ntokens || tokens[argi].type != T_WORD) {
-            printf("usage: kill [-sig] <pid>\n");
+            printf("usage: kill [-sig] <pid|%%job>\n");
             return 1;
         }
-        int pid = parse_int(tokens[argi].val);
+        const char *arg = tokens[argi].val;
+        int pid;
+        if (arg[0] == '%') {
+            /* %N: send the signal to the whole process group of job N.
+             * Without this branch parse_int("%N") returns 0, and
+             * kill(0, sig) would broadcast to our own process group —
+             * killing the shell itself. */
+            int slot = jobs_find_by_id(parse_int(arg + 1));
+            if (slot < 0) {
+                printf("kill: %s: no such job\n", arg);
+                return 1;
+            }
+            pid = -jobs_tbl[slot].pgid;
+        } else {
+            pid = parse_int(arg);
+            /* Reject typos like `kill foo` (parse_int returns 0 for any
+             * non-numeric input). A literal "0" is allowed; anything
+             * else that parses to 0 is rejected so we don't accidentally
+             * signal our own process group. */
+            if (pid == 0 && (arg[0] != '0' || arg[1] != 0)) {
+                printf("kill: invalid pid '%s'\n", arg);
+                return 1;
+            }
+        }
         int rc = kill(pid, sig);
         if (rc < 0) {
             printf("kill: failed (%d)\n", rc);
